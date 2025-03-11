@@ -1,0 +1,17 @@
+[package]
+name = "oli-cli"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "A simple, blazingly fast CLI assistant based on local AI models."
+repository = "https://github.com/amrit110/oli"
+documentation = "https://docs.rs/oli-cli"
+readme = "README.md"
+keywords = ["cli", "assistant", "smart"]
+categories = ["cli", "tui"]
+
+[dependencies]
+ratatui = "0.29.0"
+
+[[example]]
+name = "basic_usage"
