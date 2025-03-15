@@ -51,7 +51,7 @@ pub fn run_app() -> Result<()> {
         if app.download_active {
             terminal.draw(|f| ui(f, &app))?;
         }
-        
+
         // Check for messages from download thread
         while let Ok(msg) = rx.try_recv() {
             app.messages
@@ -141,17 +141,20 @@ fn process_message(app: &mut App, msg: &str) -> Result<()> {
     if msg.starts_with("progress:") {
         // Make sure download_active is true whenever we receive progress
         app.download_active = true;
-        
+
         let parts: Vec<&str> = msg.split(':').collect();
         if parts.len() >= 3 {
             if let (Ok(downloaded), Ok(total)) = (parts[1].parse::<u64>(), parts[2].parse::<u64>())
             {
                 app.download_progress = Some((downloaded, total));
                 // Only log progress occasionally to avoid flooding logs
-                if downloaded % (5 * 1024 * 1024) < 100000 { // Log roughly every 5MB
-                    app.messages.push(format!("DEBUG: Download progress: {:.1}MB/{:.1}MB", 
-                        downloaded as f64 / 1_000_000.0, 
-                        total as f64 / 1_000_000.0));
+                if downloaded % (5 * 1024 * 1024) < 100000 {
+                    // Log roughly every 5MB
+                    app.messages.push(format!(
+                        "DEBUG: Download progress: {:.1}MB/{:.1}MB",
+                        downloaded as f64 / 1_000_000.0,
+                        total as f64 / 1_000_000.0
+                    ));
                 }
             }
         }
@@ -172,7 +175,8 @@ fn process_message(app: &mut App, msg: &str) -> Result<()> {
             Ok(()) => {
                 app.state = AppState::Chat;
                 app.messages.push("Setup complete. Ready to chat!".into());
-                app.messages.push("You can now ask questions about coding and development.".into());
+                app.messages
+                    .push("You can now ask questions about coding and development.".into());
             }
             Err(e) => {
                 app.messages
@@ -265,8 +269,12 @@ fn draw_setup(f: &mut Frame, app: &App) {
         app.download_progress.map_or_else(
             || "Preparing download...".into(),
             |(d, t)| {
-                let percent = if t > 0 { (d as f64 / t as f64) * 100.0 } else { 0.0 };
-                
+                let percent = if t > 0 {
+                    (d as f64 / t as f64) * 100.0
+                } else {
+                    0.0
+                };
+
                 // Create a visual progress bar
                 let bar_width = 50; // Number of characters for the progress bar
                 let filled = (percent / 100.0 * bar_width as f64) as usize;
@@ -277,7 +285,7 @@ fn draw_setup(f: &mut Frame, app: &App) {
                     " ".repeat(empty),
                     percent
                 );
-                
+
                 format!(
                     "{}\nDownloading {}: {:.2}MB of {:.2}MB",
                     progress_bar,
@@ -323,7 +331,9 @@ fn draw_chat(f: &mut Frame, app: &App) {
                 // User messages - cyan
                 Line::from(vec![Span::styled(
                     m.as_str(),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 )])
             } else if m.starts_with("Error:") || m.starts_with("ERROR:") {
                 // Error messages - red
@@ -341,7 +351,9 @@ fn draw_chat(f: &mut Frame, app: &App) {
                 // Title/welcome messages - light cyan with bold
                 Line::from(vec![Span::styled(
                     m.as_str(),
-                    Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::LightCyan)
+                        .add_modifier(Modifier::BOLD),
                 )])
             } else {
                 // Regular text or model responses - white/default
@@ -370,10 +382,12 @@ fn draw_chat(f: &mut Frame, app: &App) {
     };
 
     let input_window = Paragraph::new(input_text)
-        .block(Block::default()
-            .borders(Borders::ALL)
-            .title("Input (Esc to quit)")
-            .border_style(Style::default().fg(Color::Cyan)))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Input (Esc to quit)")
+                .border_style(Style::default().fg(Color::Cyan)),
+        )
         .wrap(Wrap { trim: true });
     f.render_widget(input_window, chunks[1]);
 

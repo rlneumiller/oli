@@ -201,7 +201,7 @@ impl App {
         let fallback_url = fallback_url.to_string();
         let path = path.to_path_buf();
         let tx_clone = tx.clone();
-        
+
         // Ensure download_active is set to true
         self.download_active = true;
 
@@ -230,14 +230,18 @@ impl App {
             match download_result {
                 Ok(()) => {
                     // Send a success message
-                    tx_clone.send("status:Download successful, verifying file...".into()).unwrap();
-                    
+                    tx_clone
+                        .send("status:Download successful, verifying file...".into())
+                        .unwrap();
+
                     // Verify after download completes
                     match Self::verify_static(&path) {
                         Ok(()) => {
-                            tx_clone.send("status:File verified successfully".into()).unwrap();
+                            tx_clone
+                                .send("status:File verified successfully".into())
+                                .unwrap();
                             tx_clone.send("download_complete".into()).unwrap()
-                        },
+                        }
                         Err(e) => tx_clone.send(format!("error:{}", e)).unwrap(),
                     }
                 }
@@ -276,9 +280,12 @@ impl App {
 
         // Get the content length to track progress
         let total_size = response.content_length().unwrap_or(0);
-        tx.send(format!("status:Downloading {}MB file...", total_size / 1_000_000))
-            .map_err(|e| format!("Channel error: {}", e))?;
-            
+        tx.send(format!(
+            "status:Downloading {}MB file...",
+            total_size / 1_000_000
+        ))
+        .map_err(|e| format!("Channel error: {}", e))?;
+
         let mut file = File::create(path).map_err(|e| format!("File creation failed: {}", e))?;
 
         // Initial progress
@@ -289,7 +296,7 @@ impl App {
         let mut buffer = [0; 8192]; // 8KB buffer
         let mut downloaded: u64 = 0;
         let mut last_progress_time = std::time::Instant::now();
-        
+
         // Read and write in chunks to show progress
         loop {
             match response.read(&mut buffer) {
@@ -297,9 +304,9 @@ impl App {
                 Ok(n) => {
                     file.write_all(&buffer[..n])
                         .map_err(|e| format!("Write error: {}", e))?;
-                    
+
                     downloaded += n as u64;
-                    
+
                     // Update progress at most every 500ms to avoid flooding
                     let now = std::time::Instant::now();
                     if now.duration_since(last_progress_time).as_millis() > 500 {
