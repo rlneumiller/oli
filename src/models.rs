@@ -22,7 +22,7 @@ pub fn get_available_models() -> Vec<ModelConfig> {
             primary_url: "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf".into(),
             fallback_url: "https://huggingface.co/api/models/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf".into(),
             recommended_for: "Testing, low-resource systems".into(),
-            n_gpu_layers: 16,
+            n_gpu_layers: 1, // Use fewer GPU layers for this tiny model
         },
         ModelConfig {
             name: "Phi-2".into(),
@@ -32,7 +32,7 @@ pub fn get_available_models() -> Vec<ModelConfig> {
             primary_url: "https://huggingface.co/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q4_K_M.gguf".into(),
             fallback_url: "https://huggingface.co/api/models/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q4_K_M.gguf".into(),
             recommended_for: "Balanced systems".into(),
-            n_gpu_layers: 24,
+            n_gpu_layers: 8, // Use moderate GPU layers for small model
         },
         ModelConfig {
             name: "Mistral-7B-v0.2".into(),
@@ -40,7 +40,7 @@ pub fn get_available_models() -> Vec<ModelConfig> {
             size_gb: 3.83,
             description: "Fast, balanced performance".into(),
             primary_url: "https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.Q4_K_M.gguf".into(),
-            fallback_url: "https://huggingface.co/api/models/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/files/mistral-7b-instruct-v0.2.Q4_K_M.gguf".into(),
+            fallback_url: "https://huggingface.co/lmstudio-community/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.q4_K_M.gguf".into(),
             recommended_for: "All systems".into(),
             n_gpu_layers: 32,
         },

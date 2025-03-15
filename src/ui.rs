@@ -84,10 +84,27 @@ pub fn run_app() -> Result<()> {
                                 let input = std::mem::take(&mut app.input);
                                 if !input.is_empty() {
                                     app.messages.push(format!("> {}", input));
+
+                                    // Show a "thinking" message
+                                    app.messages.push("Thinking...".into());
+                                    terminal.draw(|f| ui(f, &app))?;
+
+                                    // Query the model
                                     match app.query_model(&input) {
-                                        Ok(response) => app.messages.push(response),
+                                        Ok(response) => {
+                                            // Remove the thinking message
+                                            if let Some(last) = app.messages.last() {
+                                                if last == "Thinking..." {
+                                                    app.messages.pop();
+                                                }
+                                            }
+                                            app.messages.push(response);
+                                        }
                                         Err(e) => app.messages.push(format!("Error: {}", e)),
                                     }
+
+                                    // Make sure to redraw after getting a response
+                                    terminal.draw(|f| ui(f, &app))?;
                                 }
                             }
                             AppState::Error(_) => {

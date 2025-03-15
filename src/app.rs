@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use dirs::home_dir;
 use std::{
     fs::File,
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::mpsc,
     time::Duration,
@@ -162,32 +162,61 @@ impl App {
     }
 
     fn verify_model(&self, path: &Path) -> Result<()> {
-        let mut file = File::open(path)?;
-        let mut magic = [0u8; 4];
-        if file.read_exact(&mut magic).is_err() {
-            anyhow::bail!("Failed to read magic bytes - file may be corrupted");
-        }
-
-        if &magic != b"GGUF" {
-            let content = std::fs::read(path)?;
-            if content.len() < 50 {
-                anyhow::bail!(
-                    "File too small to be a valid model ({}bytes)",
-                    content.len()
-                );
-            }
-
-            if content.starts_with(b"<html") || content.starts_with(b"<!DOCTYPE") {
-                anyhow::bail!("Received HTML page instead of model file");
-            }
-
+        // Check if file exists and has a reasonable size
+        let metadata = std::fs::metadata(path)?;
+        if metadata.len() < 1000 {
             anyhow::bail!(
-                "Invalid GGUF format (magic: {:?} or '{}')",
-                magic,
-                String::from_utf8_lossy(&magic)
+                "File too small to be a valid model ({}bytes)",
+                metadata.len()
             );
         }
-        Ok(())
+
+        // Read first few bytes to check the file format
+        let mut file = File::open(path)?;
+        let mut header = [0u8; 8];
+
+        if file.read_exact(&mut header[0..4]).is_err() {
+            anyhow::bail!("Failed to read header - file may be corrupted");
+        }
+
+        // Check for GGUF format
+        if &header[0..4] == b"GGUF" {
+            return Ok(());
+        }
+
+        // Check for GGML format (older models)
+        if &header[0..4] == b"GGML" {
+            return Ok(());
+        }
+
+        // Read first ~100 bytes to check for HTML error pages
+        let mut start_bytes = vec![0u8; 100];
+        file.seek(SeekFrom::Start(0))?; // Reset to beginning of file
+        let n = file.read(&mut start_bytes)?;
+        start_bytes.truncate(n);
+
+        let start_text = String::from_utf8_lossy(&start_bytes);
+
+        // Check if the file is actually an HTML error page
+        if start_text.contains("<html")
+            || start_text.contains("<!DOCTYPE")
+            || start_text.contains("<HTML")
+            || start_text.contains("<?xml")
+        {
+            anyhow::bail!("Received HTML page instead of model file");
+        }
+
+        // If the file is large enough, assume it's a valid model despite unknown format
+        if metadata.len() > 100 * 1024 * 1024 {
+            // > 100MB
+            return Ok(());
+        }
+
+        anyhow::bail!(
+            "Unrecognized model format (magic: {:?} or '{}')",
+            &header[0..4],
+            String::from_utf8_lossy(&header[0..4])
+        )
     }
 
     fn download_file(
@@ -332,33 +361,136 @@ impl App {
 
     fn verify_static(path: &Path) -> Result<()> {
         let mut file = File::open(path)?;
-        let mut magic = [0u8; 4];
+        let mut header = [0u8; 8]; // Read more bytes to check different formats
 
-        if let Err(e) = file.read_exact(&mut magic) {
+        if let Err(e) = file.read_exact(&mut header[0..4]) {
             anyhow::bail!("Failed to read file header: {}", e);
         }
 
-        if &magic != b"GGUF" {
-            let magic_str = String::from_utf8_lossy(&magic);
-            anyhow::bail!("Invalid model file (magic: {:?} or '{}')", magic, magic_str);
+        // Check for GGUF format (standard)
+        if &header[0..4] == b"GGUF" {
+            return Ok(());
         }
-        Ok(())
+
+        // Check for GGML format (older models)
+        if &header[0..4] == b"GGML" {
+            return Ok(());
+        }
+
+        // Try to read a bit more to check for binary format
+        if let Ok(()) = file.read_exact(&mut header[4..8]) {
+            // Some binary signatures to check
+            if header[0] == 0x80
+                && header[1] <= 0x02
+                && (header[2] == 0x00 || header[2] == 0x01)
+                && header[3] == 0x00
+            {
+                return Ok(());
+            }
+        }
+
+        // Get the file size to see if it's reasonable for an LLM
+        if let Ok(metadata) = std::fs::metadata(path) {
+            let size_mb = metadata.len() / (1024 * 1024);
+            // If file is reasonably large (> 100MB), accept it despite unknown format
+            if size_mb > 100 {
+                return Ok(());
+            }
+        }
+
+        // If we get here, the file format wasn't recognized
+        let magic_str = String::from_utf8_lossy(&header[0..4]);
+        anyhow::bail!(
+            "Unknown model format (magic: {:?} or '{}')",
+            &header[0..4],
+            magic_str
+        )
     }
 
     pub fn load_model(&mut self, model_path: &Path) -> Result<()> {
+        if self.debug_messages {
+            self.messages
+                .push(format!("DEBUG: Loading model from {:?}", model_path));
+            self.messages.push(format!(
+                "DEBUG: Using {} GPU layers",
+                self.current_model().n_gpu_layers
+            ));
+        }
+
         let n_gpu_layers = self.current_model().n_gpu_layers;
-        let inference = inference::ModelSession::new(model_path, n_gpu_layers)?;
-        self.inference = Some(inference);
-        self.messages.push("Model loaded successfully!".into());
-        self.download_active = false;
-        self.state = AppState::Chat;
-        Ok(())
+
+        // Attempt to load the model
+        match inference::ModelSession::new(model_path, n_gpu_layers) {
+            Ok(inference) => {
+                self.inference = Some(inference);
+                self.messages.push("Model loaded successfully!".into());
+                self.messages
+                    .push("You can now ask questions about coding tasks.".into());
+                self.messages.push("Try asking about specific programming concepts, debugging help, or code explanations.".into());
+                self.download_active = false;
+                self.state = AppState::Chat;
+                Ok(())
+            }
+            Err(e) => {
+                let error_msg = format!("Failed to load model: {}", e);
+                self.messages.push(format!("ERROR: {}", error_msg));
+
+                // Add more detailed diagnostic info
+                if self.debug_messages {
+                    self.messages
+                        .push(format!("DEBUG: Model file exists: {}", model_path.exists()));
+                    if let Ok(metadata) = std::fs::metadata(model_path) {
+                        self.messages
+                            .push(format!("DEBUG: Model file size: {} bytes", metadata.len()));
+                    }
+                }
+
+                Err(anyhow::anyhow!(error_msg))
+            }
+        }
     }
 
     pub fn query_model(&mut self, prompt: &str) -> Result<String> {
-        self.inference
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("Model not loaded"))
-            .and_then(|inference| inference.generate(prompt))
+        if self.debug_messages {
+            self.messages.push(format!(
+                "DEBUG: Querying model with: {}",
+                if prompt.len() > 50 {
+                    format!("{}...", &prompt[..50])
+                } else {
+                    prompt.to_string()
+                }
+            ));
+        }
+
+        // Check if the model is loaded
+        match self.inference.as_mut() {
+            Some(inference) => {
+                // Attempt to generate a response
+                match inference.generate(prompt) {
+                    Ok(response) => {
+                        // Successful response
+                        if self.debug_messages {
+                            self.messages.push(format!(
+                                "DEBUG: Generated response of {} characters",
+                                response.len()
+                            ));
+                        }
+                        Ok(response)
+                    }
+                    Err(e) => {
+                        // Handle generation error
+                        let error_msg = format!("Error generating response: {}", e);
+                        self.messages.push(format!("ERROR: {}", error_msg));
+                        Err(anyhow::anyhow!(error_msg))
+                    }
+                }
+            }
+            None => {
+                // Model not loaded
+                let error_msg = "Model not loaded".to_string();
+                self.messages.push(format!("ERROR: {}", error_msg));
+                Err(anyhow::anyhow!(error_msg))
+            }
+        }
     }
 }
