@@ -89,6 +89,9 @@ pub fn run_app() -> Result<()> {
                                     app.messages.push("Thinking...".into());
                                     terminal.draw(|f| ui(f, &app))?;
 
+                                    // Update the last query time
+                                    app.last_query_time = std::time::Instant::now();
+
                                     // Query the model
                                     match app.query_model(&input) {
                                         Ok(response) => {
@@ -98,9 +101,24 @@ pub fn run_app() -> Result<()> {
                                                     app.messages.pop();
                                                 }
                                             }
-                                            app.messages.push(response);
+
+                                            // Format the response nicely
+                                            let formatted_response = response;
+                                            app.messages.push(formatted_response);
+
+                                            // Auto-scroll to the bottom to show the new response
+                                            app.auto_scroll_to_bottom();
                                         }
-                                        Err(e) => app.messages.push(format!("Error: {}", e)),
+                                        Err(e) => {
+                                            // Remove the thinking message
+                                            if let Some(last) = app.messages.last() {
+                                                if last == "Thinking..." {
+                                                    app.messages.pop();
+                                                }
+                                            }
+                                            app.messages.push(format!("Error: {}", e));
+                                            app.auto_scroll_to_bottom();
+                                        }
                                     }
 
                                     // Make sure to redraw after getting a response
@@ -137,6 +155,33 @@ pub fn run_app() -> Result<()> {
                     KeyCode::Backspace => {
                         if let AppState::Chat = app.state {
                             app.input.pop();
+                            terminal.draw(|f| ui(f, &app))?;
+                        }
+                    }
+                    // Handle scrolling in chat mode
+                    KeyCode::PageUp => {
+                        if let AppState::Chat = app.state {
+                            app.scroll_up(5); // Scroll up 5 lines
+                            terminal.draw(|f| ui(f, &app))?;
+                        }
+                    }
+                    KeyCode::PageDown => {
+                        if let AppState::Chat = app.state {
+                            app.scroll_down(5); // Scroll down 5 lines
+                            terminal.draw(|f| ui(f, &app))?;
+                        }
+                    }
+                    // Home key for top
+                    KeyCode::Home => {
+                        if let AppState::Chat = app.state {
+                            app.scroll_position = 0; // Scroll to top
+                            terminal.draw(|f| ui(f, &app))?;
+                        }
+                    }
+                    // End key for bottom
+                    KeyCode::End => {
+                        if let AppState::Chat = app.state {
+                            app.auto_scroll_to_bottom(); // Scroll to bottom
                             terminal.draw(|f| ui(f, &app))?;
                         }
                     }
@@ -187,7 +232,7 @@ fn process_message(app: &mut App, msg: &str) -> Result<()> {
         app.download_active = false;
         app.messages
             .push("Download completed! Loading model...".into());
-        let model_path = App::models_dir()?.join(&app.current_model().file_name);
+        let model_path = app.model_path(&app.current_model().file_name)?;
         match app.load_model(&model_path) {
             Ok(()) => {
                 app.state = AppState::Chat;
@@ -323,17 +368,55 @@ fn draw_setup(f: &mut Frame, app: &App) {
 }
 
 fn draw_chat(f: &mut Frame, app: &App) {
+    // Use three chunks - header, message history, and input
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
-        .constraints([Constraint::Min(3), Constraint::Length(3)])
+        .constraints([
+            Constraint::Length(1), // Status bar
+            Constraint::Min(3),    // Chat history (expandable)
+            Constraint::Length(3), // Input area (fixed height)
+        ])
         .split(f.area());
 
-    // Chat history
-    let messages: Vec<Line> = app
+    // Status bar showing model info and scroll position
+    let model_name = app.current_model().name.clone();
+    let scroll_info = format!(
+        "Scroll: {}/{} (PageUp/PageDown to scroll)",
+        app.scroll_position,
+        app.messages.len().saturating_sub(10)
+    );
+
+    let status_bar = Line::from(vec![
+        Span::styled(
+            format!(" Model: {} ", model_name),
+            Style::default().fg(Color::LightCyan).bg(Color::DarkGray),
+        ),
+        Span::raw(" | "),
+        Span::styled(scroll_info, Style::default().fg(Color::DarkGray)),
+        Span::raw(" | "),
+        Span::styled(
+            " PgUp/PgDn: Scroll  Esc: Quit ",
+            Style::default().fg(Color::Black).bg(Color::LightBlue),
+        ),
+    ]);
+
+    let status_bar_widget = Paragraph::new(status_bar).style(Style::default());
+    f.render_widget(status_bar_widget, chunks[0]);
+
+    // Filter and style messages
+    let visible_messages: Vec<Line> = app
         .messages
         .iter()
-        .map(|m| {
+        .enumerate()
+        // Apply scrolling - show messages based on scroll position
+        .filter(|(idx, _)| {
+            // Only show messages at or after the scroll position
+            *idx >= app.scroll_position &&
+            // Only show messages that would fit in the visible area
+            *idx < app.scroll_position + chunks[1].height as usize
+        })
+        .map(|(_, m)| {
             if m.starts_with("DEBUG:") {
                 // Only show debug messages in debug mode
                 if app.debug_messages {
@@ -346,12 +429,18 @@ fn draw_chat(f: &mut Frame, app: &App) {
                 }
             } else if m.starts_with("> ") {
                 // User messages - cyan
-                Line::from(vec![Span::styled(
-                    m.as_str(),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )])
+                Line::from(vec![
+                    Span::styled(
+                        "YOU: ",
+                        Style::default()
+                            .fg(Color::LightBlue)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        &m[2..], // Remove the "> " prefix
+                        Style::default().fg(Color::Cyan),
+                    ),
+                ])
             } else if m.starts_with("Error:") || m.starts_with("ERROR:") {
                 // Error messages - red
                 Line::from(vec![Span::styled(
@@ -372,21 +461,66 @@ fn draw_chat(f: &mut Frame, app: &App) {
                         .fg(Color::LightCyan)
                         .add_modifier(Modifier::BOLD),
                 )])
+            } else if m == "Thinking..." {
+                // Thinking message
+                Line::from(vec![Span::styled(
+                    "🤔 Thinking...",
+                    Style::default()
+                        .fg(Color::LightYellow)
+                        .add_modifier(Modifier::ITALIC),
+                )])
             } else {
-                // Regular text or model responses - white/default
-                Line::from(m.as_str())
+                // Model responses - with styling for code blocks
+                if m.trim().is_empty() {
+                    Line::from("")
+                } else if !m.starts_with("> ")
+                    && !m.starts_with("DEBUG:")
+                    && app.messages.contains(&format!("> {}", app.input))
+                {
+                    // This is likely a model response
+                    Line::from(vec![
+                        Span::styled(
+                            "OLI: ",
+                            Style::default()
+                                .fg(Color::LightGreen)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(m),
+                    ])
+                } else {
+                    // Regular text
+                    Line::from(m.as_str())
+                }
             }
         })
         .collect();
 
-    let messages_window = Paragraph::new(Text::from(messages))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("OLI Assistant"),
-        )
+    // Create a scrollable paragraph for the messages
+    let has_more_above = app.scroll_position > 0;
+    let has_more_below = app.scroll_position + (chunks[1].height as usize) < app.messages.len();
+
+    let mut message_block = Block::default()
+        .borders(Borders::ALL)
+        .title("OLI Assistant");
+
+    if has_more_above {
+        message_block = message_block.title(Line::from(vec![
+            Span::raw("OLI Assistant "),
+            Span::styled("▲ more above", Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+
+    if has_more_below {
+        message_block = message_block.title(Line::from(vec![
+            Span::raw("OLI Assistant "),
+            Span::styled("▼ more below", Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+
+    let messages_window = Paragraph::new(Text::from(visible_messages))
+        .block(message_block)
         .wrap(Wrap { trim: true });
-    f.render_widget(messages_window, chunks[0]);
+    f.render_widget(messages_window, chunks[1]);
 
     // Input box with hint text
     let input_text = if app.input.is_empty() {
@@ -406,12 +540,12 @@ fn draw_chat(f: &mut Frame, app: &App) {
                 .border_style(Style::default().fg(Color::Cyan)),
         )
         .wrap(Wrap { trim: true });
-    f.render_widget(input_window, chunks[1]);
+    f.render_widget(input_window, chunks[2]);
 
     // Only show cursor if there is input
     if !app.input.is_empty() {
         // Set cursor position at end of input
-        f.set_cursor_position((chunks[1].x + app.input.width() as u16 + 1, chunks[1].y + 1));
+        f.set_cursor_position((chunks[2].x + app.input.width() as u16 + 1, chunks[2].y + 1));
     }
 }
 

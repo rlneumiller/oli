@@ -28,6 +28,8 @@ pub struct App {
     pub download_active: bool,
     pub error_message: Option<String>,
     pub debug_messages: bool,
+    pub scroll_position: usize,
+    pub last_query_time: std::time::Instant,
 }
 
 impl App {
@@ -43,7 +45,28 @@ impl App {
             download_active: false,
             error_message: None,
             debug_messages: true,
+            scroll_position: 0,
+            last_query_time: std::time::Instant::now(),
         }
+    }
+
+    // Methods for scrolling through chat history
+    pub fn scroll_up(&mut self, amount: usize) {
+        if self.scroll_position > 0 {
+            self.scroll_position = self.scroll_position.saturating_sub(amount);
+        }
+    }
+
+    pub fn scroll_down(&mut self, amount: usize) {
+        let max_scroll = self.messages.len().saturating_sub(10);
+        if self.scroll_position < max_scroll {
+            self.scroll_position = (self.scroll_position + amount).min(max_scroll);
+        }
+    }
+
+    pub fn auto_scroll_to_bottom(&mut self) {
+        let max_scroll = self.messages.len().saturating_sub(10);
+        self.scroll_position = max_scroll;
     }
 
     // Get current selected model config
@@ -52,10 +75,23 @@ impl App {
     }
 
     pub fn models_dir() -> Result<PathBuf> {
-        Ok(home_dir()
+        let models_dir = home_dir()
             .context("Failed to find home directory")?
             .join(".oli")
-            .join("models"))
+            .join("models");
+
+        // Create the models directory if it doesn't exist
+        if !models_dir.exists() {
+            std::fs::create_dir_all(&models_dir).context("Failed to create models directory")?;
+        }
+
+        Ok(models_dir)
+    }
+
+    // Get a path for a specific model
+    pub fn model_path(&self, model_name: &str) -> Result<PathBuf> {
+        let models_dir = Self::models_dir()?;
+        Ok(models_dir.join(model_name))
     }
 
     pub fn setup_models(&mut self, tx: mpsc::Sender<String>) -> Result<()> {
@@ -75,10 +111,8 @@ impl App {
         self.messages
             .push(format!("Setting up model: {}", model_name));
 
-        let models_dir = Self::models_dir()?;
-        std::fs::create_dir_all(&models_dir)?;
-
-        let model_path = models_dir.join(&model_file_name);
+        // Get the path for the selected model
+        let model_path = self.model_path(&model_file_name)?;
         if model_path.exists() {
             if self.debug_messages {
                 self.messages
