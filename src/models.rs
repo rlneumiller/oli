@@ -25,6 +25,16 @@ pub fn get_available_models() -> Vec<ModelConfig> {
             n_gpu_layers: 48, // High for M-series Macs (adjust if needed)
         },
         ModelConfig {
+            name: "CodeLlama-34B-GGUF".into(),
+            file_name: "codellama-34b.Q2_K.gguf".into(),
+            size_gb: 14.2,
+            description: "Great for coding on M-series Macs".into(),
+            primary_url: "https://huggingface.co/TheBloke/CodeLlama-34B-GGUF/resolve/main/codellama-34b.Q2_K.gguf".into(),
+            fallback_url: "https://huggingface.co/TheBloke/CodeLlama-34B-GGUF/resolve/main/codellama-34b.Q2_K.gguf".into(),
+            recommended_for: "M1/M2/M3/M4 Macs with 16GB+ RAM".into(),
+            n_gpu_layers: 48, // High for M-series Macs (adjust if needed)
+        },
+        ModelConfig {
             name: "TinyLlama-1.1B".into(),
             file_name: "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf".into(),
             size_gb: 0.65,

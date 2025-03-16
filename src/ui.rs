@@ -427,7 +427,7 @@ fn draw_chat(f: &mut Frame, app: &App) {
                 } else {
                     Line::from("")
                 }
-            } else if m.starts_with("> ") {
+            } else if let Some(stripped) = m.strip_prefix("> ") {
                 // User messages - cyan
                 Line::from(vec![
                     Span::styled(
@@ -437,7 +437,7 @@ fn draw_chat(f: &mut Frame, app: &App) {
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        &m[2..], // Remove the "> " prefix
+                        stripped,
                         Style::default().fg(Color::Cyan),
                     ),
                 ])

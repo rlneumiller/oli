@@ -73,7 +73,7 @@ When explaining:
 "#;
 
         // Try different prompt formats to be compatible with various models
-        let prompts_to_try = vec![
+        let prompts_to_try = [
             // ChatML format (for Mistral, Llama, etc.)
             format!(
                 "<|im_start|>system\n{}<|im_end|>\n\

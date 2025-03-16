@@ -32,6 +32,12 @@ pub struct App {
     pub last_query_time: std::time::Instant,
 }
 
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl App {
     pub fn new() -> Self {
         Self {
@@ -152,7 +158,7 @@ impl App {
 
         if self.debug_messages {
             self.messages
-                .push(format!("DEBUG: Model file does not exist, downloading..."));
+                .push("DEBUG: Model file does not exist, downloading...".to_string());
         }
 
         self.download_active = true;
@@ -269,26 +275,26 @@ impl App {
         self.download_active = true;
 
         std::thread::spawn(move || {
-            let download_result = || -> Result<(), String> {
+            let download_result = {
                 match Self::attempt_download(&primary_url, &path, &tx_clone) {
-                    Ok(()) => return Ok(()),
+                    Ok(()) => Ok(()),
                     Err(e) => {
                         tx_clone
                             .send(format!("retry:First download attempt failed: {}", e))
                             .ok();
 
                         match Self::attempt_download(&fallback_url, &path, &tx_clone) {
-                            Ok(()) => return Ok(()),
-                            Err(e2) => {
-                                return Err(format!(
+                            Ok(()) => Ok(()),
+                            Err(e2) => 
+                                Err(format!(
                                     "Both download attempts failed. Primary: {}, Fallback: {}",
                                     e, e2
-                                ));
-                            }
+                                ))
+                            
                         }
                     }
                 }
-            }();
+            };
 
             match download_result {
                 Ok(()) => {
