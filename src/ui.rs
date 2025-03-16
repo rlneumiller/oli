@@ -60,6 +60,25 @@ pub fn run_app() -> Result<()> {
             terminal.draw(|f| ui(f, &app))?;
         }
 
+        // Check for messages from agent progress
+        let agent_messages = if let Some(ref agent_rx) = app.agent_progress_rx {
+            let mut messages = Vec::new();
+            while let Ok(msg) = agent_rx.try_recv() {
+                app.messages
+                    .push(format!("DEBUG: Received agent message: {}", msg));
+                messages.push(msg);
+            }
+            messages
+        } else {
+            Vec::new()
+        };
+
+        // Process agent messages
+        for msg in agent_messages {
+            process_message(&mut app, &msg)?;
+            terminal.draw(|f| ui(f, &app))?;
+        }
+
         if crossterm::event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = crossterm::event::read()? {
                 match key.code {
@@ -258,6 +277,19 @@ fn process_message(app: &mut App, msg: &str) -> Result<()> {
         app.state = AppState::Error(error_msg);
     } else if msg.starts_with("retry:") {
         app.messages.push(msg.replacen("retry:", "", 1));
+    } else if msg.starts_with("Executing tool") || msg.starts_with("Running tool") {
+        // Handle agent tool execution messages
+        app.messages.push(format!("🔧 {}", msg));
+    } else if msg.starts_with("Sending request to AI") || msg.starts_with("Processing tool results")
+    {
+        // Handle agent progress messages
+        app.messages.push(format!("⏳ {}", msg));
+    } else if msg == "Agent initialized successfully" {
+        app.messages
+            .push("🚀 Agent initialized and ready to use!".into());
+    } else if msg.starts_with("Failed to initialize agent") {
+        app.messages.push(format!("❌ {}", msg));
+        app.use_agent = false;
     }
 
     Ok(())
@@ -387,11 +419,29 @@ fn draw_chat(f: &mut Frame, app: &App) {
         app.messages.len().saturating_sub(10)
     );
 
+    // Add agent indicator if agent is available
+    let agent_indicator = if app.use_agent && app.agent.is_some() {
+        Span::styled(
+            " 🤖 Agent ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::LightGreen)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled(
+            " 🖥️ Local ",
+            Style::default().fg(Color::Black).bg(Color::Yellow),
+        )
+    };
+
     let status_bar = Line::from(vec![
         Span::styled(
             format!(" Model: {} ", model_name),
             Style::default().fg(Color::LightCyan).bg(Color::DarkGray),
         ),
+        Span::raw(" "),
+        agent_indicator,
         Span::raw(" | "),
         Span::styled(scroll_info, Style::default().fg(Color::DarkGray)),
         Span::raw(" | "),
@@ -436,10 +486,7 @@ fn draw_chat(f: &mut Frame, app: &App) {
                             .fg(Color::LightBlue)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(
-                        stripped,
-                        Style::default().fg(Color::Cyan),
-                    ),
+                    Span::styled(stripped, Style::default().fg(Color::Cyan)),
                 ])
             } else if m.starts_with("Error:") || m.starts_with("ERROR:") {
                 // Error messages - red

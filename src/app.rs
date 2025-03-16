@@ -1,7 +1,9 @@
+use crate::agent::agent::{Agent, LLMProvider};
 use crate::inference;
 use crate::models::{get_available_models, ModelConfig};
 use anyhow::{Context, Result};
 use dirs::home_dir;
+use dotenv::dotenv;
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
@@ -9,6 +11,7 @@ use std::{
     sync::mpsc,
     time::Duration,
 };
+use tokio::runtime::Runtime;
 
 #[derive(Debug, PartialEq)]
 pub enum AppState {
@@ -30,6 +33,10 @@ pub struct App {
     pub debug_messages: bool,
     pub scroll_position: usize,
     pub last_query_time: std::time::Instant,
+    pub use_agent: bool,
+    pub agent: Option<Agent>,
+    pub tokio_runtime: Option<Runtime>,
+    pub agent_progress_rx: Option<mpsc::Receiver<String>>,
 }
 
 impl Default for App {
@@ -40,6 +47,12 @@ impl Default for App {
 
 impl App {
     pub fn new() -> Self {
+        // Load environment variables from .env file if present
+        let _ = dotenv();
+
+        // Create tokio runtime for async operations
+        let tokio_runtime = Runtime::new().ok();
+
         Self {
             state: AppState::Setup,
             input: String::new(),
@@ -53,6 +66,80 @@ impl App {
             debug_messages: true,
             scroll_position: 0,
             last_query_time: std::time::Instant::now(),
+            use_agent: false,
+            agent: None,
+            tokio_runtime,
+            agent_progress_rx: None,
+        }
+    }
+
+    pub fn setup_agent(&mut self) -> Result<()> {
+        // Check if API keys are available
+        let has_anthropic_key = std::env::var("ANTHROPIC_API_KEY").is_ok();
+        let has_openai_key = std::env::var("OPENAI_API_KEY").is_ok();
+
+        if !has_anthropic_key && !has_openai_key {
+            self.messages.push(
+                "No API keys found for Anthropic or OpenAI. Agent features will be disabled."
+                    .into(),
+            );
+            self.messages.push("To enable agent features, set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variables.".into());
+            self.use_agent = false;
+            return Ok(());
+        }
+
+        // Prefer Anthropic if available
+        let provider = if has_anthropic_key {
+            LLMProvider::Anthropic
+        } else {
+            LLMProvider::OpenAI
+        };
+
+        // Create progress channel
+        let (tx, rx) = mpsc::channel();
+        self.agent_progress_rx = Some(rx);
+
+        // Create the agent
+        let mut agent = Agent::new(provider);
+
+        // Add model if specified
+        if let Some(model) = self.get_agent_model() {
+            agent = agent.with_model(model);
+        }
+
+        // Initialize agent in the tokio runtime
+        if let Some(runtime) = &self.tokio_runtime {
+            runtime.block_on(async {
+                if let Err(e) = agent.initialize().await {
+                    tx.send(format!("Failed to initialize agent: {}", e))
+                        .unwrap();
+                    return;
+                }
+                tx.send("Agent initialized successfully".to_string())
+                    .unwrap();
+            });
+
+            self.agent = Some(agent);
+            self.use_agent = true;
+            self.messages.push("Agent capabilities enabled!".into());
+        } else {
+            self.messages
+                .push("Failed to create async runtime. Agent features will be disabled.".into());
+            self.use_agent = false;
+        }
+
+        Ok(())
+    }
+
+    fn get_agent_model(&self) -> Option<String> {
+        // If using Anthropic, use Claude 3.7 Sonnet by default
+        if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+            Some("claude-3-sonnet-20240229".to_string()) // Using 3.7 Sonnet model ID
+        } else if std::env::var("OPENAI_API_KEY").is_ok() {
+            // If using OpenAI, use GPT-4o by default
+            Some("gpt-4o".to_string())
+        } else {
+            None
         }
     }
 
@@ -106,16 +193,44 @@ impl App {
         }
 
         self.error_message = None;
-        // Initialize download state
-        self.download_active = true;
 
         let model_name = self.current_model().name.clone();
         let model_file_name = self.current_model().file_name.clone();
         let model_primary_url = self.current_model().primary_url.clone();
         let model_fallback_url = self.current_model().fallback_url.clone();
+        let model_size = self.current_model().size_gb;
 
         self.messages
             .push(format!("Setting up model: {}", model_name));
+
+        // Check if this is a cloud-based model (size is 0)
+        if model_size == 0.0 {
+            if self.debug_messages {
+                self.messages
+                    .push("DEBUG: Setting up cloud-based model".into());
+            }
+
+            // Cloud models don't need downloading, only API key setup
+            if let Err(e) = self.setup_agent() {
+                self.handle_error(format!("Failed to setup cloud model: {}", e));
+                tx.send("setup_failed".into())?;
+                return Ok(());
+            }
+
+            // If agent is successfully set up, we're done
+            if self.use_agent && self.agent.is_some() {
+                tx.send("setup_complete".into())?;
+                return Ok(());
+            } else {
+                self.handle_error("API key not found for the selected cloud model".into());
+                tx.send("setup_failed".into())?;
+                return Ok(());
+            }
+        }
+
+        // For local models, continue with the normal setup process
+        // Initialize download state for local models
+        self.download_active = true;
 
         // Get the path for the selected model
         let model_path = self.model_path(&model_file_name)?;
@@ -285,12 +400,10 @@ impl App {
 
                         match Self::attempt_download(&fallback_url, &path, &tx_clone) {
                             Ok(()) => Ok(()),
-                            Err(e2) => 
-                                Err(format!(
-                                    "Both download attempts failed. Primary: {}, Fallback: {}",
-                                    e, e2
-                                ))
-                            
+                            Err(e2) => Err(format!(
+                                "Both download attempts failed. Primary: {}, Fallback: {}",
+                                e, e2
+                            )),
                         }
                     }
                 }
@@ -458,8 +571,40 @@ impl App {
         }
 
         let n_gpu_layers = self.current_model().n_gpu_layers;
+        let model_config = self.current_model();
 
-        // Attempt to load the model
+        // Check if the model supports agent capabilities
+        let supports_agent = model_config
+            .agentic_capabilities
+            .as_ref()
+            .map(|caps| !caps.is_empty())
+            .unwrap_or(false);
+
+        // Try setting up agent if supported
+        if supports_agent {
+            if let Err(e) = self.setup_agent() {
+                self.messages.push(format!(
+                    "WARNING: Failed to initialize agent capabilities: {}",
+                    e
+                ));
+                self.use_agent = false;
+            } else if self.use_agent {
+                self.messages.push(
+                    "💡 Agent capabilities enabled! You can now use advanced code tasks.".into(),
+                );
+                self.messages
+                    .push("Try asking about files, editing code, or running commands.".into());
+                self.download_active = false;
+                self.state = AppState::Chat;
+
+                // If agent is successfully set up, we can skip loading the local model
+                if self.agent.is_some() {
+                    return Ok(());
+                }
+            }
+        }
+
+        // Fall back to loading local model
         match inference::ModelSession::new(model_path, n_gpu_layers) {
             Ok(inference) => {
                 self.inference = Some(inference);
@@ -493,7 +638,7 @@ impl App {
     pub fn query_model(&mut self, prompt: &str) -> Result<String> {
         if self.debug_messages {
             self.messages.push(format!(
-                "DEBUG: Querying model with: {}",
+                "DEBUG: Querying with: {}",
                 if prompt.len() > 50 {
                     format!("{}...", &prompt[..50])
                 } else {
@@ -502,6 +647,12 @@ impl App {
             ));
         }
 
+        // Try using agent if enabled
+        if self.use_agent && self.agent.is_some() {
+            return self.query_with_agent(prompt);
+        }
+
+        // Fall back to local model if agent is not available
         // Check if the model is loaded
         match self.inference.as_mut() {
             Some(inference) => {
@@ -532,5 +683,56 @@ impl App {
                 Err(anyhow::anyhow!(error_msg))
             }
         }
+    }
+
+    pub fn query_with_agent(&mut self, prompt: &str) -> Result<String> {
+        // Make sure we have a tokio runtime
+        let runtime = match &self.tokio_runtime {
+            Some(rt) => rt,
+            None => return Err(anyhow::anyhow!("Async runtime not available")),
+        };
+
+        // Make sure we have an agent
+        let agent = match &self.agent {
+            Some(agent) => agent,
+            None => return Err(anyhow::anyhow!("Agent not initialized")),
+        };
+
+        // Create a progress channel
+        let (progress_tx, progress_rx) = mpsc::channel();
+        self.agent_progress_rx = Some(progress_rx);
+
+        // Copy the agent and execute the query
+        let agent_clone = agent.clone();
+        let prompt_clone = prompt.to_string();
+
+        // Process this as a background task in the tokio runtime
+        let (response_tx, response_rx) = mpsc::channel();
+
+        runtime.spawn(async move {
+            // Set up the agent with progress sender
+            let (tokio_progress_tx, mut tokio_progress_rx) = tokio::sync::mpsc::channel(100);
+            let agent_with_progress = agent_clone.with_progress_sender(tokio_progress_tx);
+
+            // Forward progress messages
+            tokio::spawn(async move {
+                while let Some(msg) = tokio_progress_rx.recv().await {
+                    let _ = progress_tx.send(msg);
+                }
+            });
+
+            // Execute the query
+            match agent_with_progress.execute(&prompt_clone).await {
+                Ok(response) => {
+                    let _ = response_tx.send(Ok(response));
+                }
+                Err(e) => {
+                    let _ = response_tx.send(Err(e));
+                }
+            }
+        });
+
+        // Wait for the response with a timeout
+        response_rx.recv_timeout(Duration::from_secs(120))?
     }
 }
