@@ -37,7 +37,7 @@ pub fn get_available_models() -> Vec<ModelConfig> {
         // Cloud models with agent capabilities
         ModelConfig {
             name: "Claude 3.7 Sonnet".into(),
-            file_name: "claude-3-sonnet-20240229".into(),
+            file_name: "claude-3-7-sonnet-20250219".into(),
             size_gb: 0.0, // Cloud model
             description: "Latest Anthropic Claude with advanced code capabilities".into(),
             primary_url: "".into(), // No download needed

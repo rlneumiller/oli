@@ -18,11 +18,10 @@ struct AnthropicMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-enum AnthropicContent {
-    Text { text: String },
-    // Adding JSON variant for future use
-    Json { json: Value },
+struct AnthropicContent {
+    #[serde(rename = "type")]
+    content_type: String,
+    text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,15 +35,8 @@ struct AnthropicToolUse {
 struct AnthropicTool {
     name: String,
     description: Option<String>,
-    input_schema: AnthropicToolSchema,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AnthropicToolSchema {
-    #[serde(rename = "type")]
-    type_field: String,
-    properties: serde_json::Map<String, Value>,
-    required: Vec<String>,
+    #[serde(rename = "input_schema")]
+    schema: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,10 +48,18 @@ struct AnthropicResponseFormat {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct AnthropicToolChoice {
+    #[serde(rename = "type")]
+    choice_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct AnthropicRequest {
     model: String,
     messages: Vec<AnthropicMessage>,
     max_tokens: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -67,7 +67,7 @@ struct AnthropicRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<AnthropicTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_choice: Option<String>,
+    tool_choice: Option<AnthropicToolChoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<AnthropicResponseFormat>,
 }
@@ -92,6 +92,10 @@ impl AnthropicClient {
         let api_key = env::var("ANTHROPIC_API_KEY")
             .context("ANTHROPIC_API_KEY environment variable not set")?;
 
+        Self::with_api_key(api_key, model)
+    }
+
+    pub fn with_api_key(api_key: String, model: Option<String>) -> Result<Self> {
         // Create new client with appropriate headers
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -100,11 +104,12 @@ impl AnthropicClient {
             HeaderValue::from_str(&format!("Bearer {}", api_key))?,
         );
         headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+        headers.insert("x-api-key", HeaderValue::from_str(&api_key)?);
 
         let client = ReqwestClient::builder().default_headers(headers).build()?;
 
         // Default to Claude 3.7 Sonnet as the latest model with tooling capabilities
-        let model = model.unwrap_or_else(|| "claude-3-sonnet-20240229".to_string());
+        let model = model.unwrap_or_else(|| "claude-3-7-sonnet-20250219".to_string());
 
         Ok(Self {
             client,
@@ -113,12 +118,23 @@ impl AnthropicClient {
         })
     }
 
+    fn extract_system_message(&self, messages: &[Message]) -> Option<String> {
+        messages
+            .iter()
+            .find(|msg| msg.role == "system")
+            .map(|system_msg| system_msg.content.clone())
+    }
+
     fn convert_messages(&self, messages: Vec<Message>) -> Vec<AnthropicMessage> {
         messages
             .into_iter()
+            .filter(|msg| msg.role != "system") // Filter out system messages
             .map(|msg| AnthropicMessage {
                 role: msg.role,
-                content: vec![AnthropicContent::Text { text: msg.content }],
+                content: vec![AnthropicContent {
+                    content_type: "text".to_string(),
+                    text: msg.content,
+                }],
                 tool_use: None,
             })
             .collect()
@@ -131,31 +147,29 @@ impl AnthropicClient {
         tools
             .into_iter()
             .map(|tool| {
-                // Extract required fields from parameters if available
-                let required: Vec<String> = if let Value::Object(map) = &tool.parameters {
-                    if let Some(Value::Array(req)) = map.get("required") {
-                        req.iter()
-                            .filter_map(|v| v.as_str())
-                            .map(|s| s.to_string())
-                            .collect()
-                    } else {
-                        vec![]
+                // Create a proper JSON Schema compliant schema object
+                let mut schema = serde_json::Map::new();
+                schema.insert(
+                    "$schema".to_string(),
+                    json!("https://json-schema.org/draft/2020-12/schema"),
+                );
+                schema.insert("type".to_string(), json!("object"));
+
+                // Add properties and required fields if they exist in the original parameters
+                if let Value::Object(params) = &tool.parameters {
+                    if let Some(props) = params.get("properties") {
+                        schema.insert("properties".to_string(), props.clone());
                     }
-                } else {
-                    vec![]
-                };
+
+                    if let Some(required) = params.get("required") {
+                        schema.insert("required".to_string(), required.clone());
+                    }
+                }
 
                 AnthropicTool {
                     name: tool.name,
                     description: Some(tool.description),
-                    input_schema: AnthropicToolSchema {
-                        type_field: "object".to_string(),
-                        properties: match tool.parameters {
-                            Value::Object(map) => map,
-                            _ => serde_json::Map::new(),
-                        },
-                        required,
-                    },
+                    schema: Value::Object(schema),
                 }
             })
             .collect()
@@ -165,6 +179,8 @@ impl AnthropicClient {
 #[async_trait]
 impl ApiClient for AnthropicClient {
     async fn complete(&self, messages: Vec<Message>, options: CompletionOptions) -> Result<String> {
+        // Extract system message if present
+        let system_message = self.extract_system_message(&messages);
         let converted_messages = self.convert_messages(messages);
 
         let max_tokens = options.max_tokens.unwrap_or(2048) as usize;
@@ -173,6 +189,7 @@ impl ApiClient for AnthropicClient {
             model: self.model.clone(),
             messages: converted_messages,
             max_tokens,
+            system: system_message,
             temperature: options.temperature,
             top_p: options.top_p,
             tools: None,
@@ -220,10 +237,7 @@ impl ApiClient for AnthropicClient {
         let content = anthropic_response
             .content
             .into_iter()
-            .map(|content| match content {
-                AnthropicContent::Text { text } => text,
-                AnthropicContent::Json { json } => json.to_string(),
-            })
+            .map(|content| content.text)
             .next()
             .ok_or_else(|| AppError::Other("No content in Anthropic response".to_string()))?;
 
@@ -236,6 +250,8 @@ impl ApiClient for AnthropicClient {
         options: CompletionOptions,
         tool_results: Option<Vec<ToolResult>>,
     ) -> Result<(String, Option<Vec<ToolCall>>)> {
+        // Extract system message if present
+        let system_message = self.extract_system_message(&messages);
         let mut converted_messages = self.convert_messages(messages);
 
         // Add tool results if they exist
@@ -256,7 +272,8 @@ impl ApiClient for AnthropicClient {
                 // Create a tool result message (from user)
                 let tool_result_msg = AnthropicMessage {
                     role: "user".to_string(),
-                    content: vec![AnthropicContent::Text {
+                    content: vec![AnthropicContent {
+                        content_type: "text".to_string(),
                         text: format!("Tool result: {}", result.output),
                     }],
                     tool_use: None,
@@ -274,6 +291,7 @@ impl ApiClient for AnthropicClient {
             model: self.model.clone(),
             messages: converted_messages,
             max_tokens,
+            system: system_message,
             temperature: options.temperature,
             top_p: options.top_p,
             tools: None,
@@ -295,10 +313,12 @@ impl ApiClient for AnthropicClient {
             request.tools = Some(converted_tools);
 
             // Set tool choice based on option
-            request.tool_choice = Some(if options.require_tool_use {
-                "required".to_string()
-            } else {
-                "auto".to_string()
+            request.tool_choice = Some(AnthropicToolChoice {
+                choice_type: if options.require_tool_use {
+                    "required".to_string()
+                } else {
+                    "auto".to_string()
+                },
             });
         }
 
@@ -334,10 +354,7 @@ impl ApiClient for AnthropicClient {
         let content = anthropic_response
             .content
             .into_iter()
-            .map(|content| match content {
-                AnthropicContent::Text { text } => text,
-                AnthropicContent::Json { json } => json.to_string(),
-            })
+            .map(|content| content.text)
             .next()
             .unwrap_or_default();
 

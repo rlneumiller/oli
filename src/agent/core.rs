@@ -32,6 +32,16 @@ impl Agent {
         }
     }
 
+    pub fn new_with_api_key(provider: LLMProvider, api_key: String) -> Self {
+        // Create a new agent with the given provider and API key
+        // The API key will be used during initialization
+        let mut agent = Self::new(provider);
+        // Store the API key as the model temporarily
+        // It will be handled properly in initialize_with_api_key
+        agent.model = Some(api_key);
+        agent
+    }
+
     pub fn with_model(mut self, model: String) -> Self {
         self.model = Some(model);
         self
@@ -55,6 +65,23 @@ impl Agent {
                 ApiClientEnum::Anthropic(Arc::new(client))
             }
             LLMProvider::OpenAI => {
+                let client = OpenAIClient::new(self.model.clone())?;
+                ApiClientEnum::OpenAi(Arc::new(client))
+            }
+        });
+
+        Ok(())
+    }
+
+    pub async fn initialize_with_api_key(&mut self, api_key: String) -> Result<()> {
+        // Create the API client based on provider and model, using the provided API key
+        self.api_client = Some(match self.provider {
+            LLMProvider::Anthropic => {
+                let client = AnthropicClient::with_api_key(api_key, self.model.clone())?;
+                ApiClientEnum::Anthropic(Arc::new(client))
+            }
+            LLMProvider::OpenAI => {
+                // For now we don't support custom API keys for OpenAI, fallback to env var
                 let client = OpenAIClient::new(self.model.clone())?;
                 ApiClientEnum::OpenAi(Arc::new(client))
             }

@@ -99,6 +99,25 @@ pub fn run_app() -> Result<()> {
                                 }
                                 terminal.draw(|f| ui(f, &app))?;
                             }
+                            AppState::ApiKeyInput => {
+                                let api_key = std::mem::take(&mut app.input);
+                                if !api_key.is_empty() {
+                                    app.messages
+                                        .push("DEBUG: API key entered, continuing setup...".into());
+
+                                    // Set the API key and return to setup state
+                                    app.api_key = Some(api_key);
+                                    app.state = AppState::Setup;
+
+                                    // Continue with model setup using the provided API key
+                                    if let Err(e) = app.setup_models(tx.clone()) {
+                                        app.messages.push(format!("ERROR: Setup failed: {}", e));
+                                    }
+                                    terminal.draw(|f| ui(f, &app))?;
+                                } else {
+                                    app.messages.push("API key cannot be empty. Please enter your Anthropic API key...".into());
+                                }
+                            }
                             AppState::Chat => {
                                 let input = std::mem::take(&mut app.input);
                                 if !input.is_empty() {
@@ -165,18 +184,20 @@ pub fn run_app() -> Result<()> {
                             terminal.draw(|f| ui(f, &app))?;
                         }
                     }
-                    KeyCode::Char(c) => {
-                        if let AppState::Chat = app.state {
+                    KeyCode::Char(c) => match app.state {
+                        AppState::Chat | AppState::ApiKeyInput => {
                             app.input.push(c);
                             terminal.draw(|f| ui(f, &app))?;
                         }
-                    }
-                    KeyCode::Backspace => {
-                        if let AppState::Chat = app.state {
+                        _ => {}
+                    },
+                    KeyCode::Backspace => match app.state {
+                        AppState::Chat | AppState::ApiKeyInput => {
                             app.input.pop();
                             terminal.draw(|f| ui(f, &app))?;
                         }
-                    }
+                        _ => {}
+                    },
                     // Handle scrolling in chat mode
                     KeyCode::PageUp => {
                         if let AppState::Chat = app.state {
@@ -265,9 +286,22 @@ fn process_message(app: &mut App, msg: &str) -> Result<()> {
                 app.state = AppState::Error(format!("Failed to load model: {}", e));
             }
         }
+    } else if msg == "api_key_needed" {
+        // Special case for when we need an API key
+        app.messages
+            .push("Please enter your Anthropic API key to use Claude 3.7...".into());
     } else if msg == "setup_complete" {
         app.state = AppState::Chat;
         app.messages.push("Setup complete. Ready to chat!".into());
+
+        // Add the welcome message and help info
+        app.messages.push("".into());
+        app.messages.push("Welcome to OLI assistant!".into());
+        app.messages.push("/help for help".into());
+        if let Some(cwd) = &app.current_working_dir {
+            app.messages.push(format!("cwd: {}", cwd));
+        }
+        app.messages.push("".into());
     } else if msg == "setup_failed" {
         app.messages
             .push("Setup failed. Check error messages above.".into());
@@ -310,6 +344,7 @@ fn initialize_messages(app: &mut App) {
 fn ui(f: &mut Frame, app: &App) {
     match app.state {
         AppState::Setup => draw_setup(f, app),
+        AppState::ApiKeyInput => draw_api_key_input(f, app),
         AppState::Chat => draw_chat(f, app),
         AppState::Error(ref error_msg) => draw_error(f, app, error_msg),
     }
@@ -593,6 +628,76 @@ fn draw_chat(f: &mut Frame, app: &App) {
     if !app.input.is_empty() {
         // Set cursor position at end of input
         f.set_cursor_position((chunks[2].x + app.input.width() as u16 + 1, chunks[2].y + 1));
+    }
+}
+
+fn draw_api_key_input(f: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(2)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(4),
+            Constraint::Length(3),
+        ])
+        .split(f.area());
+
+    let title = Paragraph::new("Anthropic API Key Setup")
+        .style(
+            Style::default()
+                .fg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .alignment(Alignment::Center);
+    f.render_widget(title, chunks[0]);
+
+    // Messages area showing info about API key requirements
+    let message_items = vec![
+        ListItem::new("To use Claude 3.7, you need to provide your Anthropic API key."),
+        ListItem::new("You can get an API key from https://console.anthropic.com/"),
+        ListItem::new(""),
+        ListItem::new(
+            "The API key will be used only for this session and will not be stored permanently.",
+        ),
+        ListItem::new(
+            "You can also set the ANTHROPIC_API_KEY environment variable to avoid this prompt.",
+        ),
+    ];
+
+    let messages = List::new(message_items)
+        .block(Block::default().borders(Borders::ALL).title("Information"))
+        .style(Style::default().fg(Color::Yellow));
+    f.render_widget(messages, chunks[1]);
+
+    // Input box with masked input for security
+    let input_content = if app.input.is_empty() {
+        Span::styled(
+            "Enter your Anthropic API key and press Enter...",
+            Style::default().fg(Color::DarkGray),
+        )
+    } else {
+        // Mask the API key with asterisks for privacy
+        Span::raw("*".repeat(app.input.len()))
+    };
+
+    let input_box = Paragraph::new(input_content)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("API Key")
+                .border_style(Style::default().fg(Color::Cyan)),
+        )
+        .style(Style::default())
+        .alignment(Alignment::Left);
+    f.render_widget(input_box, chunks[2]);
+
+    // Set cursor position for input
+    if !app.input.is_empty() {
+        // Position the cursor at the end of the masked input
+        f.set_cursor_position((chunks[2].x + app.input.len() as u16 + 1, chunks[2].y + 1));
+    } else {
+        // Position at the start of the input area
+        f.set_cursor_position((chunks[2].x + 1, chunks[2].y + 1));
     }
 }
 

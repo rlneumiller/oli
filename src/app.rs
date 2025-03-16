@@ -16,6 +16,7 @@ use tokio::runtime::Runtime;
 #[derive(Debug, PartialEq)]
 pub enum AppState {
     Setup,
+    ApiKeyInput,
     Error(String),
     Chat,
 }
@@ -37,6 +38,8 @@ pub struct App {
     pub agent: Option<Agent>,
     pub tokio_runtime: Option<Runtime>,
     pub agent_progress_rx: Option<mpsc::Receiver<String>>,
+    pub api_key: Option<String>,
+    pub current_working_dir: Option<String>,
 }
 
 impl Default for App {
@@ -52,6 +55,11 @@ impl App {
 
         // Create tokio runtime for async operations
         let tokio_runtime = Runtime::new().ok();
+
+        // Get current working directory
+        let current_working_dir = std::env::current_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().to_string());
 
         Self {
             state: AppState::Setup,
@@ -70,12 +78,15 @@ impl App {
             agent: None,
             tokio_runtime,
             agent_progress_rx: None,
+            api_key: None,
+            current_working_dir,
         }
     }
 
     pub fn setup_agent(&mut self) -> Result<()> {
-        // Check if API keys are available
-        let has_anthropic_key = std::env::var("ANTHROPIC_API_KEY").is_ok();
+        // Check if API keys are available either from env vars or from user input
+        let has_anthropic_key =
+            std::env::var("ANTHROPIC_API_KEY").is_ok() || self.api_key.is_some();
         let has_openai_key = std::env::var("OPENAI_API_KEY").is_ok();
 
         if !has_anthropic_key && !has_openai_key {
@@ -99,8 +110,13 @@ impl App {
         let (tx, rx) = mpsc::channel();
         self.agent_progress_rx = Some(rx);
 
-        // Create the agent
-        let mut agent = Agent::new(provider);
+        // Create the agent with API key if provided by user
+        let mut agent = if let (LLMProvider::Anthropic, Some(api_key)) = (&provider, &self.api_key)
+        {
+            Agent::new_with_api_key(provider, api_key.clone())
+        } else {
+            Agent::new(provider)
+        };
 
         // Add model if specified
         if let Some(model) = self.get_agent_model() {
@@ -110,7 +126,15 @@ impl App {
         // Initialize agent in the tokio runtime
         if let Some(runtime) = &self.tokio_runtime {
             runtime.block_on(async {
-                if let Err(e) = agent.initialize().await {
+                let result = if let Some(api_key) = self.api_key.clone() {
+                    // If we have a direct API key, use it (handles both user-input and env var)
+                    agent.initialize_with_api_key(api_key).await
+                } else {
+                    // Otherwise try to initialize from environment variables
+                    agent.initialize().await
+                };
+
+                if let Err(e) = result {
                     tx.send(format!("Failed to initialize agent: {}", e))
                         .unwrap();
                     return;
@@ -133,8 +157,8 @@ impl App {
 
     fn get_agent_model(&self) -> Option<String> {
         // If using Anthropic, use Claude 3.7 Sonnet by default
-        if std::env::var("ANTHROPIC_API_KEY").is_ok() {
-            Some("claude-3-sonnet-20240229".to_string()) // Using 3.7 Sonnet model ID
+        if std::env::var("ANTHROPIC_API_KEY").is_ok() || self.api_key.is_some() {
+            Some("claude-3-7-sonnet-20250219".to_string()) // Using 3.7 Sonnet model ID
         } else if std::env::var("OPENAI_API_KEY").is_ok() {
             // If using OpenAI, use GPT-4o by default
             Some("gpt-4o".to_string())
@@ -208,6 +232,18 @@ impl App {
             if self.debug_messages {
                 self.messages
                     .push("DEBUG: Setting up cloud-based model".into());
+            }
+
+            // Check if we need to ask for API key (specifically for Claude models)
+            if model_name.contains("Claude")
+                && std::env::var("ANTHROPIC_API_KEY").is_err()
+                && self.api_key.is_none()
+            {
+                // Transition to API key input state
+                self.state = AppState::ApiKeyInput;
+                self.input.clear();
+                tx.send("api_key_needed".into())?;
+                return Ok(());
             }
 
             // Cloud models don't need downloading, only API key setup
