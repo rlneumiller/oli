@@ -2,6 +2,7 @@ use crate::apis::api_client::{ApiClient, CompletionOptions, Message, ToolCall, T
 use crate::errors::AppError;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use rand;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Client as ReqwestClient;
 use serde::{Deserialize, Serialize};
@@ -13,23 +14,30 @@ use std::env;
 struct AnthropicMessage {
     role: String,
     content: Vec<AnthropicContent>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_use: Option<Vec<AnthropicToolUse>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct AnthropicContent {
-    #[serde(rename = "type")]
-    content_type: String,
-    text: String,
+#[serde(tag = "type")]
+enum AnthropicContent {
+    #[serde(rename = "text")]
+    Text { text: String },
+
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
+
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        #[serde(rename = "tool_use_id")]
+        tool_call_id: String,
+        content: String,
+    },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AnthropicToolUse {
-    id: Option<String>,
-    name: String,
-    input: Value,
-}
+// The AnthropicToolUse struct is no longer needed as we're using AnthropicContent::ToolUse
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AnthropicTool {
@@ -75,9 +83,17 @@ struct AnthropicRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AnthropicResponse {
     id: String,
+    model: String,
+    role: String,
     content: Vec<AnthropicContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_use: Option<Vec<AnthropicToolUse>>,
+    usage: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    type_field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop_sequence: Option<String>,
 }
 
 pub struct AnthropicClient {
@@ -131,11 +147,7 @@ impl AnthropicClient {
             .filter(|msg| msg.role != "system") // Filter out system messages
             .map(|msg| AnthropicMessage {
                 role: msg.role,
-                content: vec![AnthropicContent {
-                    content_type: "text".to_string(),
-                    text: msg.content,
-                }],
-                tool_use: None,
+                content: vec![AnthropicContent::Text { text: msg.content }],
             })
             .collect()
     }
@@ -228,18 +240,38 @@ impl ApiClient for AnthropicClient {
             .into());
         }
 
-        let anthropic_response: AnthropicResponse = response
-            .json()
+        // Get the response as a string first for debugging
+        let response_text = response
+            .text()
             .await
+            .map_err(|e| AppError::NetworkError(format!("Failed to get response text: {}", e)))?;
+
+        // Debug logging should stay within the TUI, removing direct print statements
+        // that would interfere with the terminal interface
+
+        // Try to parse the response
+        let anthropic_response: AnthropicResponse = serde_json::from_str(&response_text)
             .map_err(|e| AppError::Other(format!("Failed to parse Anthropic response: {}", e)))?;
 
         // Extract content from response
-        let content = anthropic_response
-            .content
-            .into_iter()
-            .map(|content| content.text)
-            .next()
-            .ok_or_else(|| AppError::Other("No content in Anthropic response".to_string()))?;
+        let mut text_content = String::new();
+
+        // Look for text content in the response
+        for content_item in &anthropic_response.content {
+            if let AnthropicContent::Text { text } = content_item {
+                text_content = text.clone();
+                break;
+            }
+        }
+
+        // Return an error if no text content was found
+        if text_content.is_empty() {
+            return Err(
+                AppError::Other("No text content in Anthropic response".to_string()).into(),
+            );
+        }
+
+        let content = text_content;
 
         Ok(content)
     }
@@ -258,25 +290,31 @@ impl ApiClient for AnthropicClient {
         if let Some(results) = tool_results {
             // For each tool result, we need to add corresponding messages
             for result in results {
+                // Ensure we have a valid tool_call_id
+                let tool_call_id = if result.tool_call_id.is_empty() {
+                    // Generate a simple UUID-like string if no ID was provided
+                    format!("tool-{}", rand::random::<u64>())
+                } else {
+                    result.tool_call_id.clone()
+                };
+
                 // Create a tool use message (from assistant)
                 let tool_use_msg = AnthropicMessage {
                     role: "assistant".to_string(),
-                    content: vec![],
-                    tool_use: Some(vec![AnthropicToolUse {
-                        id: Some(result.tool_call_id.clone()),
+                    content: vec![AnthropicContent::ToolUse {
+                        id: tool_call_id.clone(),
                         name: "tool".to_string(), // We don't have the original name
                         input: json!({}),         // We don't need the input for this
-                    }]),
+                    }],
                 };
 
-                // Create a tool result message (from user)
+                // Create a tool result message (from user) with proper tool_result content
                 let tool_result_msg = AnthropicMessage {
                     role: "user".to_string(),
-                    content: vec![AnthropicContent {
-                        content_type: "text".to_string(),
-                        text: format!("Tool result: {}", result.output),
+                    content: vec![AnthropicContent::ToolResult {
+                        tool_call_id: tool_call_id.clone(),
+                        content: result.output.clone(),
                     }],
-                    tool_use: None,
                 };
 
                 // Add both messages to the conversation
@@ -345,36 +383,60 @@ impl ApiClient for AnthropicClient {
             .into());
         }
 
-        let anthropic_response: AnthropicResponse = response
-            .json()
+        // Get the response as a string first for debugging
+        let response_text = response
+            .text()
             .await
+            .map_err(|e| AppError::NetworkError(format!("Failed to get response text: {}", e)))?;
+
+        // Debug logging should stay within the TUI, removing direct print statements
+        // that would interfere with the terminal interface
+
+        // Try to parse the response
+        let anthropic_response: AnthropicResponse = serde_json::from_str(&response_text)
             .map_err(|e| AppError::Other(format!("Failed to parse Anthropic response: {}", e)))?;
 
-        // Extract content from response
-        let content = anthropic_response
-            .content
-            .into_iter()
-            .map(|content| content.text)
-            .next()
-            .unwrap_or_default();
+        // First extract tool calls from content
+        let mut tool_calls_vec = Vec::new();
+        let mut text_content = String::new();
 
-        // Extract tool calls if any
-        let tool_calls = if let Some(tools) = anthropic_response.tool_use {
-            if tools.is_empty() {
-                None
-            } else {
-                let calls = tools
-                    .into_iter()
-                    .map(|tool| crate::apis::api_client::ToolCall {
-                        name: tool.name,
-                        arguments: tool.input,
-                    })
-                    .collect::<Vec<_>>();
-
-                Some(calls)
+        // Process each content item
+        for content_item in &anthropic_response.content {
+            match content_item {
+                AnthropicContent::Text { text } => {
+                    // If we don't have a text content yet, use this one
+                    if text_content.is_empty() {
+                        text_content = text.clone();
+                    }
+                }
+                AnthropicContent::ToolUse { name, input, .. } => {
+                    // Add a tool call
+                    tool_calls_vec.push(crate::apis::api_client::ToolCall {
+                        name: name.clone(),
+                        arguments: input.clone(),
+                    });
+                }
+                AnthropicContent::ToolResult { .. } => {
+                    // Tool results are not processed here, they're for the API to recognize tool result responses
+                }
             }
+        }
+
+        // If we didn't find any text content, use an empty string
+        let content = if text_content.is_empty() {
+            String::new()
         } else {
+            text_content
+        };
+
+        // We no longer need to check a top-level tool_use field as all tool uses
+        // will be in the content array already
+
+        // Return None if no tool calls found, otherwise return the vector
+        let tool_calls = if tool_calls_vec.is_empty() {
             None
+        } else {
+            Some(tool_calls_vec)
         };
 
         Ok((content, tool_calls))

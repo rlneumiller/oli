@@ -1,4 +1,4 @@
-use crate::agent::agent::{Agent, LLMProvider};
+use crate::agent::core::{Agent, LLMProvider};
 use crate::inference;
 use crate::models::{get_available_models, ModelConfig};
 use anyhow::{Context, Result};
@@ -182,8 +182,19 @@ impl App {
     }
 
     pub fn auto_scroll_to_bottom(&mut self) {
-        let max_scroll = self.messages.len().saturating_sub(10);
+        // Calculate a better scroll position that ensures the latest messages are visible
+        // We need to consider the actual height of the terminal window, but since that's
+        // not directly available here, we use a conservative estimate to ensure we're
+        // always showing the latest content
+
+        // Aim to put the scroll position about 15-20 lines from the end
+        // This is more reliable than the previous approach
+        let max_scroll = self.messages.len().saturating_sub(5);
         self.scroll_position = max_scroll;
+
+        // Mark that we've auto-scrolled so UI knows to maintain this position
+        // even if multiple messages come in rapid succession
+        self.messages.push("".to_string()); // Add empty line to ensure spacing
     }
 
     // Get current selected model config
@@ -738,6 +749,10 @@ impl App {
         let (progress_tx, progress_rx) = mpsc::channel();
         self.agent_progress_rx = Some(progress_rx);
 
+        // Add a message about starting to process the query
+        self.messages
+            .push("[thinking] Analyzing your query and preparing to use tools if needed...".into());
+
         // Copy the agent and execute the query
         let agent_clone = agent.clone();
         let prompt_clone = prompt.to_string();
@@ -750,25 +765,52 @@ impl App {
             let (tokio_progress_tx, mut tokio_progress_rx) = tokio::sync::mpsc::channel(100);
             let agent_with_progress = agent_clone.with_progress_sender(tokio_progress_tx);
 
+            // Create a clone of progress_tx for the forwarding task
+            let progress_tx_clone = progress_tx.clone();
+
             // Forward progress messages
             tokio::spawn(async move {
                 while let Some(msg) = tokio_progress_rx.recv().await {
-                    let _ = progress_tx.send(msg);
+                    let _ = progress_tx_clone.send(msg);
                 }
             });
 
             // Execute the query
             match agent_with_progress.execute(&prompt_clone).await {
                 Ok(response) => {
-                    let _ = response_tx.send(Ok(response));
+                    // Format the response to ensure it stays within output area bounds
+
+                    // Process the response to ensure good formatting
+                    let processed_response =
+                        if response.trim().starts_with("{") && response.trim().ends_with("}") {
+                            // If it's JSON, ensure it's properly formatted
+                            match serde_json::from_str::<serde_json::Value>(&response) {
+                                Ok(json) => {
+                                    if let Ok(pretty) = serde_json::to_string_pretty(&json) {
+                                        pretty
+                                    } else {
+                                        response
+                                    }
+                                }
+                                Err(_) => response,
+                            }
+                        } else {
+                            response
+                        };
+
+                    // Send a completion message
+                    let _ = progress_tx.send("[success] Task completed successfully".into());
+                    let _ = response_tx.send(Ok(processed_response));
                 }
                 Err(e) => {
+                    // Send an error message
+                    let _ = progress_tx.send(format!("[error] Error during processing: {}", e));
                     let _ = response_tx.send(Err(e));
                 }
             }
         });
 
-        // Wait for the response with a timeout
+        // Wait for the response with a timeout (2 minutes) and return the final result
         response_rx.recv_timeout(Duration::from_secs(120))?
     }
 }

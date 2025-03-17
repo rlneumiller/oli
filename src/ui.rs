@@ -64,8 +64,40 @@ pub fn run_app() -> Result<()> {
         let agent_messages = if let Some(ref agent_rx) = app.agent_progress_rx {
             let mut messages = Vec::new();
             while let Ok(msg) = agent_rx.try_recv() {
-                app.messages
-                    .push(format!("DEBUG: Received agent message: {}", msg));
+                // Add debug message if debug is enabled
+                if app.debug_messages {
+                    app.messages
+                        .push(format!("DEBUG: Received agent message: {}", msg));
+                }
+
+                // Process long tool results to ensure proper display
+                if msg.starts_with("Tool result:") && msg.len() > 100 {
+                    // Break long tool results into multiple lines
+                    app.messages
+                        .push("[tool] Processing tool result...".to_string());
+
+                    // Add the result content with proper formatting
+                    // Add delimiter before
+                    app.messages.push("------- Tool Result -------".to_string());
+
+                    // Get the actual content after the prefix
+                    if let Some(content) = msg.strip_prefix("Tool result:") {
+                        // Split long content by lines
+                        for line in content.lines() {
+                            app.messages.push(line.to_string());
+                        }
+                    } else {
+                        app.messages.push(msg.clone());
+                    }
+
+                    // Add delimiter after
+                    app.messages.push("-------------------------".to_string());
+
+                    // Mark that we need to scroll after processing
+                    app.messages.push("_AUTO_SCROLL_".to_string());
+                }
+
+                // Always add the message to be processed normally
                 messages.push(msg);
             }
             messages
@@ -76,6 +108,19 @@ pub fn run_app() -> Result<()> {
         // Process agent messages
         for msg in agent_messages {
             process_message(&mut app, &msg)?;
+            terminal.draw(|f| ui(f, &app))?;
+        }
+
+        // Check if we need to auto-scroll after processing messages
+        let needs_scroll = app.messages.iter().any(|m| m == "_AUTO_SCROLL_");
+        if needs_scroll {
+            // Remove the auto-scroll markers
+            app.messages.retain(|m| m != "_AUTO_SCROLL_");
+
+            // Actually scroll to bottom
+            app.auto_scroll_to_bottom();
+
+            // Redraw with the new scroll position
             terminal.draw(|f| ui(f, &app))?;
         }
 
@@ -140,12 +185,55 @@ pub fn run_app() -> Result<()> {
                                                 }
                                             }
 
-                                            // Format the response nicely
-                                            let formatted_response = response;
-                                            app.messages.push(formatted_response);
+                                            // Process and format the response for better display
+                                            // Split long responses into multiple messages if needed
+                                            let max_line_length = 80; // Reasonable line length for TUI display
 
-                                            // Auto-scroll to the bottom to show the new response
+                                            if response.contains('\n') {
+                                                // For multi-line responses (code or structured content)
+                                                // Add an empty line before the response for readability
+                                                app.messages.push("".to_string());
+
+                                                // Split by line to preserve formatting
+                                                for line in response.lines() {
+                                                    // For very long lines, add wrapping
+                                                    if line.len() > max_line_length {
+                                                        // Simple wrapping at character boundaries
+                                                        // Use integer division that rounds up (equivalent to ceiling division)
+                                                        // Skip clippy suggestion as div_ceil might not be available in all Rust versions
+                                                        #[allow(clippy::manual_div_ceil)]
+                                                        let chunk_count =
+                                                            (line.len() + max_line_length - 1)
+                                                                / max_line_length;
+                                                        for i in 0..chunk_count {
+                                                            let start = i * max_line_length;
+                                                            let end = std::cmp::min(
+                                                                start + max_line_length,
+                                                                line.len(),
+                                                            );
+                                                            if start < line.len() {
+                                                                app.messages.push(
+                                                                    line[start..end].to_string(),
+                                                                );
+                                                            }
+                                                        }
+                                                    } else {
+                                                        app.messages.push(line.to_string());
+                                                    }
+                                                }
+
+                                                // Add another empty line after for readability
+                                                app.messages.push("".to_string());
+                                            } else {
+                                                // For single-line responses, add directly
+                                                app.messages.push(response);
+                                            }
+
+                                            // Force scrolling to the bottom to show the new response
                                             app.auto_scroll_to_bottom();
+
+                                            // Ensure the UI redraws immediately to show the response
+                                            terminal.draw(|f| ui(f, &app))?;
                                         }
                                         Err(e) => {
                                             // Remove the thinking message
@@ -312,18 +400,29 @@ fn process_message(app: &mut App, msg: &str) -> Result<()> {
     } else if msg.starts_with("retry:") {
         app.messages.push(msg.replacen("retry:", "", 1));
     } else if msg.starts_with("Executing tool") || msg.starts_with("Running tool") {
-        // Handle agent tool execution messages
-        app.messages.push(format!("🔧 {}", msg));
+        // Handle agent tool execution messages with green circle
+        app.messages.push(format!("[tool] 🟢 {}", msg));
     } else if msg.starts_with("Sending request to AI") || msg.starts_with("Processing tool results")
     {
-        // Handle agent progress messages
-        app.messages.push(format!("⏳ {}", msg));
+        // Handle agent progress messages with white circle
+        app.messages.push(format!("[wait] ⚪ {}", msg));
+    } else if msg.starts_with("Tool result:") {
+        // Handle tool results with proper formatting and green circle
+        app.messages.push(format!("[success] 🟢 {}", msg));
+    } else if msg.starts_with("Using tool") {
+        // Handle tool selection with proper formatting and green circle
+        app.messages.push(format!("[tool] 🟢 {}", msg));
+    } else if msg.starts_with("Thinking") || msg.contains("analyzing") {
+        // Handle AI thinking process messages with white circle
+        app.messages.push(format!("[thinking] ⚪ {}", msg));
     } else if msg == "Agent initialized successfully" {
         app.messages
-            .push("🚀 Agent initialized and ready to use!".into());
+            .push("[success] 🟢 Agent initialized and ready to use!".into());
     } else if msg.starts_with("Failed to initialize agent") {
-        app.messages.push(format!("❌ {}", msg));
+        app.messages.push(format!("[error] ❌ {}", msg));
         app.use_agent = false;
+    } else if msg.contains("completed successfully") || msg.contains("done") {
+        app.messages.push(format!("[success] 🟢 {}", msg));
     }
 
     Ok(())
@@ -490,8 +589,15 @@ fn draw_chat(f: &mut Frame, app: &App) {
     f.render_widget(status_bar_widget, chunks[0]);
 
     // Filter and style messages
-    let visible_messages: Vec<Line> = app
+    // First, clean up any invisible markers
+    let display_messages: Vec<&String> = app
         .messages
+        .iter()
+        .filter(|msg| *msg != "_AUTO_SCROLL_")
+        .collect();
+
+    // Then apply scrolling and create styled Lines
+    let visible_messages: Vec<Line> = display_messages
         .iter()
         .enumerate()
         // Apply scrolling - show messages based on scroll position
@@ -501,7 +607,7 @@ fn draw_chat(f: &mut Frame, app: &App) {
             // Only show messages that would fit in the visible area
             *idx < app.scroll_position + chunks[1].height as usize
         })
-        .map(|(_, m)| {
+        .map(|(_, &m)| {
             if m.starts_with("DEBUG:") {
                 // Only show debug messages in debug mode
                 if app.debug_messages {
@@ -545,12 +651,190 @@ fn draw_chat(f: &mut Frame, app: &App) {
                 )])
             } else if m == "Thinking..." {
                 // Thinking message
-                Line::from(vec![Span::styled(
-                    "🤔 Thinking...",
-                    Style::default()
-                        .fg(Color::LightYellow)
-                        .add_modifier(Modifier::ITALIC),
-                )])
+                Line::from(vec![
+                    Span::styled("⏺ ", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        "Thinking...",
+                        Style::default()
+                            .fg(Color::LightYellow)
+                            .add_modifier(Modifier::ITALIC),
+                    ),
+                ])
+            } else if m.starts_with("[thinking] ") {
+                // AI Thinking/reasoning message
+                let thinking_content = m.strip_prefix("[thinking] ").unwrap_or(m);
+                
+                if thinking_content.starts_with("⚪ ") {
+                    // New format with white circle
+                    Line::from(vec![
+                        Span::styled(
+                            thinking_content,
+                            Style::default()
+                                .fg(Color::LightYellow)
+                                .add_modifier(Modifier::ITALIC),
+                        ),
+                    ])
+                } else {
+                    // Legacy format with black circle
+                    Line::from(vec![
+                        Span::styled("⏺ ", Style::default().fg(Color::Yellow)),
+                        Span::styled(
+                            thinking_content,
+                            Style::default()
+                                .fg(Color::LightYellow)
+                                .add_modifier(Modifier::ITALIC),
+                        ),
+                    ])
+                }
+            } else if m.starts_with("[tool] ") {
+                // Tool execution message
+                let tool_content = m.strip_prefix("[tool] ").unwrap_or(m);
+                
+                if tool_content.starts_with("🟢 ") {
+                    // New format with green circle
+                    Line::from(vec![
+                        Span::styled(
+                            tool_content,
+                            Style::default()
+                                .fg(Color::LightBlue)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ])
+                } else {
+                    // Legacy format with old indicator
+                    Line::from(vec![
+                        Span::styled("⏺ ", Style::default().fg(Color::Blue)),
+                        Span::styled(
+                            tool_content,
+                            Style::default()
+                                .fg(Color::LightBlue)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ])
+                }
+            } else if m.starts_with("[success] ") {
+                // Success/completion message - probably tool results
+                let content = m.strip_prefix("[success] ").unwrap_or(m);
+
+                // Check for green circle in the content
+                if content.starts_with("🟢 Tool result:") {
+                    let mut lines = Vec::new();
+
+                    // First line with the green circle emoji
+                    let tool_msg = content.strip_prefix("🟢 ").unwrap_or(content);
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            "🟢 ",
+                            Style::default().fg(Color::Green),
+                        ),
+                        Span::styled(
+                            tool_msg,
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+
+                    // Skip the "Tool result:" prefix and add the actual output indented
+                    if let Some(tool_output) = tool_msg.strip_prefix("Tool result:") {
+                        // Handle multiline results
+                        for line in tool_output.trim().lines() {
+                            lines.push(Line::from(vec![
+                                Span::styled("  ", Style::default().fg(Color::Green)),
+                                Span::styled(line, Style::default().fg(Color::Green)),
+                            ]));
+                        }
+                    }
+
+                    // Return the first line, the rest will be added to the text in the calling context
+                    lines.first().cloned().unwrap_or_default()
+                } else if content.starts_with("Tool result:") {
+                    // Legacy format
+                    let mut lines = Vec::new();
+
+                    // First line gets the icon
+                    lines.push(Line::from(vec![
+                        Span::styled("⏺ ", Style::default().fg(Color::Green)),
+                        Span::styled(
+                            "Tool result:",
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+
+                    // Skip the "Tool result:" prefix and add the actual output indented
+                    if let Some(tool_output) = content.strip_prefix("Tool result:") {
+                        // Handle multiline results
+                        for line in tool_output.trim().lines() {
+                            lines.push(Line::from(vec![
+                                Span::styled("  ", Style::default().fg(Color::Green)),
+                                Span::styled(line, Style::default().fg(Color::Green)),
+                            ]));
+                        }
+                    }
+
+                    // Return the first line, the rest will be added to the text in the calling context
+                    lines.first().cloned().unwrap_or_default()
+                } else if content.starts_with("🟢 ") {
+                    // Regular success message with green circle
+                    Line::from(vec![
+                        Span::styled(
+                            content, 
+                            Style::default().fg(Color::Green),
+                        ),
+                    ])
+                } else {
+                    // Legacy format for regular success message
+                    Line::from(vec![
+                        Span::styled("⏺ ", Style::default().fg(Color::Green)),
+                        Span::styled(content, Style::default().fg(Color::Green)),
+                    ])
+                }
+            } else if m.starts_with("[wait] ") {
+                // Progress/wait message with white circle
+                let wait_content = m.strip_prefix("[wait] ").unwrap_or(m);
+                
+                if wait_content.starts_with("⚪ ") {
+                    // New format with white circle emoji
+                    Line::from(vec![
+                        Span::styled(
+                            wait_content,
+                            Style::default().fg(Color::Yellow),
+                        ),
+                    ])
+                } else {
+                    // Legacy format
+                    Line::from(vec![
+                        Span::styled("⏺ ", Style::default().fg(Color::LightYellow)),
+                        Span::styled(
+                            wait_content,
+                            Style::default().fg(Color::Yellow),
+                        ),
+                    ])
+                }
+            } else if m.starts_with("[error] ") {
+                // Error/failure message
+                let error_content = m.strip_prefix("[error] ").unwrap_or(m);
+                
+                if error_content.starts_with("❌ ") {
+                    // New format with X mark emoji
+                    Line::from(vec![
+                        Span::styled(
+                            error_content,
+                            Style::default().fg(Color::Red),
+                        ),
+                    ])
+                } else {
+                    // Legacy format
+                    Line::from(vec![
+                        Span::styled("⏺ ", Style::default().fg(Color::Red)),
+                        Span::styled(
+                            error_content,
+                            Style::default().fg(Color::Red),
+                        ),
+                    ])
+                }
             } else {
                 // Model responses - with styling for code blocks
                 if m.trim().is_empty() {
@@ -560,15 +844,42 @@ fn draw_chat(f: &mut Frame, app: &App) {
                     && app.messages.contains(&format!("> {}", app.input))
                 {
                     // This is likely a model response
-                    Line::from(vec![
-                        Span::styled(
-                            "OLI: ",
+                    // Split long lines to ensure they stay within the UI width
+                    let max_width = chunks[1].width as usize - 10; // Subtract some padding
+
+                    if m.contains('\n') || m.len() > max_width {
+                        // For multi-line or very long responses, return a formatted header line
+                        // The actual content will be handled in the paragraph rendering
+
+                        // Create an OLI header span with white circle
+                        let header = Span::styled(
+                            "⚪ OLI: ",
                             Style::default()
                                 .fg(Color::LightGreen)
                                 .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(m),
-                    ])
+                        );
+
+                        // Just return the header with the first line of content
+                        // The rest will be properly wrapped by the paragraph widget
+                        if m.contains('\n') {
+                            let first_line = m.lines().next().unwrap_or("");
+                            Line::from(vec![header, Span::raw(first_line)])
+                        } else {
+                            // For long single-line responses, let the widget handle wrapping
+                            Line::from(vec![header, Span::raw(m)])
+                        }
+                    } else {
+                        // For short responses, show in a single line
+                        Line::from(vec![
+                            Span::styled(
+                                "⚪ OLI: ",
+                                Style::default()
+                                    .fg(Color::LightGreen)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            Span::raw(m),
+                        ])
+                    }
                 } else {
                     // Regular text
                     Line::from(m.as_str())
@@ -581,27 +892,35 @@ fn draw_chat(f: &mut Frame, app: &App) {
     let has_more_above = app.scroll_position > 0;
     let has_more_below = app.scroll_position + (chunks[1].height as usize) < app.messages.len();
 
-    let mut message_block = Block::default()
-        .borders(Borders::ALL)
-        .title("OLI Assistant");
-
-    if has_more_above {
-        message_block = message_block.title(Line::from(vec![
+    // Create title with scroll indicators
+    let title = if has_more_above && has_more_below {
+        Line::from(vec![
+            Span::raw("OLI Assistant "),
+            Span::styled("▲ more above ", Style::default().fg(Color::DarkGray)),
+            Span::styled("▼ more below", Style::default().fg(Color::DarkGray)),
+        ])
+    } else if has_more_above {
+        Line::from(vec![
             Span::raw("OLI Assistant "),
             Span::styled("▲ more above", Style::default().fg(Color::DarkGray)),
-        ]));
-    }
-
-    if has_more_below {
-        message_block = message_block.title(Line::from(vec![
+        ])
+    } else if has_more_below {
+        Line::from(vec![
             Span::raw("OLI Assistant "),
             Span::styled("▼ more below", Style::default().fg(Color::DarkGray)),
-        ]));
-    }
+        ])
+    } else {
+        Line::from("OLI Assistant")
+    };
 
+    let message_block = Block::default().borders(Borders::ALL).title(title);
+
+    // Ensure proper scrollable behavior with fixed height
+    // Use ratatui's scrolling paragraphs for smoother scrolling behavior
     let messages_window = Paragraph::new(Text::from(visible_messages))
         .block(message_block)
-        .wrap(Wrap { trim: true });
+        .wrap(Wrap { trim: false }) // Set trim to false to preserve message formatting
+        .scroll((0, 0)); // Explicit scrolling control to prevent auto-scrolling issues
     f.render_widget(messages_window, chunks[1]);
 
     // Input box with hint text

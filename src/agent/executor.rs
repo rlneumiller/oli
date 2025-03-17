@@ -64,7 +64,7 @@ impl AgentExecutor {
         // Update progress if sender is configured
         if let Some(sender) = &self.progress_sender {
             let _ = sender
-                .send("Sending request to AI assistant...".to_string())
+                .send("[wait] Sending request to AI assistant...".to_string())
                 .await;
         }
 
@@ -110,7 +110,7 @@ impl AgentExecutor {
             for (i, call) in calls.iter().enumerate() {
                 if let Some(sender) = &self.progress_sender {
                     let _ = sender
-                        .send(format!("Running tool {}: {}...", i + 1, call.name))
+                        .send(format!("[tool] Running tool {}: {}...", i + 1, call.name))
                         .await;
                 }
 
@@ -120,7 +120,7 @@ impl AgentExecutor {
                     Err(e) => {
                         let error_msg = format!("Failed to parse tool call: {}", e);
                         if let Some(sender) = &self.progress_sender {
-                            let _ = sender.send(error_msg.clone()).await;
+                            let _ = sender.send(format!("[error] {}", error_msg)).await;
                         }
 
                         // Instead of returning error, provide helpful error message to the model
@@ -132,13 +132,36 @@ impl AgentExecutor {
                     }
                 };
 
+                // Show tool selection message
+                if let Some(sender) = &self.progress_sender {
+                    let _ = sender
+                        .send(format!(
+                            "[tool] Using tool {} with arguments: {:?}",
+                            call.name, call.arguments
+                        ))
+                        .await;
+                }
+
                 // Execute the tool
                 let result = match tool_call.execute() {
-                    Ok(output) => output,
+                    Ok(output) => {
+                        // Show success message with output preview
+                        if let Some(sender) = &self.progress_sender {
+                            let preview = if output.len() > 200 {
+                                format!("{}... (truncated)", &output[..200])
+                            } else {
+                                output.clone()
+                            };
+                            let _ = sender
+                                .send(format!("[success] Tool result: {}", preview))
+                                .await;
+                        }
+                        output
+                    }
                     Err(e) => {
                         let error_msg = format!("Tool execution failed: {}", e);
                         if let Some(sender) = &self.progress_sender {
-                            let _ = sender.send(error_msg.clone()).await;
+                            let _ = sender.send(format!("[error] {}", error_msg)).await;
                         }
 
                         // Return error message as tool result
@@ -146,6 +169,7 @@ impl AgentExecutor {
                     }
                 };
 
+                // Add tool result
                 tool_results.push(ToolResult {
                     tool_call_id: i.to_string(),
                     output: result,
@@ -154,7 +178,12 @@ impl AgentExecutor {
 
             // Update progress
             if let Some(sender) = &self.progress_sender {
-                let _ = sender.send("Processing tool results...".to_string()).await;
+                let _ = sender
+                    .send(format!(
+                        "[wait] Processing {} tool results...",
+                        tool_results.len()
+                    ))
+                    .await;
             }
 
             // For subsequent calls, add the tool results and use JSON schema to get more reliable output
