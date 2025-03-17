@@ -48,8 +48,8 @@ pub fn run_app() -> Result<()> {
     terminal.draw(|f| ui(f, &app))?;
 
     while app.state != AppState::Error("quit".into()) {
-        // Always redraw if download is active, to show progress
-        if app.download_active {
+        // Always redraw if download is active or agent is processing, to show progress
+        if app.download_active || app.agent_progress_rx.is_some() {
             terminal.draw(|f| ui(f, &app))?;
         }
 
@@ -71,32 +71,8 @@ pub fn run_app() -> Result<()> {
                         .push(format!("DEBUG: Received agent message: {}", msg));
                 }
 
-                // Process long tool results to ensure proper display
-                if msg.starts_with("Tool result:") && msg.len() > 100 {
-                    // Break long tool results into multiple lines
-                    app.messages
-                        .push("[tool] Processing tool result...".to_string());
-
-                    // Add the result content with proper formatting
-                    // Add delimiter before
-                    app.messages.push("------- Tool Result -------".to_string());
-
-                    // Get the actual content after the prefix
-                    if let Some(content) = msg.strip_prefix("Tool result:") {
-                        // Split long content by lines
-                        for line in content.lines() {
-                            app.messages.push(line.to_string());
-                        }
-                    } else {
-                        app.messages.push(msg.clone());
-                    }
-
-                    // Add delimiter after
-                    app.messages.push("-------------------------".to_string());
-
-                    // Mark that we need to scroll after processing
-                    app.messages.push("_AUTO_SCROLL_".to_string());
-                }
+                // All tool-related messages will be processed by the process_message function directly
+                // to display them immediately during execution
 
                 // Always add the message to be processed normally
                 messages.push(msg);
@@ -106,9 +82,23 @@ pub fn run_app() -> Result<()> {
             Vec::new()
         };
 
-        // Process agent messages
+        // Process agent messages - note that messages with color codes will need special handling
         for msg in agent_messages {
-            process_message(&mut app, &msg)?;
+            // Handle ANSI escape sequences by stripping them for storage but preserving their meaning
+            let processed_msg = if msg.contains("\x1b[") {
+                // Store a version without the ANSI codes for message matching but preserve the styling
+                // in a way that the UI can process
+                let clean_msg = msg.replace("\x1b[32m", "").replace("\x1b[0m", "");
+                app.messages.push(format!("[ansi_styled] {}", clean_msg));
+
+                // Return the message for further processing
+                clean_msg
+            } else {
+                msg
+            };
+
+            // Process the message normally
+            process_message(&mut app, &processed_msg)?;
             terminal.draw(|f| ui(f, &app))?;
         }
 
@@ -121,7 +111,7 @@ pub fn run_app() -> Result<()> {
             // Actually scroll to bottom
             app.auto_scroll_to_bottom();
 
-            // Redraw with the new scroll position
+            // Redraw with the new scroll position - show updates immediately
             terminal.draw(|f| ui(f, &app))?;
         }
 
@@ -187,8 +177,10 @@ pub fn run_app() -> Result<()> {
                                 if !input.is_empty() {
                                     app.messages.push(format!("> {}", input));
 
-                                    // Show a "thinking" message
-                                    app.messages.push("Thinking...".into());
+                                    // Show a "thinking" message - this will soon be replaced with real-time tool execution
+                                    app.messages.push("[thinking] ⚪ Analyzing query...".into());
+                                    // Force immediate redraw to show thinking state
+                                    app.auto_scroll_to_bottom();
                                     terminal.draw(|f| ui(f, &app))?;
 
                                     // Update the last query time
@@ -197,11 +189,24 @@ pub fn run_app() -> Result<()> {
                                     // Query the model
                                     match app.query_model(&input) {
                                         Ok(response) => {
-                                            // Remove the thinking message
+                                            // Remove the thinking message (both old and new formats)
                                             if let Some(last) = app.messages.last() {
-                                                if last == "Thinking..." {
+                                                if last == "Thinking..."
+                                                    || last.starts_with("[thinking]")
+                                                {
                                                     app.messages.pop();
                                                 }
+                                            }
+
+                                            // Add a clear final answer marker that separates tool results from final response
+                                            // Only add this marker if we haven't already shown tools during execution
+                                            let has_tool_markers = app.messages.iter().any(|m| {
+                                                m.contains("[tool]")
+                                                    || m.contains("⏺ Tool")
+                                                    || m.contains("Executing tool")
+                                            });
+                                            if !has_tool_markers {
+                                                app.messages.push("Final response:".to_string());
                                             }
 
                                             // Process and format the response for better display
@@ -255,9 +260,11 @@ pub fn run_app() -> Result<()> {
                                             terminal.draw(|f| ui(f, &app))?;
                                         }
                                         Err(e) => {
-                                            // Remove the thinking message
+                                            // Remove the thinking message (both old and new formats)
                                             if let Some(last) = app.messages.last() {
-                                                if last == "Thinking..." {
+                                                if last == "Thinking..."
+                                                    || last.starts_with("[thinking]")
+                                                {
                                                     app.messages.pop();
                                                 }
                                             }
@@ -495,21 +502,89 @@ fn process_message(app: &mut App, msg: &str) -> Result<()> {
     } else if msg.starts_with("retry:") {
         app.messages.push(msg.replacen("retry:", "", 1));
     } else if msg.starts_with("Executing tool") || msg.starts_with("Running tool") {
-        // Handle agent tool execution messages with green circle
-        app.messages.push(format!("[tool] 🟢 {}", msg));
-    } else if msg.starts_with("Sending request to AI") || msg.starts_with("Processing tool results")
+        // Show the raw tool execution messages to indicate tool usage during query
+        app.messages.push(format!("⚙️ {}", msg));
+        // Force immediate redraw to show tool usage in real-time
+        app.auto_scroll_to_bottom();
+    } else if msg.starts_with("Sending request to AI")
+        || msg.starts_with("Processing tool results")
+        || msg.starts_with("[wait]")
     {
-        // Handle agent progress messages with white circle
-        app.messages.push(format!("[wait] ⚪ {}", msg));
+        // Handle AI operation with white circle - standardize all waiting operations
+        if msg.starts_with("[wait]") {
+            // Already formatted with the white circle from agent executor
+            app.messages.push(msg.to_string());
+        } else {
+            // Legacy format that needs the circle added
+            app.messages.push(format!("⚪ {}", msg));
+        }
+        // Force immediate redraw to show AI thinking in real-time
+        app.auto_scroll_to_bottom();
+    } else if msg.starts_with("[tool]") {
+        // This is a formatted tool operation, style it properly with green indicator
+        if msg.starts_with("[tool] ⏺ ") {
+            // Legacy format with black circle
+            let content = msg.strip_prefix("[tool] ⏺ ").unwrap_or(msg);
+            app.messages.push(format!("\x1b[32m⏺\x1b[0m {}", content)); // Green colored circle
+        } else if msg.starts_with("[tool] 🔧") {
+            // New format with wrench emoji - tool execution
+            app.messages.push(msg.to_string());
+        } else {
+            // Generic tool message format
+            let content = msg.strip_prefix("[tool] ").unwrap_or(msg);
+            app.messages.push(format!("\x1b[32m⏺\x1b[0m {}", content));
+        }
+        // Force immediate redraw to show tool usage in real-time
+        app.auto_scroll_to_bottom();
     } else if msg.starts_with("Tool result:") {
-        // Handle tool results with proper formatting and green circle (with class for styling)
-        app.messages.push(format!("[success] ⏺ {}", msg));
+        // Display tool results directly
+        let content = msg.strip_prefix("Tool result:").unwrap_or(msg);
+        app.messages
+            .push(format!("\x1b[32m⏺\x1b[0m Tool result: {}", content));
+    } else if msg.starts_with("[success]") {
+        // This is the tool result from execution
+        let content = if msg.starts_with("[success] ⏺ ") {
+            // Legacy format with black circle
+            msg.strip_prefix("[success] ⏺ ").unwrap_or(msg)
+        } else {
+            // New formats
+            msg.strip_prefix("[success] ").unwrap_or(msg)
+        };
+
+        // Check if this is a multi-line result with our tree structure format
+        if content.contains("\n  ⎿") {
+            // Extract the header and lines
+            let parts: Vec<&str> = content.splitn(2, '\n').collect();
+            let header = parts[0];
+
+            // Display the tool execution with indented output
+            app.messages.push(format!("\x1b[32m⏺\x1b[0m {}", header));
+            if parts.len() > 1 {
+                let lines = parts[1].lines().take(10); // Limit to 10 lines max
+                for line in lines {
+                    app.messages.push(line.to_string()); // Already has indentation
+                }
+
+                // If there are more lines, show a line count
+                let total_lines = parts[1].lines().count();
+                if total_lines > 10 {
+                    app.messages
+                        .push(format!("  ... [{} more lines]", total_lines - 10));
+                }
+            }
+        } else {
+            // Simple single-line result
+            app.messages.push(format!("\x1b[32m⏺\x1b[0m {}", content));
+        }
+        // Force immediate redraw to show tool results in real-time
+        app.auto_scroll_to_bottom();
     } else if msg.starts_with("Using tool") {
-        // Handle tool selection with proper formatting and green circle
-        app.messages.push(format!("[tool] ⏺ {}", msg));
+        // Show tool usage messages
+        app.messages.push(format!("⚙️ {}", msg));
+        app.auto_scroll_to_bottom();
     } else if msg.starts_with("Thinking") || msg.contains("analyzing") {
         // Handle AI thinking process messages with white circle
-        app.messages.push(format!("[thinking] ⏺ {}", msg));
+        app.messages.push(format!("⚪ {}", msg));
     } else if msg == "Agent initialized successfully" {
         app.messages
             .push("⏺ Agent initialized and ready to use!".into());
@@ -766,7 +841,7 @@ fn draw_chat(f: &mut Frame, app: &App) {
                         .add_modifier(Modifier::BOLD),
                 )])
             } else if m == "Thinking..." {
-                // Thinking message
+                // Legacy thinking message
                 Line::from(vec![
                     Span::styled("⏺ ", Style::default().fg(Color::Yellow)),
                     Span::styled(
@@ -776,20 +851,20 @@ fn draw_chat(f: &mut Frame, app: &App) {
                             .add_modifier(Modifier::ITALIC),
                     ),
                 ])
-            } else if m.starts_with("[thinking] ") {
+            } else if m.starts_with("[thinking]") {
                 // AI Thinking/reasoning message
                 let thinking_content = m.strip_prefix("[thinking] ").unwrap_or(m);
 
                 if thinking_content.starts_with("⚪ ") {
-                    // New format with white circle
+                    // New format with white circle - already has the icon
                     Line::from(vec![Span::styled(
-                        thinking_content,
+                        m,
                         Style::default()
                             .fg(Color::LightYellow)
                             .add_modifier(Modifier::ITALIC),
                     )])
                 } else {
-                    // Legacy format with black circle
+                    // Legacy format without icon - add the circle
                     Line::from(vec![
                         Span::styled("⏺ ", Style::default().fg(Color::Yellow)),
                         Span::styled(
@@ -899,18 +974,16 @@ fn draw_chat(f: &mut Frame, app: &App) {
                         Span::styled(content, Style::default().fg(Color::Green)),
                     ])
                 }
-            } else if m.starts_with("[wait] ") {
+            } else if m.starts_with("[wait]") {
                 // Progress/wait message with white circle
                 let wait_content = m.strip_prefix("[wait] ").unwrap_or(m);
 
-                if wait_content.starts_with("⚪ ") {
-                    // New format with white circle emoji
-                    Line::from(vec![Span::styled(
-                        wait_content,
-                        Style::default().fg(Color::Yellow),
-                    )])
+                if wait_content.starts_with("⚪ ") || m.contains("⚪") {
+                    // New format already has the white circle emoji
+                    // Keep the full message since it already has the icon
+                    Line::from(vec![Span::styled(m, Style::default().fg(Color::Yellow))])
                 } else {
-                    // Legacy format
+                    // Legacy format needs an icon
                     Line::from(vec![
                         Span::styled("⏺ ", Style::default().fg(Color::LightYellow)),
                         Span::styled(wait_content, Style::default().fg(Color::Yellow)),
@@ -935,7 +1008,18 @@ fn draw_chat(f: &mut Frame, app: &App) {
                 }
             } else {
                 // Model responses - with styling for code blocks
-                if m.trim().is_empty() {
+                if m == "Final response:" {
+                    // Special formatting for the final response marker
+                    Line::from(vec![
+                        Span::styled("✨ ", Style::default().fg(Color::Green)),
+                        Span::styled(
+                            "Final Response:",
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ])
+                } else if m.trim().is_empty() {
                     Line::from("")
                 } else if !m.starts_with("> ")
                     && !m.starts_with("DEBUG:")
@@ -949,11 +1033,13 @@ fn draw_chat(f: &mut Frame, app: &App) {
                         // For multi-line or very long responses, return a formatted header line
                         // The actual content will be handled in the paragraph rendering
 
-                        // Create an OLI header span with white circle
-                        let header = Span::styled(
-                            "⚪ OLI: ",
+                        // Create a Final answer header with white circle (for response following tools)
+                        let header = Span::styled("⏺ ", Style::default().fg(Color::White));
+
+                        let final_answer = Span::styled(
+                            "Final answer:",
                             Style::default()
-                                .fg(Color::LightGreen)
+                                .fg(Color::White)
                                 .add_modifier(Modifier::BOLD),
                         );
 
@@ -961,20 +1047,27 @@ fn draw_chat(f: &mut Frame, app: &App) {
                         // The rest will be properly wrapped by the paragraph widget
                         if m.contains('\n') {
                             let first_line = m.lines().next().unwrap_or("");
-                            Line::from(vec![header, Span::raw(first_line)])
+                            Line::from(vec![
+                                header,
+                                final_answer,
+                                Span::raw(" "),
+                                Span::raw(first_line),
+                            ])
                         } else {
                             // For long single-line responses, let the widget handle wrapping
-                            Line::from(vec![header, Span::raw(m)])
+                            Line::from(vec![header, final_answer, Span::raw(" "), Span::raw(m)])
                         }
                     } else {
-                        // For short responses, show in a single line
+                        // For short responses, show in a single line with Final answer header
                         Line::from(vec![
+                            Span::styled("⏺ ", Style::default().fg(Color::White)),
                             Span::styled(
-                                "⚪ OLI: ",
+                                "Final answer:",
                                 Style::default()
-                                    .fg(Color::LightGreen)
+                                    .fg(Color::White)
                                     .add_modifier(Modifier::BOLD),
                             ),
+                            Span::raw(" "),
                             Span::raw(m),
                         ])
                     }

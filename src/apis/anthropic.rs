@@ -5,9 +5,11 @@ use async_trait::async_trait;
 use rand;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Client as ReqwestClient;
+use reqwest::Response;
 use serde::{Deserialize, Serialize};
 use serde_json::{self, json, Value};
 use std::env;
+use std::time::Duration;
 
 // Anthropic API models
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,6 +105,81 @@ pub struct AnthropicClient {
 }
 
 impl AnthropicClient {
+    // Helper function to send a request with retry logic for overload errors
+    async fn send_request_with_retry<T: serde::Serialize + Clone>(
+        &self,
+        request: &T,
+    ) -> Result<Response> {
+        // Implement retry logic with exponential backoff for 529 overload errors
+        let mut retries = 0;
+        let max_retries = 3; // Maximum number of retries
+        let mut delay_ms = 1000; // Start with 1 second delay
+
+        loop {
+            let result = self.client.post(&self.api_base).json(request).send().await;
+
+            match result {
+                Ok(resp) => {
+                    // If response is 429 (rate limit) or 529 (overloaded), retry
+                    if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+                        || resp.status().as_u16() == 529
+                    {
+                        if retries >= max_retries {
+                            // Return the last error response if max retries reached
+                            return Ok(resp);
+                        }
+
+                        // Extract retry-after header if available before cloning for the error body
+                        let retry_after = resp
+                            .headers()
+                            .get("retry-after")
+                            .and_then(|val| val.to_str().ok())
+                            .and_then(|val| val.parse::<u64>().ok())
+                            .unwrap_or(delay_ms);
+
+                        // Clone the response for logging if needed
+                        #[cfg(debug_assertions)]
+                        let _error_body = resp.text().await.unwrap_or_default();
+
+                        // Exponential backoff with jitter
+                        let jitter = rand::random::<u64>() % 500;
+                        let sleep_duration = Duration::from_millis(retry_after + jitter);
+
+                        // Sleep and retry
+                        tokio::time::sleep(sleep_duration).await;
+
+                        // Increase delay for next retry
+                        delay_ms = (delay_ms * 2).min(10000); // Cap at 10 seconds
+                        retries += 1;
+                        continue;
+                    }
+
+                    // For other status codes, return the response
+                    return Ok(resp);
+                }
+                Err(e) => {
+                    // For network errors, also use retry logic
+                    if retries >= max_retries {
+                        return Err(AppError::NetworkError(format!(
+                            "Failed to send request to Anthropic after {} retries: {}",
+                            retries, e
+                        ))
+                        .into());
+                    }
+
+                    // Exponential backoff with jitter
+                    let jitter = rand::random::<u64>() % 500;
+                    let sleep_duration = Duration::from_millis(delay_ms + jitter);
+                    tokio::time::sleep(sleep_duration).await;
+
+                    // Increase delay for next retry
+                    delay_ms = (delay_ms * 2).min(10000); // Cap at 10 seconds
+                    retries += 1;
+                }
+            }
+        }
+    }
+
     pub fn new(model: Option<String>) -> Result<Self> {
         // Try to get API key from environment
         let api_key = env::var("ANTHROPIC_API_KEY")
@@ -217,15 +294,8 @@ impl ApiClient for AnthropicClient {
             });
         }
 
-        let response = self
-            .client
-            .post(&self.api_base)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| {
-                AppError::NetworkError(format!("Failed to send request to Anthropic: {}", e))
-            })?;
+        // Use our retry function instead of direct API call
+        let response = self.send_request_with_retry(&request).await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -337,12 +407,16 @@ impl ApiClient for AnthropicClient {
             response_format: None,
         };
 
-        // Add structured output format if specified in options
+        // IMPORTANT: Add response_format only if json_schema exists AND tools don't exist
+        // This fixes the "extra inputs are not permitted" error when using tools
         if let Some(json_schema) = &options.json_schema {
-            request.response_format = Some(AnthropicResponseFormat {
-                format_type: "json".to_string(),
-                schema: serde_json::from_str(json_schema).ok(),
-            });
+            // Only add response_format if we're not using tools
+            if options.tools.is_none() {
+                request.response_format = Some(AnthropicResponseFormat {
+                    format_type: "json".to_string(),
+                    schema: serde_json::from_str(json_schema).ok(),
+                });
+            }
         }
 
         // Add tools if they exist
@@ -360,15 +434,8 @@ impl ApiClient for AnthropicClient {
             });
         }
 
-        let response = self
-            .client
-            .post(&self.api_base)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| {
-                AppError::NetworkError(format!("Failed to send request to Anthropic: {}", e))
-            })?;
+        // Use our retry function instead of direct API call
+        let response = self.send_request_with_retry(&request).await?;
 
         if !response.status().is_success() {
             let status = response.status();

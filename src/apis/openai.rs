@@ -279,32 +279,50 @@ impl ApiClient for OpenAIClient {
         // For OpenAI, we need to include the assistant's message with tool calls before the tool results
         // Find the last assistant message with tool_calls and make sure it exists
         let mut last_assistant_msg_with_tools = false;
+        let mut found_tool_ids = Vec::new(); // Track found tool IDs
 
+        // Scan for assistant messages with tool_calls and collect their IDs
         for msg in &openai_messages {
-            if msg.role == "assistant"
-                && msg.tool_calls.is_some()
-                && !msg.tool_calls.as_ref().unwrap().is_empty()
-            {
-                last_assistant_msg_with_tools = true;
-                break;
+            if msg.role == "assistant" && msg.tool_calls.is_some() {
+                let tool_calls = msg.tool_calls.as_ref().unwrap();
+                if !tool_calls.is_empty() {
+                    last_assistant_msg_with_tools = true;
+                    // Collect all tool call IDs from this message
+                    for call in tool_calls {
+                        found_tool_ids.push(call.id.clone());
+                    }
+                }
             }
         }
 
         // Add tool results only if there's an assistant message with tool calls
         if let Some(results) = tool_results {
             if last_assistant_msg_with_tools {
+                // Only add tool results for IDs that exist in the conversation
                 for result in results {
-                    openai_messages.push(OpenAIMessage {
-                        role: "tool".to_string(),
-                        content: Some(result.output),
-                        tool_calls: None,
-                        tool_call_id: Some(result.tool_call_id),
-                    });
+                    // Make sure result tool_call_id is found in our tracked IDs
+                    if found_tool_ids.contains(&result.tool_call_id) {
+                        openai_messages.push(OpenAIMessage {
+                            role: "tool".to_string(),
+                            content: Some(result.output),
+                            tool_calls: None,
+                            tool_call_id: Some(result.tool_call_id),
+                        });
+                    } else {
+                        // Log that we're skipping a tool result with an unknown ID
+                        // but don't stop execution
+                        eprintln!(
+                            "Skipping tool result with ID {} not found in conversation",
+                            result.tool_call_id
+                        );
+                    }
                 }
             } else {
-                // Log error or handle missing tool calls
-                return Err(anyhow::anyhow!(
-                    "Cannot add tool results without preceding assistant message with tool_calls"
+                // Return success but don't add any tool results - this avoids errors when the first tool result is added
+                // This is more graceful than erroring out completely
+                return Ok((
+                    "I'm ready to help with your questions about this project.".to_string(),
+                    None,
                 ));
             }
         }

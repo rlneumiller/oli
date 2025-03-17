@@ -61,10 +61,10 @@ impl AgentExecutor {
             json_schema: None,       // No structured format for initial response
         };
 
-        // Update progress if sender is configured
+        // Update progress if sender is configured with real-time status
         if let Some(sender) = &self.progress_sender {
             let _ = sender
-                .send("[wait] Sending request to AI assistant...".to_string())
+                .send("[wait] ⚪ Sending request to AI assistant...".to_string())
                 .await;
         }
 
@@ -126,20 +126,99 @@ impl AgentExecutor {
                 break;
             }
 
-            // Update progress
+            // Update progress with real-time status
             if let Some(sender) = &self.progress_sender {
                 let _ = sender
-                    .send(format!("Executing {} tool calls...", calls.len()))
+                    .send(format!(
+                        "[tool] 🔧 Executing {} tool call{}...",
+                        calls.len(),
+                        if calls.len() == 1 { "" } else { "s" }
+                    ))
                     .await;
             }
 
             // Execute each tool call and collect results
             for (i, call) in calls.iter().enumerate() {
+                // Format tool call details for better UI display before execution
+                let formatted_tool_details = match call.name.as_str() {
+                    "View" => {
+                        if let (Some(path), Some(offset), Some(limit)) = (
+                            call.arguments.get("file_path").and_then(|v| v.as_str()),
+                            call.arguments.get("offset").and_then(|v| v.as_u64()),
+                            call.arguments.get("limit").and_then(|v| v.as_u64()),
+                        ) {
+                            format!(
+                                "View(file_path: \"{}\", offset: {}, limit: {})…",
+                                path, offset, limit
+                            )
+                        } else if let Some(path) =
+                            call.arguments.get("file_path").and_then(|v| v.as_str())
+                        {
+                            format!("View(file_path: \"{}\")…", path)
+                        } else {
+                            format!("View({:?})…", call.arguments)
+                        }
+                    }
+                    "GlobTool" => {
+                        if let (Some(pattern), Some(path)) = (
+                            call.arguments.get("pattern").and_then(|v| v.as_str()),
+                            call.arguments.get("path").and_then(|v| v.as_str()),
+                        ) {
+                            format!("GlobTool(pattern: \"{}\", path: \"{}\")…", pattern, path)
+                        } else if let Some(pattern) =
+                            call.arguments.get("pattern").and_then(|v| v.as_str())
+                        {
+                            format!("GlobTool(pattern: \"{}\")…", pattern)
+                        } else {
+                            format!("GlobTool({:?})…", call.arguments)
+                        }
+                    }
+                    "GrepTool" => {
+                        if let Some(pattern) =
+                            call.arguments.get("pattern").and_then(|v| v.as_str())
+                        {
+                            format!("GrepTool(pattern: \"{}\")…", pattern)
+                        } else {
+                            format!("GrepTool({:?})…", call.arguments)
+                        }
+                    }
+                    "LS" => {
+                        if let Some(path) = call.arguments.get("path").and_then(|v| v.as_str()) {
+                            format!("LS(path: \"{}\")…", path)
+                        } else {
+                            format!("LS({:?})…", call.arguments)
+                        }
+                    }
+                    "Edit" | "Replace" => {
+                        if let Some(path) = call.arguments.get("file_path").and_then(|v| v.as_str())
+                        {
+                            format!("{} file: \"{}\"…", call.name, path)
+                        } else {
+                            format!("{} {:?}…", call.name, call.arguments)
+                        }
+                    }
+                    "Bash" => {
+                        if let Some(cmd) = call.arguments.get("command").and_then(|v| v.as_str()) {
+                            if cmd.len() > 40 {
+                                format!("Bash(command: \"{}...\")…", &cmd[..40])
+                            } else {
+                                format!("Bash(command: \"{}\")…", cmd)
+                            }
+                        } else {
+                            format!("Bash({:?})…", call.arguments)
+                        }
+                    }
+                    _ => format!("{} {:?}…", call.name, call.arguments),
+                };
+
+                // Send the formatted tool details to UI before execution
                 if let Some(sender) = &self.progress_sender {
                     let _ = sender
-                        .send(format!("[tool] Running tool {}: {}...", i + 1, call.name))
+                        .send(format!("[tool] ⏺ {}", formatted_tool_details))
                         .await;
                 }
+
+                // Use the previously formatted tool details for showing execution
 
                 // Parse the tool call into our enum
                 let tool_call: ToolCall = match parse_tool_call(&call.name, &call.arguments) {
@@ -160,28 +239,144 @@ impl AgentExecutor {
                     }
                 };
 
-                // Show tool selection message
-                if let Some(sender) = &self.progress_sender {
-                    let _ = sender
-                        .send(format!(
-                            "[tool] Using tool {} with arguments: {:?}",
-                            call.name, call.arguments
-                        ))
-                        .await;
-                }
+                // No need for additional tool selection message since we already show it above
+                // This prevents redundant messages about tool usage
 
                 // Execute the tool
                 let result = match tool_call.execute() {
                     Ok(output) => {
-                        // Show success message with output preview
+                        // Format successful tool result with detailed output
                         if let Some(sender) = &self.progress_sender {
+                            // Create a preview of the output
                             let preview = if output.len() > 200 {
-                                format!("{}... (truncated)", &output[..200])
+                                format!(
+                                    "{}... [+{} more chars]",
+                                    &output[..200],
+                                    output.len() - 200
+                                )
                             } else {
                                 output.clone()
                             };
+
+                            // For file outputs, prepare a structured display for the UI
+                            let formatted_result = match call.name.as_str() {
+                                "View" => {
+                                    if let Some(path) =
+                                        call.arguments.get("file_path").and_then(|v| v.as_str())
+                                    {
+                                        // Display path and first few content lines
+                                        let output_lines: Vec<&str> = output.lines().collect();
+                                        let header =
+                                            format!("View(file_path: \"{}\") → Result:", path);
+
+                                        // Format first few lines with line numbers
+                                        if output_lines.len() <= 2 {
+                                            format!("{}\n  ⎿ {}", header, output)
+                                        } else {
+                                            let mut formatted = header.to_string();
+                                            for (i, line) in output_lines.iter().take(3).enumerate()
+                                            {
+                                                formatted.push_str(&format!("\n  ⎿ {}", line));
+                                                if i == 2 && output_lines.len() > 3 {
+                                                    formatted.push_str(&format!(
+                                                        "\n  ... [{} more lines]",
+                                                        output_lines.len() - 3
+                                                    ));
+                                                }
+                                            }
+                                            formatted
+                                        }
+                                    } else {
+                                        format!("Tool result: {}", preview)
+                                    }
+                                }
+                                "GlobTool" | "GrepTool" => {
+                                    let pattern = call
+                                        .arguments
+                                        .get("pattern")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unknown");
+                                    let name = if call.name.as_str() == "GlobTool" {
+                                        "Glob"
+                                    } else {
+                                        "Grep"
+                                    };
+                                    format!("{}(pattern: \"{}\") → Found {} files\n  ⎿ First results shown in output",
+                                        name, pattern,
+                                        output.lines().filter(|l| l.contains(".")).count())
+                                }
+                                "LS" => {
+                                    if let Some(path) =
+                                        call.arguments.get("path").and_then(|v| v.as_str())
+                                    {
+                                        let file_count =
+                                            output.lines().filter(|l| l.contains("FILE")).count();
+                                        let dir_count =
+                                            output.lines().filter(|l| l.contains("DIR")).count();
+                                        format!("LS(path: \"{}\") → Listed {} items ({} files, {} dirs)", 
+                                            path, file_count + dir_count, file_count, dir_count)
+                                    } else {
+                                        format!("Tool result: {}", preview)
+                                    }
+                                }
+                                "Edit" | "Replace" => {
+                                    if let Some(path) =
+                                        call.arguments.get("file_path").and_then(|v| v.as_str())
+                                    {
+                                        format!("{} file: \"{}\" → {}", call.name, path, output)
+                                    } else {
+                                        format!("Tool result: {}", preview)
+                                    }
+                                }
+                                "Bash" => {
+                                    if let Some(cmd) =
+                                        call.arguments.get("command").and_then(|v| v.as_str())
+                                    {
+                                        let cmd_preview = if cmd.len() > 30 {
+                                            format!("{}...", &cmd[..30])
+                                        } else {
+                                            cmd.to_string()
+                                        };
+
+                                        // Format command output with line counts
+                                        let output_lines = output.lines().count();
+                                        if output_lines > 5 {
+                                            let mut formatted = format!(
+                                                "Bash(command: \"{}\") → {} lines of output:",
+                                                cmd_preview, output_lines
+                                            );
+                                            for line in output.lines().take(3) {
+                                                formatted.push_str(&format!("\n  ⎿ {}", line));
+                                            }
+                                            formatted.push_str(&format!(
+                                                "\n  ... [{} more lines]",
+                                                output_lines - 3
+                                            ));
+                                            formatted
+                                        } else if output_lines > 0 {
+                                            let mut formatted = format!(
+                                                "Bash(command: \"{}\") → Output:",
+                                                cmd_preview
+                                            );
+                                            for line in output.lines() {
+                                                formatted.push_str(&format!("\n  ⎿ {}", line));
+                                            }
+                                            formatted
+                                        } else {
+                                            format!(
+                                                "Bash(command: \"{}\") → No output",
+                                                cmd_preview
+                                            )
+                                        }
+                                    } else {
+                                        format!("Tool result: {}", preview)
+                                    }
+                                }
+                                _ => format!("Tool result: {}", preview),
+                            };
+
                             let _ = sender
-                                .send(format!("[success] Tool result: {}", preview))
+                                .send(format!("[success] ⏺ {}", formatted_result))
                                 .await;
                         }
                         output
@@ -189,7 +384,7 @@ impl AgentExecutor {
                     Err(e) => {
                         let error_msg = format!("Tool execution failed: {}", e);
                         if let Some(sender) = &self.progress_sender {
-                            let _ = sender.send(format!("[error] {}", error_msg)).await;
+                            let _ = sender.send(format!("[error] ⏺ {}", error_msg)).await;
                         }
 
                         // Return error message as tool result
@@ -205,12 +400,13 @@ impl AgentExecutor {
                 });
             }
 
-            // Update progress
+            // Update progress with real-time status
             if let Some(sender) = &self.progress_sender {
                 let _ = sender
                     .send(format!(
-                        "[wait] Processing {} tool results...",
-                        tool_results.len()
+                        "[wait] ⚪ Processing {} tool result{} and generating response...",
+                        tool_results.len(),
+                        if tool_results.len() == 1 { "" } else { "s" }
                     ))
                     .await;
             }

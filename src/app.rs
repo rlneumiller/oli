@@ -1021,6 +1021,8 @@ impl App {
         // Add a message about starting to process the query
         self.messages
             .push("[thinking] Analyzing your query and preparing to use tools if needed...".into());
+        // Force immediate update to show thinking message
+        self.messages.push("_AUTO_SCROLL_".to_string());
 
         // Copy the agent and execute the query
         let agent_clone = agent.clone();
@@ -1034,49 +1036,85 @@ impl App {
             let (tokio_progress_tx, mut tokio_progress_rx) = tokio::sync::mpsc::channel(100);
             let agent_with_progress = agent_clone.with_progress_sender(tokio_progress_tx);
 
-            // Create a clone of progress_tx for the forwarding task
-            let progress_tx_clone = progress_tx.clone();
+            // Create a channel for the response
+            let (final_response_tx, final_response_rx) = tokio::sync::oneshot::channel();
 
-            // Forward progress messages
+            // Execute the query in a separate task
             tokio::spawn(async move {
-                while let Some(msg) = tokio_progress_rx.recv().await {
-                    let _ = progress_tx_clone.send(msg);
+                // Execute the actual query in background
+                match agent_with_progress.execute(&prompt_clone).await {
+                    Ok(response) => {
+                        // Process response format
+                        let processed_response =
+                            if response.trim().starts_with("{") && response.trim().ends_with("}") {
+                                // If it's JSON, ensure it's properly formatted
+                                match serde_json::from_str::<serde_json::Value>(&response) {
+                                    Ok(json) => {
+                                        if let Ok(pretty) = serde_json::to_string_pretty(&json) {
+                                            pretty
+                                        } else {
+                                            response
+                                        }
+                                    }
+                                    Err(_) => response,
+                                }
+                            } else {
+                                response
+                            };
+
+                        // Signal that we're in the final response phase - but can't access progress_tx from here
+                        // We'll handle the final message in the outer scope
+                        // Send final response through the oneshot channel
+                        let _ = final_response_tx.send(Ok(processed_response));
+                    }
+                    Err(e) => {
+                        // Send error through the oneshot channel
+                        let _ = final_response_tx.send(Err(e));
+                    }
                 }
             });
 
-            // Execute the query
-            match agent_with_progress.execute(&prompt_clone).await {
-                Ok(response) => {
-                    // Format the response to ensure it stays within output area bounds
+            // Forward progress messages in real-time while waiting for the final response
+            // Need to clone the progress sender for use in multiple places
+            let error_progress_tx = progress_tx.clone();
+            let forwarder_progress_tx = progress_tx.clone();
 
-                    // Process the response to ensure good formatting
-                    let processed_response =
-                        if response.trim().starts_with("{") && response.trim().ends_with("}") {
-                            // If it's JSON, ensure it's properly formatted
-                            match serde_json::from_str::<serde_json::Value>(&response) {
-                                Ok(json) => {
-                                    if let Ok(pretty) = serde_json::to_string_pretty(&json) {
-                                        pretty
-                                    } else {
-                                        response
-                                    }
-                                }
-                                Err(_) => response,
-                            }
-                        } else {
-                            response
-                        };
-
-                    // Send a completion message
-                    let _ = progress_tx.send("[success] Task completed successfully".into());
-                    let _ = response_tx.send(Ok(processed_response));
+            // Create a separate task to forward progress messages (don't need to track the handle)
+            let _progress_forwarder = tokio::spawn(async move {
+                while let Some(msg) = tokio_progress_rx.recv().await {
+                    // For each progress message, add an auto-scroll marker to ensure the UI updates
+                    let _ = forwarder_progress_tx.send(msg);
+                    // Add auto-scroll flag to ensure the UI updates in real-time
+                    let _ = forwarder_progress_tx.send("_AUTO_SCROLL_".to_string());
                 }
-                Err(e) => {
-                    // Send an error message
-                    let _ = progress_tx.send(format!("[error] Error during processing: {}", e));
+            });
+
+            // Wait for the final response
+            match final_response_rx.await {
+                Ok(Ok(response)) => {
+                    // Signal that we're finalizing the response
+                    let _ = progress_tx.send("[wait] ⚪ Finalizing response...".to_string());
+                    // Signal that the tool executions are complete
+                    let _ =
+                        progress_tx.send("[success] ⏺ All tools executed successfully".to_string());
+                    // Send the final response
+                    let _ = response_tx.send(Ok(response));
+                }
+                Ok(Err(e)) => {
+                    // Send error message using the cloned sender
+                    let _ = error_progress_tx
+                        .send(format!("[error] ❌ Error during processing: {}", e));
                     let _ = response_tx.send(Err(e));
                 }
+                Err(_) => {
+                    // Channel closed unexpectedly
+                    let _ = response_tx.send(Err(anyhow::anyhow!(
+                        "Agent processing channel closed unexpectedly"
+                    )));
+                }
             }
+
+            // No need to explicitly abort, the task will end when the tokio runtime is dropped
         });
 
         // Wait for the response with a timeout (2 minutes) and return the final result
