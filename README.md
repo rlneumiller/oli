@@ -1,4 +1,4 @@
-# OLI - Open Local Intelligence assistant
+# OLI - Open Local Intelligent assistant
 
 OLI is an open-source alternative to Claude Code, built in Rust to provide powerful agentic capabilities for coding assistance. It features:
 
