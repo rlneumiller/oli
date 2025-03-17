@@ -82,10 +82,9 @@ cargo run
 
 Here are some example queries to try:
 
-- "Find all functions that handle authentication in this codebase"
-- "Create a new Rust function that parses JSON and returns a Result"
-- "Explain how this recursive algorithm works in the sort.rs file"
-- "Fix the bug in the error handling code that's causing tests to fail"
+- "Explain the codebase and how to get started"
+- "List all files in the project"
+- "Summarize the Cargo.toml file"
 - "Show me all files that import the 'anyhow' crate"
 
 ## License
