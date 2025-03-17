@@ -64,7 +64,7 @@ impl AgentExecutor {
         // Update progress if sender is configured with real-time status
         if let Some(sender) = &self.progress_sender {
             let _ = sender
-                .send("[wait] ⚪ Sending request to AI assistant...".to_string())
+                .send("⚪ Sending request to AI assistant...".to_string())
                 .await;
         }
 
@@ -404,7 +404,7 @@ impl AgentExecutor {
             if let Some(sender) = &self.progress_sender {
                 let _ = sender
                     .send(format!(
-                        "[wait] ⚪ Processing {} tool result{} and generating response...",
+                        "⚪ Processing {} tool result{} and generating response...",
                         tool_results.len(),
                         if tool_results.len() == 1 { "" } else { "s" }
                     ))

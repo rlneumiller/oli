@@ -35,6 +35,7 @@ pub fn get_available_commands() -> Vec<SpecialCommand> {
         SpecialCommand::new("/help", "Show help and available commands"),
         SpecialCommand::new("/clear", "Clear conversation history and free up context"),
         SpecialCommand::new("/debug", "Toggle debug messages visibility"),
+        SpecialCommand::new("/steps", "Toggle showing intermediate tool steps"),
         SpecialCommand::new("/exit", "Exit the TUI"),
     ]
 }
@@ -45,6 +46,22 @@ pub enum AppState {
     ApiKeyInput,
     Error(String),
     Chat,
+}
+
+// Define tool types that require permission
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolPermissionStatus {
+    Pending, // Waiting for user confirmation
+    Granted, // User has granted permission for this tool
+    Denied,  // User has denied permission for this tool
+}
+
+// Pending tool execution that needs confirmation
+#[derive(Debug, Clone)]
+pub struct PendingToolExecution {
+    pub tool_name: String,
+    pub tool_args: String,
+    pub description: String,
 }
 
 pub struct App {
@@ -72,6 +89,12 @@ pub struct App {
     pub available_commands: Vec<SpecialCommand>,
     pub selected_command: usize,
     pub show_command_menu: bool,
+    // Tool permission-related fields
+    pub permission_required: bool, // If true, we're waiting for user input on a tool permission
+    pub pending_tool: Option<PendingToolExecution>, // The tool waiting for permission
+    pub tool_permission_status: ToolPermissionStatus, // Current permission status
+    pub tool_execution_in_progress: bool, // Flag to indicate active tool execution
+    pub show_intermediate_steps: bool, // Show intermediate steps like tool use and file reads
 }
 
 impl Default for App {
@@ -118,6 +141,12 @@ impl App {
             available_commands: get_available_commands(),
             selected_command: 0,
             show_command_menu: false,
+            // Initialize tool permission-related fields
+            permission_required: false,
+            pending_tool: None,
+            tool_permission_status: ToolPermissionStatus::Pending,
+            tool_execution_in_progress: false,
+            show_intermediate_steps: true, // Default to showing intermediate steps
         }
     }
 
@@ -286,6 +315,29 @@ impl App {
                         "disabled"
                     }
                 ));
+                true
+            }
+            "/steps" => {
+                // Toggle showing intermediate steps
+                self.show_intermediate_steps = !self.show_intermediate_steps;
+                self.messages.push(format!(
+                    "Intermediate steps display {}.",
+                    if self.show_intermediate_steps {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                ));
+                if self.show_intermediate_steps {
+                    self.messages.push(
+                        "Tool usage and intermediate operations will be shown as they happen."
+                            .into(),
+                    );
+                } else {
+                    self.messages.push(
+                        "Only the final response will be shown without intermediate steps.".into(),
+                    );
+                }
                 true
             }
             "/exit" => {
@@ -1003,6 +1055,120 @@ impl App {
         }
     }
 
+    // Check if a tool requires permission before execution
+    pub fn requires_permission(&self, tool_name: &str) -> bool {
+        // Tools that require permission for potentially destructive operations
+        match tool_name {
+            "Edit" | "Replace" | "NotebookEditCell" => true, // File modification
+            "Bash" => true,                                  // Shell commands (may be destructive)
+            // Add other tools that require permission here
+            _ => false, // Other tools don't require permission
+        }
+    }
+
+    // Request permission for tool execution
+    pub fn request_tool_permission(&mut self, tool_name: &str, args: &str) -> ToolPermissionStatus {
+        // If permission is not required for this tool, auto-grant
+        if !self.requires_permission(tool_name) {
+            return ToolPermissionStatus::Granted;
+        }
+
+        // Create a user-friendly description of what the tool will do
+        let description = match tool_name {
+            "Edit" => {
+                if let Some(file_path) = self.extract_argument(args, "file_path") {
+                    format!("Modify file '{}'", file_path)
+                } else {
+                    "Edit a file".to_string()
+                }
+            }
+            "Replace" => {
+                if let Some(file_path) = self.extract_argument(args, "file_path") {
+                    format!("Overwrite file '{}'", file_path)
+                } else {
+                    "Replace a file".to_string()
+                }
+            }
+            "NotebookEditCell" => {
+                if let Some(notebook_path) = self.extract_argument(args, "notebook_path") {
+                    format!("Edit Jupyter notebook '{}'", notebook_path)
+                } else {
+                    "Edit a Jupyter notebook".to_string()
+                }
+            }
+            "Bash" => {
+                if let Some(command) = self.extract_argument(args, "command") {
+                    format!("Execute command: '{}'", command)
+                } else {
+                    "Execute a shell command".to_string()
+                }
+            }
+            _ => format!("Execute tool: {}", tool_name),
+        };
+
+        // Create a message for display
+        let display_message = format!(
+            "[permission] ⚠️ Permission required: {} - Press 'y' to allow or 'n' to deny",
+            description
+        );
+
+        // Set up the permission request
+        self.permission_required = true;
+        self.pending_tool = Some(PendingToolExecution {
+            tool_name: tool_name.to_string(),
+            tool_args: args.to_string(),
+            description: description.clone(),
+        });
+        self.tool_permission_status = ToolPermissionStatus::Pending;
+
+        // Add a message to indicate permission is needed
+        self.messages.push(display_message);
+        self.auto_scroll_to_bottom();
+
+        // Return pending status - UI will handle getting actual permission
+        ToolPermissionStatus::Pending
+    }
+
+    // Helper method to extract an argument value from JSON-like args string
+    fn extract_argument(&self, args: &str, arg_name: &str) -> Option<String> {
+        // Simple parsing of JSON-like string to extract a specific argument
+        if let Some(start_idx) = args.find(&format!("\"{}\":", arg_name)) {
+            let value_start = args[start_idx..].find(":").map(|i| start_idx + i + 1)?;
+            let value_text = args[value_start..].trim();
+
+            // Check if value is a quoted string
+            if let Some(stripped) = value_text.strip_prefix("\"") {
+                let end_idx = stripped.find("\"").map(|i| value_start + i + 1)?;
+                Some(value_text[1..end_idx].to_string())
+            } else {
+                // Non-string value - try to extract until comma or closing brace
+                let end_chars = [',', '}'];
+                let end_idx = end_chars
+                    .iter()
+                    .filter_map(|c| value_text.find(*c))
+                    .min()
+                    .map(|i| value_start + i)?;
+                Some(value_text[..end_idx - value_start].trim().to_string())
+            }
+        } else {
+            None
+        }
+    }
+
+    // Handle permission response from user
+    pub fn handle_permission_response(&mut self, granted: bool) {
+        if granted {
+            self.tool_permission_status = ToolPermissionStatus::Granted;
+            self.messages
+                .push("[permission] ✅ Permission granted, executing tool...".to_string());
+        } else {
+            self.tool_permission_status = ToolPermissionStatus::Denied;
+            self.messages
+                .push("[permission] ❌ Permission denied, skipping tool execution".to_string());
+        }
+        self.auto_scroll_to_bottom();
+    }
+
     pub fn query_with_agent(&mut self, prompt: &str) -> Result<String> {
         // Make sure we have a tokio runtime
         let runtime = match &self.tokio_runtime {
@@ -1026,12 +1192,18 @@ impl App {
         // Force immediate update to show thinking message
         self.messages.push("_AUTO_SCROLL_".to_string());
 
+        // Set tool execution flag
+        self.tool_execution_in_progress = true;
+
         // Copy the agent and execute the query
         let agent_clone = agent.clone();
         let prompt_clone = prompt.to_string();
 
         // Process this as a background task in the tokio runtime
         let (response_tx, response_rx) = mpsc::channel();
+
+        // Need to pass app state for tool permission checks
+        let app_permission_required = self.requires_permission_check();
 
         runtime.spawn(async move {
             // Set up the agent with progress sender
@@ -1084,6 +1256,36 @@ impl App {
             // Create a separate task to forward progress messages (don't need to track the handle)
             let _progress_forwarder = tokio::spawn(async move {
                 while let Some(msg) = tokio_progress_rx.recv().await {
+                    // Check for tool execution messages that require permission
+                    if app_permission_required
+                        && (msg.contains("Using tool: Edit")
+                            || msg.contains("Using tool: Replace")
+                            || msg.contains("Using tool: Bash")
+                            || msg.contains("Using tool: NotebookEditCell"))
+                    {
+                        // Extract tool name and args
+                        if let Some(tool_info) = msg.strip_prefix("Using tool: ") {
+                            let parts: Vec<&str> = tool_info.splitn(2, " with args: ").collect();
+                            if parts.len() == 2 {
+                                let tool_name = parts[0];
+                                let tool_args = parts[1];
+
+                                // Send special permission request message
+                                let _ = forwarder_progress_tx.send(format!(
+                                    "[permission_request]{}|{}",
+                                    tool_name, tool_args
+                                ));
+
+                                // Add auto-scroll flag to ensure the permission dialog shows
+                                let _ = forwarder_progress_tx.send("_AUTO_SCROLL_".to_string());
+
+                                // Wait a bit to allow UI to process the permission request
+                                // This is not ideal but works as a simple solution
+                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                            }
+                        }
+                    }
+
                     // For each progress message, add an auto-scroll marker to ensure the UI updates
                     let _ = forwarder_progress_tx.send(msg);
                     // Add auto-scroll flag to ensure the UI updates in real-time
@@ -1120,6 +1322,18 @@ impl App {
         });
 
         // Wait for the response with a timeout (2 minutes) and return the final result
-        response_rx.recv_timeout(Duration::from_secs(120))?
+        let result = response_rx.recv_timeout(Duration::from_secs(120))?;
+
+        // Clear tool execution state
+        self.tool_execution_in_progress = false;
+        self.permission_required = false;
+        self.pending_tool = None;
+
+        result
+    }
+
+    // Helper function to check if we should check for tool permissions
+    pub fn requires_permission_check(&self) -> bool {
+        true // Default to requiring permission for risky operations
     }
 }
