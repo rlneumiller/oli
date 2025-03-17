@@ -38,7 +38,8 @@ pub fn run_app() -> Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
     let mut app = App::new();
-    initialize_messages(&mut app);
+    // Initialize welcome messages only for the setup screen
+    initialize_setup_messages(&mut app);
     app.messages
         .push("DEBUG: Application started. Press Enter to begin setup.".into());
 
@@ -449,10 +450,18 @@ fn process_message(app: &mut App, msg: &str) -> Result<()> {
         let model_path = app.model_path(&app.current_model().file_name)?;
         match app.load_model(&model_path) {
             Ok(()) => {
+                // Directly transition to Chat state and set welcome message
                 app.state = AppState::Chat;
-                app.messages.push("Setup complete. Ready to chat!".into());
+
+                // Add the welcome message and help info in a cleaner format
+                app.messages.clear(); // Clear setup messages for a clean chat window
+                app.messages.push("★ Welcome to OLI assistant! ★".into());
                 app.messages
-                    .push("You can now ask questions about coding and development.".into());
+                    .push("Ready to code! Type /help for available commands".into());
+                if let Some(cwd) = &app.current_working_dir {
+                    app.messages.push(format!("cwd: {}", cwd));
+                }
+                app.messages.push("".into());
             }
             Err(e) => {
                 app.messages
@@ -466,12 +475,12 @@ fn process_message(app: &mut App, msg: &str) -> Result<()> {
             .push("Please enter your Anthropic API key to use Claude 3.7...".into());
     } else if msg == "setup_complete" {
         app.state = AppState::Chat;
-        app.messages.push("Setup complete. Ready to chat!".into());
 
-        // Add the welcome message and help info
-        app.messages.push("".into());
-        app.messages.push("Welcome to OLI assistant!".into());
-        app.messages.push("/help for help".into());
+        // Add the welcome message and help info in a cleaner format
+        app.messages.clear(); // Clear setup messages for a clean chat window
+        app.messages.push("★ Welcome to OLI assistant! ★".into());
+        app.messages
+            .push("Ready to code! Type /help for available commands".into());
         if let Some(cwd) = &app.current_working_dir {
             app.messages.push(format!("cwd: {}", cwd));
         }
@@ -514,7 +523,8 @@ fn process_message(app: &mut App, msg: &str) -> Result<()> {
     Ok(())
 }
 
-fn initialize_messages(app: &mut App) {
+// Initialize messages specifically for the setup screen
+fn initialize_setup_messages(app: &mut App) {
     app.messages.extend(vec![
         "★ Welcome to OLI Assistant! ★".into(),
         "A terminal-based code assistant powered by local LLMs".into(),
