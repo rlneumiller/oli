@@ -1195,8 +1195,7 @@ impl AgentManager for App {
                     // Signal that we're finalizing the response
                     let _ = progress_tx.send("[wait] ⚪ Finalizing response...".to_string());
                     // Signal that the tool executions are complete
-                    let _ =
-                        progress_tx.send("[success] ⏺ All tools executed successfully".to_string());
+                    let _ = progress_tx.send("⏺ All tools executed successfully".to_string());
                     // Send the final response
                     let _ = response_tx.send(Ok(response));
                 }
