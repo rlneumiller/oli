@@ -228,13 +228,17 @@ fn process_ai_processing_message(app: &mut App, msg: &str) {
 
 fn is_tool_message(msg: &str) -> bool {
     msg.starts_with("[tool]")
-        || msg.starts_with("⏺ LS")
-        || msg.starts_with("⏺ View")
-        || msg.starts_with("⏺ Glob")
-        || msg.starts_with("⏺ Grep")
-        || msg.starts_with("⏺ Edit")
-        || msg.starts_with("⏺ Replace")
-        || msg.starts_with("⏺ Bash")
+        || msg.contains("\x1b[32m⏺\x1b[0m") // Green circle indicators for tools
+        || msg.contains("\x1b[31m⏺\x1b[0m") // Red circle for errors
+        || (msg.starts_with("⏺ ") && 
+            (msg.contains("LS(") || 
+             msg.contains("View(") || 
+             msg.contains("Glob") || 
+             msg.contains("Grep") || 
+             msg.contains("Edit") || 
+             msg.contains("Replace") || 
+             msg.contains("Bash"))
+        )
 }
 
 fn process_tool_message(app: &mut App, msg: &str) {
@@ -244,9 +248,13 @@ fn process_tool_message(app: &mut App, msg: &str) {
     }
 
     // This is a formatted tool operation, style it properly with green indicator
-    if msg.starts_with("⏺ ") {
-        // Already has the circle in the right format - pass it through directly
+    if msg.contains("\x1b[32m⏺\x1b[0m") || msg.contains("\x1b[31m⏺\x1b[0m") {
+        // Already has a colored circle in the right format - pass it through directly
         app.messages.push(msg.to_string());
+    } else if msg.starts_with("⏺ ") {
+        // Has a circle but not colored - replace with green circle
+        let content = msg.strip_prefix("⏺ ").unwrap_or(msg);
+        app.messages.push(format!("\x1b[32m⏺\x1b[0m {}", content)); // Green colored circle
     } else if msg.starts_with("[tool] ⏺ ") {
         // Legacy format with black circle
         let content = msg.strip_prefix("[tool] ⏺ ").unwrap_or(msg);
@@ -282,7 +290,9 @@ fn process_tool_result_message(app: &mut App, msg: &str) {
 }
 
 fn is_success_message(msg: &str) -> bool {
-    msg.starts_with("[success]") || msg.starts_with("⏺ All tools executed")
+    msg.starts_with("[success]")
+        || msg.contains("All tools executed successfully")
+        || (msg.contains("\x1b[32m⏺\x1b[0m") && !is_tool_message(msg))
 }
 
 fn process_success_message(app: &mut App, msg: &str) {

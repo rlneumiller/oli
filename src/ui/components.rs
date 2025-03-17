@@ -452,6 +452,27 @@ fn format_message(
     // Check if this is the last message and should be highlighted
     let is_newest_msg = idx == total_messages - 1;
 
+    // Handle ANSI colorized messages with tool indicators first
+    if message.contains("\x1b[32m⏺\x1b[0m") || message.contains("\x1b[31m⏺\x1b[0m") {
+        // Use appropriate formatter based on message type
+        if message.contains("All tools executed successfully") {
+            return format_success_message(message);
+        } else {
+            return format_tool_message(message, is_newest_msg, highlight_on);
+        }
+    }
+
+    // Handle messages with the direct ⏺ indicator
+    if message.starts_with("⏺ ") {
+        // Use appropriate formatter based on message type/context
+        if message.contains("All tools executed successfully") {
+            return format_success_message(message);
+        } else {
+            return format_tool_message(message, is_newest_msg, highlight_on);
+        }
+    }
+
+    // Process other message types
     if message.starts_with("DEBUG:") {
         // Only show debug messages in debug mode
         if debug_enabled {
@@ -558,114 +579,137 @@ fn format_thinking_message(message: &str, is_newest_msg: bool, highlight_on: boo
     }
 }
 
-fn format_tool_message(message: &str, is_newest_msg: bool, highlight_on: bool) -> Line {
+fn format_tool_message(message: &str, _is_newest_msg: bool, _highlight_on: bool) -> Line {
+    // Handle ANSI colorized messages with proper spacing
+    if message.contains("\x1b[32m⏺\x1b[0m") {
+        // Find where the actual message content starts (right after the ANSI sequence)
+        if let Some(ansi_end_pos) = message.find("\x1b[0m") {
+            // Find where the content starts (after the ANSI sequences and a space)
+            let content_start = ansi_end_pos + 4; // 4 is length of "\x1b[0m"
+            if content_start < message.len() {
+                let content = &message[content_start..];
+                // Create a line with proper ratatui styling
+                return Line::from(vec![
+                    Span::styled("⏺ ", Style::default().fg(Color::Green)),
+                    Span::styled(
+                        content.trim_start(),
+                        Style::default()
+                            .fg(Color::LightBlue)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]);
+            }
+        }
+    }
+
+    // Handle normal tool messages
     let tool_content = message.strip_prefix("[tool] ").unwrap_or(message);
 
-    // Apply animation highlight effect for newest message
-    let style = if is_newest_msg && highlight_on {
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::LightBlue)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-            .fg(Color::LightBlue)
-            .add_modifier(Modifier::BOLD)
-    };
+    // Apply standard tool styling
+    let style = Style::default()
+        .fg(Color::LightBlue)
+        .add_modifier(Modifier::BOLD);
 
-    if tool_content.starts_with("🟢 ") || tool_content.starts_with("🔧 ") {
-        // New format with emoji icon
-        Line::from(vec![Span::styled(tool_content, style)])
-    } else {
-        // Legacy format with old indicator
+    if tool_content.starts_with("⏺ ") {
+        // Has a circle already - extract content and add proper space
+        let pure_content = tool_content
+            .strip_prefix("⏺ ")
+            .unwrap_or(tool_content)
+            .trim_start();
         Line::from(vec![
-            Span::styled(
-                "⏺ ",
-                if is_newest_msg && highlight_on {
-                    Style::default().fg(Color::Blue).bg(Color::LightBlue)
-                } else {
-                    Style::default().fg(Color::Blue)
-                },
-            ),
+            Span::styled("⏺ ", Style::default().fg(Color::Green)),
+            Span::styled(pure_content, style),
+        ])
+    } else {
+        // Default format with green indicator
+        Line::from(vec![
+            Span::styled("⏺ ", Style::default().fg(Color::Green)),
             Span::styled(tool_content, style),
         ])
     }
 }
 
 fn format_success_message(message: &str) -> Line {
+    // Handle ANSI colorized messages with proper spacing
+    if message.contains("\x1b[32m⏺\x1b[0m") {
+        // Find where the actual message content starts (right after the ANSI sequence)
+        if let Some(ansi_end_pos) = message.find("\x1b[0m") {
+            // Find where the content starts (after the ANSI sequences and a space)
+            let content_start = ansi_end_pos + 4; // 4 is length of "\x1b[0m"
+            if content_start < message.len() {
+                let content = &message[content_start..];
+                // Create a line with proper ratatui styling
+                return Line::from(vec![
+                    Span::styled("⏺ ", Style::default().fg(Color::Green)),
+                    Span::styled(content.trim_start(), Style::default().fg(Color::Green)),
+                ]);
+            }
+        }
+    }
+
     let content = message.strip_prefix("[success] ").unwrap_or(message);
 
-    // Check for green circle in the content
-    if content.starts_with("🟢 Tool result:") {
-        let tool_msg = content.strip_prefix("🟢 ").unwrap_or(content);
-        Line::from(vec![
-            Span::styled("⏺ ", Style::default().fg(Color::Green)), // Smaller circle
-            Span::styled(
-                tool_msg,
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ])
-    } else if content.starts_with("Tool result:") {
-        // Legacy format
-        Line::from(vec![
+    // Handle direct messages with tool circle already (like "⏺ All tools executed successfully")
+    if content.starts_with("⏺ ") {
+        let pure_content = content.strip_prefix("⏺ ").unwrap_or(content).trim_start();
+        return Line::from(vec![
             Span::styled("⏺ ", Style::default().fg(Color::Green)),
-            Span::styled(
-                "Tool result:",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ])
-    } else if content.starts_with("🟢 ") {
-        // Regular success message with green circle - make it smaller
-        let msg = content.strip_prefix("🟢 ").unwrap_or(content);
-        Line::from(vec![
-            Span::styled("⏺ ", Style::default().fg(Color::Green)),
-            Span::styled(msg, Style::default().fg(Color::Green)),
-        ])
-    } else {
-        // Legacy format for regular success message
-        Line::from(vec![
-            Span::styled("⏺ ", Style::default().fg(Color::Green)),
-            Span::styled(content, Style::default().fg(Color::Green)),
-        ])
+            Span::styled(pure_content, Style::default().fg(Color::Green)),
+        ]);
     }
+
+    // Default success message format
+    Line::from(vec![
+        Span::styled("⏺ ", Style::default().fg(Color::Green)),
+        Span::styled(content, Style::default().fg(Color::Green)),
+    ])
 }
 
 fn format_wait_message(message: &str) -> Line {
     let wait_content = message.strip_prefix("[wait] ").unwrap_or(message);
 
-    if wait_content.starts_with("⚪ ") || message.contains("⚪") {
-        // New format already has the white circle emoji
-        // Keep the full message since it already has the icon
-        Line::from(vec![Span::styled(
-            message,
-            Style::default().fg(Color::Yellow),
-        )])
+    if wait_content.starts_with("⚪ ") {
+        // New format with white circle emoji
+        // Extract content and format consistently
+        let content = wait_content.strip_prefix("⚪ ").unwrap_or(wait_content);
+        Line::from(vec![
+            Span::styled("⚪ ", Style::default().fg(Color::LightYellow)),
+            Span::styled(content, Style::default().fg(Color::Yellow)),
+        ])
     } else {
         // Legacy format needs an icon
         Line::from(vec![
-            Span::styled("⏺ ", Style::default().fg(Color::LightYellow)),
+            Span::styled("⚪ ", Style::default().fg(Color::LightYellow)),
             Span::styled(wait_content, Style::default().fg(Color::Yellow)),
         ])
     }
 }
 
 fn format_error_message(message: &str) -> Line {
+    // Handle ANSI colorized messages (red circle)
+    if message.contains("\x1b[31m⏺\x1b[0m") {
+        // Find where the actual message content starts (right after the ANSI sequence)
+        if let Some(ansi_end_pos) = message.find("\x1b[0m") {
+            // Find where the content starts (after the ANSI sequences and a space)
+            let content_start = ansi_end_pos + 4; // 4 is length of "\x1b[0m"
+            if content_start < message.len() {
+                let content = &message[content_start..];
+                // Create a line with properly styled red circle
+                return Line::from(vec![
+                    Span::styled("⏺ ", AppStyles::error()),
+                    Span::styled(content.trim_start(), AppStyles::error()),
+                ]);
+            }
+        }
+    }
+
     let error_content = message.strip_prefix("[error] ").unwrap_or(message);
 
-    if error_content.starts_with("❌ ") {
-        // New format with X mark emoji
-        Line::from(vec![Span::styled(error_content, AppStyles::error())])
-    } else {
-        // Legacy format
-        Line::from(vec![
-            Span::styled("⏺ ", AppStyles::error()),
-            Span::styled(error_content, AppStyles::error()),
-        ])
-    }
+    // Standard error formatting with red indicator
+    Line::from(vec![
+        Span::styled("⏺ ", AppStyles::error()),
+        Span::styled(error_content, AppStyles::error()),
+    ])
 }
 
 fn format_model_response(message: &str) -> Line {

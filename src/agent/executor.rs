@@ -213,7 +213,9 @@ impl AgentExecutor {
 
                 // Send the formatted tool details to UI before execution
                 if let Some(sender) = &self.progress_sender {
-                    let _ = sender.send(format!("⏺ {}", formatted_tool_details)).await;
+                    let _ = sender
+                        .send(format!("\x1b[32m⏺\x1b[0m {}", formatted_tool_details))
+                        .await;
                 }
 
                 // Use the previously formatted tool details for showing execution
@@ -373,14 +375,16 @@ impl AgentExecutor {
                                 _ => format!("Tool result: {}", preview),
                             };
 
-                            let _ = sender.send(format!("⏺ {}", formatted_result)).await;
+                            let _ = sender
+                                .send(format!("\x1b[32m⏺\x1b[0m {}", formatted_result))
+                                .await;
                         }
                         output
                     }
                     Err(e) => {
                         let error_msg = format!("Tool execution failed: {}", e);
                         if let Some(sender) = &self.progress_sender {
-                            let _ = sender.send(format!("⏺ {}", error_msg)).await;
+                            let _ = sender.send(format!("\x1b[31m⏺\x1b[0m {}", error_msg)).await;
                         }
 
                         // Return error message as tool result
