@@ -81,8 +81,7 @@ impl Agent {
                 ApiClientEnum::Anthropic(Arc::new(client))
             }
             LLMProvider::OpenAI => {
-                // For now we don't support custom API keys for OpenAI, fallback to env var
-                let client = OpenAIClient::new(self.model.clone())?;
+                let client = OpenAIClient::with_api_key(api_key, self.model.clone())?;
                 ApiClientEnum::OpenAi(Arc::new(client))
             }
         });

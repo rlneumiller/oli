@@ -40,6 +40,7 @@ pub struct ToolDefinition {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
+    pub id: Option<String>, // Required for OpenAI to map tool results back to calls
     pub name: String,
     pub arguments: serde_json::Value,
 }

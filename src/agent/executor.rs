@@ -80,6 +80,33 @@ impl AgentExecutor {
             return Ok(content);
         }
 
+        // Add the assistant's message with tool calls to the conversation - important for OpenAI API
+        // We need to preserve all the context including tool calls for proper API behavior
+
+        // For OpenAI compatibility, store the tool calls in the message content as structured JSON
+        // This allows for proper serialization/deserialization of tool calls in the message history
+        if let Some(calls) = &tool_calls {
+            // Create a JSON object with both content and tool calls
+            let message_with_tools = serde_json::json!({
+                "content": content,
+                "tool_calls": calls.iter().map(|call| {
+                    serde_json::json!({
+                        "id": call.id.clone().unwrap_or_default(),
+                        "name": call.name,
+                        "arguments": call.arguments
+                    })
+                }).collect::<Vec<_>>()
+            });
+
+            // Store as JSON string in the message
+            self.conversation.push(Message::assistant(
+                serde_json::to_string(&message_with_tools).unwrap_or_else(|_| content.clone()),
+            ));
+        } else {
+            // No tool calls, just store the content directly
+            self.conversation.push(Message::assistant(content.clone()));
+        }
+
         // Process tool calls in a loop until no more tools are called
         let mut current_content = content;
         let mut current_tool_calls = tool_calls;
@@ -87,7 +114,7 @@ impl AgentExecutor {
         let mut loop_count = 0;
         const MAX_LOOPS: usize = 10; // Safety limit for tool call loops
 
-        while let Some(calls) = current_tool_calls {
+        while let Some(ref calls) = current_tool_calls {
             // Safety check to prevent infinite loops
             loop_count += 1;
             if loop_count > MAX_LOOPS {
@@ -124,8 +151,9 @@ impl AgentExecutor {
                         }
 
                         // Instead of returning error, provide helpful error message to the model
+                        // Use the ID from the tool call if available
                         tool_results.push(ToolResult {
-                            tool_call_id: i.to_string(),
+                            tool_call_id: call.id.clone().unwrap_or_else(|| i.to_string()),
                             output: format!("ERROR PARSING TOOL CALL: {}. Please check the format of your arguments and try again.", e),
                         });
                         continue;
@@ -169,9 +197,10 @@ impl AgentExecutor {
                     }
                 };
 
-                // Add tool result
+                // Add tool result with proper ID for API compatibility
                 tool_results.push(ToolResult {
-                    tool_call_id: i.to_string(),
+                    // Use the ID from the tool call if available
+                    tool_call_id: call.id.clone().unwrap_or_else(|| i.to_string()),
                     output: result,
                 });
             }
@@ -254,8 +283,30 @@ impl AgentExecutor {
         }
 
         // Add final response to conversation
-        self.conversation
-            .push(Message::assistant(current_content.clone()));
+        // Handle the case where there might still be tool calls
+        if let Some(calls) = &current_tool_calls {
+            // Create a JSON object with both content and tool calls
+            let message_with_tools = serde_json::json!({
+                "content": current_content,
+                "tool_calls": calls.iter().map(|call| {
+                    serde_json::json!({
+                        "id": call.id.clone().unwrap_or_default(),
+                        "name": call.name,
+                        "arguments": call.arguments
+                    })
+                }).collect::<Vec<_>>()
+            });
+
+            // Store as JSON string in the message
+            self.conversation.push(Message::assistant(
+                serde_json::to_string(&message_with_tools)
+                    .unwrap_or_else(|_| current_content.clone()),
+            ));
+        } else {
+            // No tool calls, just store the content directly
+            self.conversation
+                .push(Message::assistant(current_content.clone()));
+        }
 
         Ok(current_content)
     }

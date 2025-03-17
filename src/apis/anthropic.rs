@@ -412,6 +412,7 @@ impl ApiClient for AnthropicClient {
                 AnthropicContent::ToolUse { name, input, .. } => {
                     // Add a tool call
                     tool_calls_vec.push(crate::apis::api_client::ToolCall {
+                        id: None, // Anthropic doesn't provide IDs like OpenAI
                         name: name.clone(),
                         arguments: input.clone(),
                     });

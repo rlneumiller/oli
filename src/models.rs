@@ -34,7 +34,7 @@ impl ModelConfig {
 
 pub fn get_available_models() -> Vec<ModelConfig> {
     vec![
-        // Only Claude 3.7 Sonnet - only model supporting tool use directly
+        // Claude 3.7 Sonnet - Anthropic model supporting tool use
         ModelConfig {
             name: "Claude 3.7 Sonnet".into(),
             file_name: "claude-3-7-sonnet-20250219".into(),
@@ -43,6 +43,25 @@ pub fn get_available_models() -> Vec<ModelConfig> {
             primary_url: "".into(), // No download needed
             fallback_url: "".into(),
             recommended_for: "Professional code tasks, requires ANTHROPIC_API_KEY".into(),
+            n_gpu_layers: 0, // Cloud model
+            agentic_capabilities: Some(vec![
+                AgentCapability::FileSearch,
+                AgentCapability::CodeExecution,
+                AgentCapability::FileEdit,
+                AgentCapability::CodeCompletion,
+                AgentCapability::CodeExplanation,
+                AgentCapability::RepositoryNavigation,
+            ]),
+        },
+        // GPT-4o - OpenAI model supporting tool use
+        ModelConfig {
+            name: "GPT-4o".into(),
+            file_name: "gpt-4o".into(),
+            size_gb: 0.0, // Cloud model
+            description: "Latest OpenAI model with advanced tool use capabilities".into(),
+            primary_url: "".into(), // No download needed
+            fallback_url: "".into(),
+            recommended_for: "Professional code tasks, requires OPENAI_API_KEY".into(),
             n_gpu_layers: 0, // Cloud model
             agentic_capabilities: Some(vec![
                 AgentCapability::FileSearch,
