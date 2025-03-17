@@ -45,11 +45,6 @@ impl AgentExecutor {
         self.conversation.push(Message::user(content));
     }
 
-    #[allow(dead_code)]
-    pub fn add_assistant_message(&mut self, content: String) {
-        self.conversation.push(Message::assistant(content));
-    }
-
     pub async fn execute(&mut self) -> Result<String> {
         // Create options with tools enabled and optimized parameters for Claude 3.7
         let options = CompletionOptions {
