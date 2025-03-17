@@ -295,33 +295,67 @@ impl App {
     }
 
     pub fn setup_agent(&mut self) -> Result<()> {
-        // Check if API key is available either from env vars or from user input
+        // Check if API keys are available either from env vars or from user input
         let has_anthropic_key =
             std::env::var("ANTHROPIC_API_KEY").is_ok() || self.api_key.is_some();
+        let has_openai_key = std::env::var("OPENAI_API_KEY").is_ok() || self.api_key.is_some();
 
-        if !has_anthropic_key {
-            self.messages
-                .push("No API key found for Anthropic. Agent features will be disabled.".into());
-            self.messages.push(
-                "To enable agent features, set ANTHROPIC_API_KEY environment variable.".into(),
-            );
-            self.use_agent = false;
-            return Ok(());
-        }
-
-        // Only Anthropic is supported
-        let provider = LLMProvider::Anthropic;
+        // Determine appropriate provider based on the selected model
+        let provider = match self.current_model().name.as_str() {
+            "GPT-4o" => {
+                if !has_openai_key {
+                    self.messages.push(
+                        "No API key found for OpenAI. Agent features will be disabled.".into(),
+                    );
+                    self.messages.push(
+                        "To enable agent features, set OPENAI_API_KEY environment variable.".into(),
+                    );
+                    self.use_agent = false;
+                    return Ok(());
+                }
+                LLMProvider::OpenAI
+            }
+            "Claude 3.7 Sonnet" => {
+                if !has_anthropic_key {
+                    self.messages.push(
+                        "No API key found for Anthropic. Agent features will be disabled.".into(),
+                    );
+                    self.messages.push(
+                        "To enable agent features, set ANTHROPIC_API_KEY environment variable."
+                            .into(),
+                    );
+                    self.use_agent = false;
+                    return Ok(());
+                }
+                LLMProvider::Anthropic
+            }
+            _ => {
+                // If we're using another model that doesn't match either provider
+                if has_anthropic_key {
+                    LLMProvider::Anthropic
+                } else if has_openai_key {
+                    LLMProvider::OpenAI
+                } else {
+                    self.messages.push(
+                        "No API key found for any provider. Agent features will be disabled."
+                            .into(),
+                    );
+                    self.messages.push("To enable agent features, set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable.".into());
+                    self.use_agent = false;
+                    return Ok(());
+                }
+            }
+        };
 
         // Create progress channel
         let (tx, rx) = mpsc::channel();
         self.agent_progress_rx = Some(rx);
 
         // Create the agent with API key if provided by user
-        let mut agent = if let (LLMProvider::Anthropic, Some(api_key)) = (&provider, &self.api_key)
-        {
-            Agent::new_with_api_key(provider, api_key.clone())
+        let mut agent = if let Some(api_key) = &self.api_key {
+            Agent::new_with_api_key(provider.clone(), api_key.clone())
         } else {
-            Agent::new(provider)
+            Agent::new(provider.clone())
         };
 
         // Add model if specified
@@ -351,7 +385,18 @@ impl App {
 
             self.agent = Some(agent);
             self.use_agent = true;
-            self.messages.push("Agent capabilities enabled!".into());
+
+            // Show provider-specific message
+            match provider {
+                LLMProvider::Anthropic => {
+                    self.messages
+                        .push("Claude 3.7 Sonnet agent capabilities enabled!".into());
+                }
+                LLMProvider::OpenAI => {
+                    self.messages
+                        .push("GPT-4o agent capabilities enabled!".into());
+                }
+            }
         } else {
             self.messages
                 .push("Failed to create async runtime. Agent features will be disabled.".into());
@@ -362,11 +407,23 @@ impl App {
     }
 
     fn get_agent_model(&self) -> Option<String> {
-        // Only Claude 3.7 Sonnet is supported
-        if std::env::var("ANTHROPIC_API_KEY").is_ok() || self.api_key.is_some() {
-            Some("claude-3-7-sonnet-20250219".to_string()) // Using 3.7 Sonnet model ID
-        } else {
-            None
+        // Return the appropriate model ID based on the current selected model
+        match self.current_model().name.as_str() {
+            "Claude 3.7 Sonnet" => {
+                if std::env::var("ANTHROPIC_API_KEY").is_ok() || self.api_key.is_some() {
+                    Some("claude-3-7-sonnet-20250219".to_string())
+                } else {
+                    None
+                }
+            }
+            "GPT-4o" => {
+                if std::env::var("OPENAI_API_KEY").is_ok() || self.api_key.is_some() {
+                    Some("gpt-4o".to_string())
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 
@@ -441,15 +498,23 @@ impl App {
         self.messages
             .push(format!("Setting up model: {}", model_name));
 
-        // Currently only supporting Claude 3.7 Sonnet (cloud-based model with size 0)
+        // For cloud-based models (size 0.0)
         if model_size == 0.0 {
             if self.debug_messages {
                 self.messages
-                    .push("DEBUG: Setting up Claude 3.7 Sonnet".into());
+                    .push(format!("DEBUG: Setting up {}", model_name));
             }
 
-            // Check if we need to ask for API key
-            if std::env::var("ANTHROPIC_API_KEY").is_err() && self.api_key.is_none() {
+            // Check if we need to ask for API key based on the selected model
+            let needs_api_key = match model_name.as_str() {
+                "GPT-4o" => std::env::var("OPENAI_API_KEY").is_err() && self.api_key.is_none(),
+                "Claude 3.7 Sonnet" => {
+                    std::env::var("ANTHROPIC_API_KEY").is_err() && self.api_key.is_none()
+                }
+                _ => true, // Default to requiring API key
+            };
+
+            if needs_api_key {
                 // Transition to API key input state
                 self.state = AppState::ApiKeyInput;
                 self.input.clear();
@@ -457,9 +522,9 @@ impl App {
                 return Ok(());
             }
 
-            // Setup Anthropic agent with Claude 3.7 Sonnet
+            // Setup agent with the appropriate model
             if let Err(e) = self.setup_agent() {
-                self.handle_error(format!("Failed to setup Claude 3.7 Sonnet: {}", e));
+                self.handle_error(format!("Failed to setup {}: {}", model_name, e));
                 tx.send("setup_failed".into())?;
                 return Ok(());
             }
@@ -469,7 +534,11 @@ impl App {
                 tx.send("setup_complete".into())?;
                 return Ok(());
             } else {
-                self.handle_error("Anthropic API key not found or is invalid".into());
+                let provider_name = match model_name.as_str() {
+                    "GPT-4o" => "OpenAI",
+                    _ => "Anthropic",
+                };
+                self.handle_error(format!("{} API key not found or is invalid", provider_name));
                 tx.send("setup_failed".into())?;
                 return Ok(());
             }

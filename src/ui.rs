@@ -1132,7 +1132,39 @@ fn draw_api_key_input(f: &mut Frame, app: &App) {
         ])
         .split(f.area());
 
-    let title = Paragraph::new("Anthropic API Key Setup")
+    // Determine title and info based on selected model
+    let (title_text, message_items) = match app.current_model().name.as_str() {
+        "GPT-4o" => (
+            "OpenAI API Key Setup",
+            vec![
+                ListItem::new("To use GPT-4o, you need to provide your OpenAI API key."),
+                ListItem::new("You can get an API key from https://platform.openai.com/api-keys"),
+                ListItem::new(""),
+                ListItem::new(
+                    "The API key will be used only for this session and will not be stored permanently.",
+                ),
+                ListItem::new(
+                    "You can also set the OPENAI_API_KEY environment variable to avoid this prompt.",
+                ),
+            ]
+        ),
+        _ => (
+            "Anthropic API Key Setup",
+            vec![
+                ListItem::new("To use Claude 3.7, you need to provide your Anthropic API key."),
+                ListItem::new("You can get an API key from https://console.anthropic.com/"),
+                ListItem::new(""),
+                ListItem::new(
+                    "The API key will be used only for this session and will not be stored permanently.",
+                ),
+                ListItem::new(
+                    "You can also set the ANTHROPIC_API_KEY environment variable to avoid this prompt.",
+                ),
+            ]
+        ),
+    };
+
+    let title = Paragraph::new(title_text)
         .style(
             Style::default()
                 .fg(Color::LightCyan)
@@ -1142,29 +1174,20 @@ fn draw_api_key_input(f: &mut Frame, app: &App) {
     f.render_widget(title, chunks[0]);
 
     // Messages area showing info about API key requirements
-    let message_items = vec![
-        ListItem::new("To use Claude 3.7, you need to provide your Anthropic API key."),
-        ListItem::new("You can get an API key from https://console.anthropic.com/"),
-        ListItem::new(""),
-        ListItem::new(
-            "The API key will be used only for this session and will not be stored permanently.",
-        ),
-        ListItem::new(
-            "You can also set the ANTHROPIC_API_KEY environment variable to avoid this prompt.",
-        ),
-    ];
-
     let messages = List::new(message_items)
         .block(Block::default().borders(Borders::ALL).title("Information"))
         .style(Style::default().fg(Color::Yellow));
     f.render_widget(messages, chunks[1]);
 
+    // Determine placeholder text based on model
+    let placeholder = match app.current_model().name.as_str() {
+        "GPT-4o" => "Enter your OpenAI API key and press Enter...",
+        _ => "Enter your Anthropic API key and press Enter...",
+    };
+
     // Input box with masked input for security
     let input_content = if app.input.is_empty() {
-        Span::styled(
-            "Enter your Anthropic API key and press Enter...",
-            Style::default().fg(Color::DarkGray),
-        )
+        Span::styled(placeholder, Style::default().fg(Color::DarkGray))
     } else {
         // Mask the API key with asterisks for privacy
         Span::raw("*".repeat(app.input.len()))
