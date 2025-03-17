@@ -164,6 +164,24 @@ pub fn run_app() -> Result<()> {
                                 }
                             }
                             AppState::Chat => {
+                                // First check if we're in command mode
+                                if app.command_mode {
+                                    // Try to execute the command
+                                    let cmd_executed = app.execute_command();
+
+                                    // Clear the input field after executing the command
+                                    app.input.clear();
+                                    app.command_mode = false;
+                                    app.show_command_menu = false;
+
+                                    // Skip model querying if we executed a command
+                                    if cmd_executed {
+                                        // Need to redraw to clear command menu
+                                        terminal.draw(|f| ui(f, &app))?;
+                                        continue;
+                                    }
+                                }
+
                                 let input = std::mem::take(&mut app.input);
                                 if !input.is_empty() {
                                     app.messages.push(format!("> {}", input));
@@ -258,14 +276,65 @@ pub fn run_app() -> Result<()> {
                         }
                         terminal.draw(|f| ui(f, &app))?;
                     }
-                    KeyCode::Down | KeyCode::Tab => {
-                        if let AppState::Setup = app.state {
-                            app.select_next_model();
-                            app.messages.push("DEBUG: Selected next model".into());
-                            terminal.draw(|f| ui(f, &app))?;
+                    KeyCode::Down => {
+                        match app.state {
+                            AppState::Setup => {
+                                app.select_next_model();
+                                app.messages.push("DEBUG: Selected next model".into());
+                                terminal.draw(|f| ui(f, &app))?;
+                            }
+                            AppState::Chat => {
+                                // Navigate commands in command mode
+                                if app.show_command_menu {
+                                    app.select_next_command();
+                                    terminal.draw(|f| ui(f, &app))?;
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    KeyCode::Up | KeyCode::BackTab => {
+                    KeyCode::Tab => {
+                        match app.state {
+                            AppState::Setup => {
+                                app.select_next_model();
+                                app.messages.push("DEBUG: Selected next model".into());
+                                terminal.draw(|f| ui(f, &app))?;
+                            }
+                            AppState::Chat => {
+                                // Auto-complete command if in command mode
+                                if app.show_command_menu {
+                                    let filtered = app.filtered_commands();
+                                    if !filtered.is_empty() && app.selected_command < filtered.len()
+                                    {
+                                        // Auto-complete with selected command
+                                        app.input = filtered[app.selected_command].name.clone();
+                                        app.show_command_menu = true;
+                                        app.command_mode = true;
+                                    }
+                                    terminal.draw(|f| ui(f, &app))?;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    KeyCode::Up => {
+                        match app.state {
+                            AppState::Setup => {
+                                app.select_prev_model();
+                                app.messages.push("DEBUG: Selected previous model".into());
+                                terminal.draw(|f| ui(f, &app))?;
+                            }
+                            AppState::Chat => {
+                                // Navigate commands in command mode
+                                if app.show_command_menu {
+                                    app.select_prev_command();
+                                    terminal.draw(|f| ui(f, &app))?;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    KeyCode::BackTab => {
                         if let AppState::Setup = app.state {
                             app.select_prev_model();
                             app.messages.push("DEBUG: Selected previous model".into());
@@ -275,6 +344,17 @@ pub fn run_app() -> Result<()> {
                     KeyCode::Char(c) => match app.state {
                         AppState::Chat | AppState::ApiKeyInput => {
                             app.input.push(c);
+
+                            // Check if we're entering command mode with the / character
+                            if app.state == AppState::Chat && c == '/' && app.input.len() == 1 {
+                                app.command_mode = true;
+                                app.show_command_menu = true;
+                                app.selected_command = 0;
+                            } else if app.command_mode {
+                                // Update command mode state
+                                app.check_command_mode();
+                            }
+
                             terminal.draw(|f| ui(f, &app))?;
                         }
                         _ => {}
@@ -282,6 +362,12 @@ pub fn run_app() -> Result<()> {
                     KeyCode::Backspace => match app.state {
                         AppState::Chat | AppState::ApiKeyInput => {
                             app.input.pop();
+
+                            // Check if we've exited command mode
+                            if app.state == AppState::Chat {
+                                app.check_command_mode();
+                            }
+
                             terminal.draw(|f| ui(f, &app))?;
                         }
                         _ => {}
@@ -407,22 +493,22 @@ fn process_message(app: &mut App, msg: &str) -> Result<()> {
         // Handle agent progress messages with white circle
         app.messages.push(format!("[wait] ⚪ {}", msg));
     } else if msg.starts_with("Tool result:") {
-        // Handle tool results with proper formatting and green circle
-        app.messages.push(format!("[success] 🟢 {}", msg));
+        // Handle tool results with proper formatting and green circle (with class for styling)
+        app.messages.push(format!("[success] ⏺ {}", msg));
     } else if msg.starts_with("Using tool") {
         // Handle tool selection with proper formatting and green circle
-        app.messages.push(format!("[tool] 🟢 {}", msg));
+        app.messages.push(format!("[tool] ⏺ {}", msg));
     } else if msg.starts_with("Thinking") || msg.contains("analyzing") {
         // Handle AI thinking process messages with white circle
-        app.messages.push(format!("[thinking] ⚪ {}", msg));
+        app.messages.push(format!("[thinking] ⏺ {}", msg));
     } else if msg == "Agent initialized successfully" {
         app.messages
-            .push("[success] 🟢 Agent initialized and ready to use!".into());
+            .push("⏺ Agent initialized and ready to use!".into());
     } else if msg.starts_with("Failed to initialize agent") {
         app.messages.push(format!("[error] ❌ {}", msg));
         app.use_agent = false;
     } else if msg.contains("completed successfully") || msg.contains("done") {
-        app.messages.push(format!("[success] 🟢 {}", msg));
+        app.messages.push(format!("⏺ {}", msg));
     }
 
     Ok(())
@@ -446,6 +532,17 @@ fn ui(f: &mut Frame, app: &App) {
         AppState::ApiKeyInput => draw_api_key_input(f, app),
         AppState::Chat => draw_chat(f, app),
         AppState::Error(ref error_msg) => draw_error(f, app, error_msg),
+    }
+
+    // Check for command mode on each UI update
+    if let AppState::Chat = app.state {
+        if app.input.starts_with('/') {
+            // This will be handled in the draw_chat function
+            let app_mut = app as *const App as *mut App;
+            unsafe {
+                (*app_mut).check_command_mode();
+            }
+        }
     }
 }
 
@@ -534,14 +631,23 @@ fn draw_setup(f: &mut Frame, app: &App) {
 }
 
 fn draw_chat(f: &mut Frame, app: &App) {
-    // Use three chunks - header, message history, and input
+    // Use three chunks - header, message history, and input (with command menu if active)
+    let input_height = if app.show_command_menu {
+        // Increase the input area height to make room for the command menu
+        let cmd_count = app.filtered_commands().len();
+        // Limit to 5 commands at a time, with at least 3 lines for input
+        3 + cmd_count.min(5)
+    } else {
+        3 // Default input height
+    };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(1), // Status bar
-            Constraint::Min(3),    // Chat history (expandable)
-            Constraint::Length(3), // Input area (fixed height)
+            Constraint::Length(1),                   // Status bar
+            Constraint::Min(3),                      // Chat history (expandable)
+            Constraint::Length(input_height as u16), // Input area (with variable height for command menu)
         ])
         .split(f.area());
 
@@ -580,7 +686,7 @@ fn draw_chat(f: &mut Frame, app: &App) {
         Span::styled(scroll_info, Style::default().fg(Color::DarkGray)),
         Span::raw(" | "),
         Span::styled(
-            " PgUp/PgDn: Scroll  Esc: Quit ",
+            " PgUp/PgDn: Scroll  Esc: Quit  Type / for commands ",
             Style::default().fg(Color::Black).bg(Color::LightBlue),
         ),
     ]);
@@ -663,17 +769,15 @@ fn draw_chat(f: &mut Frame, app: &App) {
             } else if m.starts_with("[thinking] ") {
                 // AI Thinking/reasoning message
                 let thinking_content = m.strip_prefix("[thinking] ").unwrap_or(m);
-                
+
                 if thinking_content.starts_with("⚪ ") {
                     // New format with white circle
-                    Line::from(vec![
-                        Span::styled(
-                            thinking_content,
-                            Style::default()
-                                .fg(Color::LightYellow)
-                                .add_modifier(Modifier::ITALIC),
-                        ),
-                    ])
+                    Line::from(vec![Span::styled(
+                        thinking_content,
+                        Style::default()
+                            .fg(Color::LightYellow)
+                            .add_modifier(Modifier::ITALIC),
+                    )])
                 } else {
                     // Legacy format with black circle
                     Line::from(vec![
@@ -689,17 +793,15 @@ fn draw_chat(f: &mut Frame, app: &App) {
             } else if m.starts_with("[tool] ") {
                 // Tool execution message
                 let tool_content = m.strip_prefix("[tool] ").unwrap_or(m);
-                
+
                 if tool_content.starts_with("🟢 ") {
                     // New format with green circle
-                    Line::from(vec![
-                        Span::styled(
-                            tool_content,
-                            Style::default()
-                                .fg(Color::LightBlue)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ])
+                    Line::from(vec![Span::styled(
+                        tool_content,
+                        Style::default()
+                            .fg(Color::LightBlue)
+                            .add_modifier(Modifier::BOLD),
+                    )])
                 } else {
                     // Legacy format with old indicator
                     Line::from(vec![
@@ -723,10 +825,7 @@ fn draw_chat(f: &mut Frame, app: &App) {
                     // First line with the green circle emoji
                     let tool_msg = content.strip_prefix("🟢 ").unwrap_or(content);
                     lines.push(Line::from(vec![
-                        Span::styled(
-                            "🟢 ",
-                            Style::default().fg(Color::Green),
-                        ),
+                        Span::styled("⏺ ", Style::default().fg(Color::Green)), // Smaller circle
                         Span::styled(
                             tool_msg,
                             Style::default()
@@ -777,12 +876,11 @@ fn draw_chat(f: &mut Frame, app: &App) {
                     // Return the first line, the rest will be added to the text in the calling context
                     lines.first().cloned().unwrap_or_default()
                 } else if content.starts_with("🟢 ") {
-                    // Regular success message with green circle
+                    // Regular success message with green circle - make it smaller
+                    let msg = content.strip_prefix("🟢 ").unwrap_or(content);
                     Line::from(vec![
-                        Span::styled(
-                            content, 
-                            Style::default().fg(Color::Green),
-                        ),
+                        Span::styled("⏺ ", Style::default().fg(Color::Green)),
+                        Span::styled(msg, Style::default().fg(Color::Green)),
                     ])
                 } else {
                     // Legacy format for regular success message
@@ -794,45 +892,35 @@ fn draw_chat(f: &mut Frame, app: &App) {
             } else if m.starts_with("[wait] ") {
                 // Progress/wait message with white circle
                 let wait_content = m.strip_prefix("[wait] ").unwrap_or(m);
-                
+
                 if wait_content.starts_with("⚪ ") {
                     // New format with white circle emoji
-                    Line::from(vec![
-                        Span::styled(
-                            wait_content,
-                            Style::default().fg(Color::Yellow),
-                        ),
-                    ])
+                    Line::from(vec![Span::styled(
+                        wait_content,
+                        Style::default().fg(Color::Yellow),
+                    )])
                 } else {
                     // Legacy format
                     Line::from(vec![
                         Span::styled("⏺ ", Style::default().fg(Color::LightYellow)),
-                        Span::styled(
-                            wait_content,
-                            Style::default().fg(Color::Yellow),
-                        ),
+                        Span::styled(wait_content, Style::default().fg(Color::Yellow)),
                     ])
                 }
             } else if m.starts_with("[error] ") {
                 // Error/failure message
                 let error_content = m.strip_prefix("[error] ").unwrap_or(m);
-                
+
                 if error_content.starts_with("❌ ") {
                     // New format with X mark emoji
-                    Line::from(vec![
-                        Span::styled(
-                            error_content,
-                            Style::default().fg(Color::Red),
-                        ),
-                    ])
+                    Line::from(vec![Span::styled(
+                        error_content,
+                        Style::default().fg(Color::Red),
+                    )])
                 } else {
                     // Legacy format
                     Line::from(vec![
                         Span::styled("⏺ ", Style::default().fg(Color::Red)),
-                        Span::styled(
-                            error_content,
-                            Style::default().fg(Color::Red),
-                        ),
+                        Span::styled(error_content, Style::default().fg(Color::Red)),
                     ])
                 }
             } else {
@@ -923,30 +1011,103 @@ fn draw_chat(f: &mut Frame, app: &App) {
         .scroll((0, 0)); // Explicit scrolling control to prevent auto-scrolling issues
     f.render_widget(messages_window, chunks[1]);
 
-    // Input box with hint text
-    let input_text = if app.input.is_empty() {
-        Span::styled(
-            "Type your code question and press Enter...",
-            Style::default().fg(Color::DarkGray),
-        )
-    } else {
-        Span::raw(app.input.as_str())
-    };
+    // Split the input area if command menu is visible
+    if app.show_command_menu {
+        // Split the input area into the input box and command menu
+        let input_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),                                           // Input box
+                Constraint::Length(app.filtered_commands().len().min(5) as u16), // Command menu (max 5 items)
+            ])
+            .split(chunks[2]);
 
-    let input_window = Paragraph::new(input_text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Input (Esc to quit)")
-                .border_style(Style::default().fg(Color::Cyan)),
-        )
-        .wrap(Wrap { trim: true });
-    f.render_widget(input_window, chunks[2]);
+        // Input box with hint text
+        let input_text = if app.input.is_empty() {
+            Span::styled(
+                "Type / to show commands or ask a question...",
+                Style::default().fg(Color::DarkGray),
+            )
+        } else {
+            Span::raw(app.input.as_str())
+        };
 
-    // Only show cursor if there is input
-    if !app.input.is_empty() {
+        let input_window = Paragraph::new(input_text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Input (Type / for commands)")
+                    .border_style(Style::default().fg(Color::Cyan)),
+            )
+            .wrap(Wrap { trim: true });
+        f.render_widget(input_window, input_chunks[0]);
+
+        // Commands menu as a list
+        let filtered_commands = app.filtered_commands();
+        // Ensure selected command is in bounds
+        let valid_selected = if filtered_commands.is_empty() {
+            0
+        } else {
+            app.selected_command.min(filtered_commands.len() - 1)
+        };
+
+        let command_items: Vec<ListItem> = filtered_commands
+            .iter()
+            .enumerate()
+            .map(|(i, cmd)| {
+                if i == valid_selected {
+                    // Highlight the selected command with an arrow indicator
+                    ListItem::new(format!("▶ {} - {}", cmd.name, cmd.description))
+                        .style(Style::default().fg(Color::Black).bg(Color::LightCyan))
+                } else {
+                    // Non-selected commands with proper spacing
+                    ListItem::new(format!("  {} - {}", cmd.name, cmd.description))
+                        .style(Style::default().fg(Color::Gray))
+                }
+            })
+            .collect();
+
+        // Create the list with a subtle style
+        let commands_list = List::new(command_items)
+            .block(Block::default().borders(Borders::NONE))
+            .style(Style::default().fg(Color::Gray)) // Default text color
+            .highlight_style(Style::default().fg(Color::Black).bg(Color::LightCyan)); // Selected item style
+        f.render_widget(commands_list, input_chunks[1]);
+
         // Set cursor position at end of input
-        f.set_cursor_position((chunks[2].x + app.input.width() as u16 + 1, chunks[2].y + 1));
+        if !app.input.is_empty() {
+            f.set_cursor_position((
+                input_chunks[0].x + app.input.width() as u16 + 1,
+                input_chunks[0].y + 1,
+            ));
+        }
+    } else {
+        // Regular input box without command menu
+        // Input box with hint text
+        let input_text = if app.input.is_empty() {
+            Span::styled(
+                "Type / to show commands or ask a question...",
+                Style::default().fg(Color::DarkGray),
+            )
+        } else {
+            Span::raw(app.input.as_str())
+        };
+
+        let input_window = Paragraph::new(input_text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Input (Type / for commands)")
+                    .border_style(Style::default().fg(Color::Cyan)),
+            )
+            .wrap(Wrap { trim: true });
+        f.render_widget(input_window, chunks[2]);
+
+        // Only show cursor if there is input
+        if !app.input.is_empty() {
+            // Set cursor position at end of input
+            f.set_cursor_position((chunks[2].x + app.input.width() as u16 + 1, chunks[2].y + 1));
+        }
     }
 }
 

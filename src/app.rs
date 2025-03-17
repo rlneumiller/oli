@@ -13,6 +13,32 @@ use std::{
 };
 use tokio::runtime::Runtime;
 
+// Special command definitions
+#[derive(Debug, Clone)]
+pub struct SpecialCommand {
+    pub name: String,
+    pub description: String,
+}
+
+impl SpecialCommand {
+    pub fn new(name: &str, description: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            description: description.to_string(),
+        }
+    }
+}
+
+// List of available special commands
+pub fn get_available_commands() -> Vec<SpecialCommand> {
+    vec![
+        SpecialCommand::new("/help", "Show help and available commands"),
+        SpecialCommand::new("/clear", "Clear conversation history and free up context"),
+        SpecialCommand::new("/debug", "Toggle debug messages visibility"),
+        SpecialCommand::new("/exit", "Exit the TUI"),
+    ]
+}
+
 #[derive(Debug, PartialEq)]
 pub enum AppState {
     Setup,
@@ -40,6 +66,11 @@ pub struct App {
     pub agent_progress_rx: Option<mpsc::Receiver<String>>,
     pub api_key: Option<String>,
     pub current_working_dir: Option<String>,
+    // Command-related fields
+    pub command_mode: bool,
+    pub available_commands: Vec<SpecialCommand>,
+    pub selected_command: usize,
+    pub show_command_menu: bool,
 }
 
 impl Default for App {
@@ -71,7 +102,7 @@ impl App {
             inference: None,
             download_active: false,
             error_message: None,
-            debug_messages: true,
+            debug_messages: false, // Default to debug messages off
             scroll_position: 0,
             last_query_time: std::time::Instant::now(),
             use_agent: false,
@@ -80,31 +111,206 @@ impl App {
             agent_progress_rx: None,
             api_key: None,
             current_working_dir,
+            // Initialize command-related fields
+            command_mode: false,
+            available_commands: get_available_commands(),
+            selected_command: 0,
+            show_command_menu: false,
+        }
+    }
+
+    // Method to check if input starts with a command prefix
+    pub fn check_command_mode(&mut self) {
+        // Track previous state
+        let was_in_command_mode = self.command_mode;
+
+        // Update command mode state
+        self.command_mode = self.input.starts_with('/');
+        self.show_command_menu = self.command_mode && !self.input.contains(' ');
+
+        // Always reset the command selection in these cases:
+        if self.command_mode {
+            let filtered = self.filtered_commands();
+
+            // Reset when:
+            // 1. Just entered command mode (typed '/')
+            // 2. Selection is out of bounds
+            // 3. Input has changed significantly
+            let should_reset = (self.input.len() == 1 && !was_in_command_mode)
+                || (filtered.is_empty() || self.selected_command >= filtered.len());
+
+            if should_reset {
+                // Start from the beginning
+                self.selected_command = 0;
+
+                // Debug logging
+                if self.debug_messages {
+                    self.messages.push(format!(
+                        "DEBUG: Reset command selection. Input: '{}', Commands: {}",
+                        self.input,
+                        filtered.len()
+                    ));
+                }
+            }
+        }
+    }
+
+    // Method to navigate through commands in the dropdown
+    pub fn select_next_command(&mut self) {
+        // Get filtered commands
+        let filtered = self.filtered_commands();
+
+        if self.show_command_menu && !filtered.is_empty() {
+            // Store the number of commands
+            let num_commands = filtered.len();
+
+            // Always ensure we're in bounds and wrap properly
+            if num_commands == 0 {
+                return; // No commands available
+            }
+
+            // Ensure we're in bounds first
+            self.selected_command = self.selected_command.min(num_commands - 1);
+
+            // Then move forward one position with wraparound
+            self.selected_command = (self.selected_command + 1) % num_commands;
+
+            // Debug message
+            if self.debug_messages {
+                self.messages.push(format!(
+                    "DEBUG: Selected command {} of {}",
+                    self.selected_command + 1,
+                    num_commands
+                ));
+            }
+        }
+    }
+
+    pub fn select_prev_command(&mut self) {
+        // Get filtered commands
+        let filtered = self.filtered_commands();
+
+        if self.show_command_menu && !filtered.is_empty() {
+            // Store the number of commands
+            let num_commands = filtered.len();
+
+            // Always ensure we're in bounds and wrap properly
+            if num_commands == 0 {
+                return; // No commands available
+            }
+
+            // Ensure we're in bounds first
+            self.selected_command = self.selected_command.min(num_commands - 1);
+
+            // Calculate previous with wraparound
+            self.selected_command = if self.selected_command == 0 {
+                num_commands - 1 // Wrap to last command
+            } else {
+                self.selected_command - 1
+            };
+
+            // Debug message
+            if self.debug_messages {
+                self.messages.push(format!(
+                    "DEBUG: Selected command {} of {}",
+                    self.selected_command + 1,
+                    num_commands
+                ));
+            }
+        }
+    }
+
+    // Method to get filtered commands based on current input
+    pub fn filtered_commands(&self) -> Vec<SpecialCommand> {
+        if !self.command_mode || self.input.len() <= 1 {
+            // Return all commands when just typing "/"
+            return self.available_commands.clone();
+        }
+
+        // Filter commands that start with the input text
+        self.available_commands
+            .iter()
+            .filter(|cmd| cmd.name.starts_with(&self.input))
+            .cloned()
+            .collect()
+    }
+
+    // Method to execute a command
+    pub fn execute_command(&mut self) -> bool {
+        if !self.command_mode {
+            return false;
+        }
+
+        // Get the command to execute (either selected or entered)
+        let command_to_execute = if self.show_command_menu {
+            // Get the filtered commands
+            let filtered = self.filtered_commands();
+            if filtered.is_empty() {
+                return false;
+            }
+
+            // Safely get a valid index into the filtered commands list
+            let valid_index = self.selected_command.min(filtered.len() - 1);
+            filtered[valid_index].name.clone()
+        } else {
+            self.input.clone()
+        };
+
+        // Execute the command
+        match command_to_execute.as_str() {
+            "/help" => {
+                self.messages.push("Available commands:".into());
+                for cmd in &self.available_commands {
+                    self.messages
+                        .push(format!("{} - {}", cmd.name, cmd.description));
+                }
+                self.messages.push("".into()); // Empty line for spacing
+                true
+            }
+            "/clear" => {
+                self.messages.clear();
+                self.messages.push("Conversation history cleared.".into());
+                self.scroll_position = 0;
+                true
+            }
+            "/debug" => {
+                // Toggle debug messages visibility
+                self.debug_messages = !self.debug_messages;
+                self.messages.push(format!(
+                    "Debug messages {}.",
+                    if self.debug_messages {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                ));
+                true
+            }
+            "/exit" => {
+                self.state = AppState::Error("quit".into());
+                true
+            }
+            _ => false,
         }
     }
 
     pub fn setup_agent(&mut self) -> Result<()> {
-        // Check if API keys are available either from env vars or from user input
+        // Check if API key is available either from env vars or from user input
         let has_anthropic_key =
             std::env::var("ANTHROPIC_API_KEY").is_ok() || self.api_key.is_some();
-        let has_openai_key = std::env::var("OPENAI_API_KEY").is_ok();
 
-        if !has_anthropic_key && !has_openai_key {
+        if !has_anthropic_key {
+            self.messages
+                .push("No API key found for Anthropic. Agent features will be disabled.".into());
             self.messages.push(
-                "No API keys found for Anthropic or OpenAI. Agent features will be disabled."
-                    .into(),
+                "To enable agent features, set ANTHROPIC_API_KEY environment variable.".into(),
             );
-            self.messages.push("To enable agent features, set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variables.".into());
             self.use_agent = false;
             return Ok(());
         }
 
-        // Prefer Anthropic if available
-        let provider = if has_anthropic_key {
-            LLMProvider::Anthropic
-        } else {
-            LLMProvider::OpenAI
-        };
+        // Only Anthropic is supported
+        let provider = LLMProvider::Anthropic;
 
         // Create progress channel
         let (tx, rx) = mpsc::channel();
@@ -156,12 +362,9 @@ impl App {
     }
 
     fn get_agent_model(&self) -> Option<String> {
-        // If using Anthropic, use Claude 3.7 Sonnet by default
+        // Only Claude 3.7 Sonnet is supported
         if std::env::var("ANTHROPIC_API_KEY").is_ok() || self.api_key.is_some() {
             Some("claude-3-7-sonnet-20250219".to_string()) // Using 3.7 Sonnet model ID
-        } else if std::env::var("OPENAI_API_KEY").is_ok() {
-            // If using OpenAI, use GPT-4o by default
-            Some("gpt-4o".to_string())
         } else {
             None
         }
@@ -238,18 +441,15 @@ impl App {
         self.messages
             .push(format!("Setting up model: {}", model_name));
 
-        // Check if this is a cloud-based model (size is 0)
+        // Currently only supporting Claude 3.7 Sonnet (cloud-based model with size 0)
         if model_size == 0.0 {
             if self.debug_messages {
                 self.messages
-                    .push("DEBUG: Setting up cloud-based model".into());
+                    .push("DEBUG: Setting up Claude 3.7 Sonnet".into());
             }
 
-            // Check if we need to ask for API key (specifically for Claude models)
-            if model_name.contains("Claude")
-                && std::env::var("ANTHROPIC_API_KEY").is_err()
-                && self.api_key.is_none()
-            {
+            // Check if we need to ask for API key
+            if std::env::var("ANTHROPIC_API_KEY").is_err() && self.api_key.is_none() {
                 // Transition to API key input state
                 self.state = AppState::ApiKeyInput;
                 self.input.clear();
@@ -257,9 +457,9 @@ impl App {
                 return Ok(());
             }
 
-            // Cloud models don't need downloading, only API key setup
+            // Setup Anthropic agent with Claude 3.7 Sonnet
             if let Err(e) = self.setup_agent() {
-                self.handle_error(format!("Failed to setup cloud model: {}", e));
+                self.handle_error(format!("Failed to setup Claude 3.7 Sonnet: {}", e));
                 tx.send("setup_failed".into())?;
                 return Ok(());
             }
@@ -269,7 +469,7 @@ impl App {
                 tx.send("setup_complete".into())?;
                 return Ok(());
             } else {
-                self.handle_error("API key not found for the selected cloud model".into());
+                self.handle_error("Anthropic API key not found or is invalid".into());
                 tx.send("setup_failed".into())?;
                 return Ok(());
             }
