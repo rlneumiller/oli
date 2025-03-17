@@ -47,4 +47,6 @@ pub struct App {
     pub tool_permission_status: ToolPermissionStatus, // Current permission status
     pub tool_execution_in_progress: bool, // Flag to indicate active tool execution
     pub show_intermediate_steps: bool, // Show intermediate steps like tool use and file reads
+    pub show_shortcuts_hint: bool, // Show the shortcut hint below input box
+    pub show_detailed_shortcuts: bool, // Show all shortcuts when ? is pressed
 }

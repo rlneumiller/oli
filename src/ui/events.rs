@@ -481,6 +481,10 @@ fn handle_char_key(
                 app.command_mode = true;
                 app.show_command_menu = true;
                 app.selected_command = 0;
+            } else if app.state == AppState::Chat && c == '?' && app.input.len() == 1 {
+                // Toggle detailed shortcuts display and clear the '?' from input
+                app.show_detailed_shortcuts = !app.show_detailed_shortcuts;
+                app.input.clear();
             } else if app.command_mode {
                 // Update command mode state
                 app.check_command_mode();

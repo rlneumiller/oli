@@ -134,17 +134,17 @@ pub fn create_input_box(app: &App, is_api_key: bool) -> Paragraph {
             _ => "Enter your Anthropic API key and press Enter...",
         }
     } else {
-        "Type / to show commands or ask a question..."
+        "" // Empty placeholder for regular input
     };
 
     // Create appropriate input content based on mode
     let input_content = if app.input.is_empty() {
-        Span::styled(placeholder, AppStyles::hint())
+        Span::styled(format!("> {}", placeholder), AppStyles::hint())
     } else if is_api_key {
         // Mask the API key with asterisks for privacy
-        Span::raw("*".repeat(app.input.len()))
+        Span::raw(format!("> {}", "*".repeat(app.input.len())))
     } else {
-        Span::raw(app.input.as_str())
+        Span::raw(format!("> {}", app.input.as_str()))
     };
 
     // Create the title based on context
@@ -179,9 +179,9 @@ pub fn create_command_menu(app: &App) -> List {
         .enumerate()
         .map(|(i, cmd)| {
             if i == valid_selected {
-                // Highlight the selected command with an arrow indicator
+                // Highlight the selected command with an arrow indicator and blue text
                 ListItem::new(format!("▶ {} - {}", cmd.name, cmd.description))
-                    .style(Style::default().fg(Color::Black).bg(Color::LightCyan))
+                    .style(AppStyles::command_highlight())
             } else {
                 // Non-selected commands with proper spacing
                 ListItem::new(format!("  {} - {}", cmd.name, cmd.description))
@@ -194,8 +194,7 @@ pub fn create_command_menu(app: &App) -> List {
     List::new(command_items)
         .block(Block::default().borders(Borders::NONE))
         .style(Style::default().fg(Color::Gray)) // Default text color
-        .highlight_style(Style::default().fg(Color::Black).bg(Color::LightCyan))
-    // Selected item style
+        .highlight_style(AppStyles::command_highlight()) // Use the same style for consistency
 }
 
 /// Create a list of models for selection in setup mode
@@ -586,5 +585,81 @@ fn format_model_response(message: &str) -> Line {
         // Default case - assume this is a model response
         // Just display the message directly without adding "Final answer:" prefix
         Line::from(vec![Span::raw(message)])
+    }
+}
+
+/// Create a shortcuts panel for display below the input box
+pub fn create_shortcuts_panel(app: &App) -> Paragraph {
+    if app.show_detailed_shortcuts {
+        // Show all shortcuts when ? is pressed
+        let shortcuts_text = Text::from(vec![
+            Line::from(vec![Span::styled(
+                "Keyboard Shortcuts",
+                Style::default().add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(vec![
+                Span::styled(
+                    "/ ",
+                    Style::default()
+                        .fg(Color::LightBlue)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("Show commands menu"),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    "? ",
+                    Style::default()
+                        .fg(Color::LightBlue)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("Toggle this help panel"),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    "Esc ",
+                    Style::default()
+                        .fg(Color::LightBlue)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("Exit command mode / Quit app"),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    "PgUp/PgDn ",
+                    Style::default()
+                        .fg(Color::LightBlue)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("Scroll message history"),
+            ]),
+        ]);
+
+        Paragraph::new(shortcuts_text).style(Style::default().fg(Color::Gray))
+    } else if app.show_shortcuts_hint && app.input.is_empty() {
+        // Show just the hint when input is empty
+        let shortcuts_text = Text::from(vec![Line::from(vec![
+            Span::styled("Tip: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "? ",
+                Style::default()
+                    .fg(Color::LightBlue)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("for shortcuts", Style::default().fg(Color::DarkGray)),
+            Span::raw(" | "),
+            Span::styled(
+                "/ ",
+                Style::default()
+                    .fg(Color::LightBlue)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("for commands", Style::default().fg(Color::DarkGray)),
+        ])]);
+
+        Paragraph::new(shortcuts_text).style(Style::default().fg(Color::Gray))
+    } else {
+        // Empty placeholder when not showing shortcuts
+        Paragraph::new("")
     }
 }

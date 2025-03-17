@@ -89,10 +89,11 @@ pub fn draw_api_key_input(f: &mut Frame, app: &App) {
     // Set cursor position for input
     if !app.input.is_empty() {
         // Position the cursor at the end of the masked input
-        f.set_cursor_position((chunks[2].x + app.input.len() as u16 + 1, chunks[2].y + 1));
+        f.set_cursor_position((chunks[2].x + app.input.len() as u16 + 3, chunks[2].y + 1));
+    // +3: +1 for border, +2 for "> " prefix
     } else {
         // Position at the start of the input area
-        f.set_cursor_position((chunks[2].x + 1, chunks[2].y + 1));
+        f.set_cursor_position((chunks[2].x + 3, chunks[2].y + 1)); // +3: +1 for border, +2 for "> " prefix
     }
 }
 
@@ -108,6 +109,15 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
         3 // Default input height
     };
 
+    // Calculate height for shortcuts area
+    let shortcuts_height = if app.show_detailed_shortcuts {
+        6 // Height for detailed shortcuts panel
+    } else if app.show_shortcuts_hint && app.input.is_empty() {
+        1 // Height for shortcut hint
+    } else {
+        0 // No height when not showing shortcuts
+    };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
@@ -115,6 +125,7 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
             Constraint::Length(1),                   // Status bar
             Constraint::Min(3),                      // Chat history (expandable)
             Constraint::Length(input_height as u16), // Input area (with variable height for command menu)
+            Constraint::Length(shortcuts_height),    // Shortcuts area (variable height)
         ])
         .split(f.area());
 
@@ -149,7 +160,7 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
         // Set cursor position at end of input
         if !app.input.is_empty() {
             f.set_cursor_position((
-                input_chunks[0].x + app.input.len() as u16 + 1,
+                input_chunks[0].x + app.input.len() as u16 + 3, // +3: +1 for border, +2 for "> " prefix
                 input_chunks[0].y + 1,
             ));
         }
@@ -161,8 +172,15 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
         // Only show cursor if there is input
         if !app.input.is_empty() {
             // Set cursor position at end of input
-            f.set_cursor_position((chunks[2].x + app.input.len() as u16 + 1, chunks[2].y + 1));
+            f.set_cursor_position((chunks[2].x + app.input.len() as u16 + 3, chunks[2].y + 1));
+            // +3: +1 for border, +2 for "> " prefix
         }
+    }
+
+    // Render shortcuts panel if needed
+    if shortcuts_height > 0 {
+        let shortcuts_panel = create_shortcuts_panel(app);
+        f.render_widget(shortcuts_panel, chunks[3]);
     }
 }
 

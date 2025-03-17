@@ -13,7 +13,14 @@ impl AppStyles {
 
     /// Style for highlighted text
     pub fn highlight() -> Style {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(Color::LightBlue)
+    }
+
+    /// Style for command highlight
+    pub fn command_highlight() -> Style {
+        Style::default()
+            .fg(Color::LightBlue)
+            .add_modifier(Modifier::BOLD)
     }
 
     /// Style for error messages

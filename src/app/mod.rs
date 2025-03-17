@@ -76,6 +76,8 @@ impl App {
             tool_permission_status: ToolPermissionStatus::Pending,
             tool_execution_in_progress: false,
             show_intermediate_steps: true, // Default to showing intermediate steps
+            show_shortcuts_hint: true,     // Default to showing shortcut hints
+            show_detailed_shortcuts: false, // Default to not showing detailed shortcuts
         }
     }
 }
