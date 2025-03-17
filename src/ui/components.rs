@@ -1,4 +1,6 @@
-use crate::app::App;
+use crate::app::commands::CommandHandler;
+use crate::app::models::ModelManager;
+use crate::app::state::App;
 use crate::ui::styles::AppStyles;
 use ratatui::{
     layout::{Alignment, Rect},

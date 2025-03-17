@@ -1,4 +1,6 @@
-use crate::app::{App, AppState};
+use crate::app::commands::CommandHandler;
+use crate::app::models::ModelManager;
+use crate::app::state::{App, AppState};
 use crate::ui::components::*;
 use crate::ui::styles::AppStyles;
 use ratatui::{

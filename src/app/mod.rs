@@ -1,101 +1,30 @@
+pub mod agent;
+pub mod commands;
+pub mod models;
+pub mod permissions;
+pub mod state;
+pub mod utils;
+
+use anyhow::{Context, Result};
+use dotenv::dotenv;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::time::Duration;
+use tokio::runtime::Runtime;
+
+// Re-exports
+pub use agent::{determine_agent_model, determine_provider, AgentManager};
+pub use commands::{get_available_commands, CommandHandler, SpecialCommand};
+pub use models::ModelManager;
+pub use permissions::{PendingToolExecution, PermissionHandler, ToolPermissionStatus};
+pub use state::{App, AppState};
+pub use utils::{ErrorHandler, Scrollable};
+
 use crate::agent::core::{Agent, LLMProvider};
 use crate::inference;
 use crate::models::{get_available_models, ModelConfig};
-use anyhow::{Context, Result};
-use dirs::home_dir;
-use dotenv::dotenv;
-use std::{
-    fs::File,
-    io::{Read, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
-    sync::mpsc,
-    time::Duration,
-};
-use tokio::runtime::Runtime;
-
-// Special command definitions
-#[derive(Debug, Clone)]
-pub struct SpecialCommand {
-    pub name: String,
-    pub description: String,
-}
-
-impl SpecialCommand {
-    pub fn new(name: &str, description: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            description: description.to_string(),
-        }
-    }
-}
-
-// List of available special commands
-pub fn get_available_commands() -> Vec<SpecialCommand> {
-    vec![
-        SpecialCommand::new("/help", "Show help and available commands"),
-        SpecialCommand::new("/clear", "Clear conversation history and free up context"),
-        SpecialCommand::new("/debug", "Toggle debug messages visibility"),
-        SpecialCommand::new("/steps", "Toggle showing intermediate tool steps"),
-        SpecialCommand::new("/exit", "Exit the TUI"),
-    ]
-}
-
-#[derive(Debug, PartialEq)]
-pub enum AppState {
-    Setup,
-    ApiKeyInput,
-    Error(String),
-    Chat,
-}
-
-// Define tool types that require permission
-#[derive(Debug, Clone, PartialEq)]
-pub enum ToolPermissionStatus {
-    Pending, // Waiting for user confirmation
-    Granted, // User has granted permission for this tool
-    Denied,  // User has denied permission for this tool
-}
-
-// Pending tool execution that needs confirmation
-#[derive(Debug, Clone)]
-pub struct PendingToolExecution {
-    pub tool_name: String,
-    pub tool_args: String,
-    pub description: String,
-}
-
-pub struct App {
-    pub state: AppState,
-    pub input: String,
-    pub messages: Vec<String>,
-    pub download_progress: Option<(u64, u64)>,
-    pub selected_model: usize,
-    pub available_models: Vec<ModelConfig>,
-    pub inference: Option<inference::ModelSession>,
-    pub download_active: bool,
-    pub error_message: Option<String>,
-    pub debug_messages: bool,
-    pub scroll_position: usize,
-    pub last_query_time: std::time::Instant,
-    pub last_message_time: std::time::Instant, // Timestamp for message animations
-    pub use_agent: bool,
-    pub agent: Option<Agent>,
-    pub tokio_runtime: Option<Runtime>,
-    pub agent_progress_rx: Option<mpsc::Receiver<String>>,
-    pub api_key: Option<String>,
-    pub current_working_dir: Option<String>,
-    // Command-related fields
-    pub command_mode: bool,
-    pub available_commands: Vec<SpecialCommand>,
-    pub selected_command: usize,
-    pub show_command_menu: bool,
-    // Tool permission-related fields
-    pub permission_required: bool, // If true, we're waiting for user input on a tool permission
-    pub pending_tool: Option<PendingToolExecution>, // The tool waiting for permission
-    pub tool_permission_status: ToolPermissionStatus, // Current permission status
-    pub tool_execution_in_progress: bool, // Flag to indicate active tool execution
-    pub show_intermediate_steps: bool, // Show intermediate steps like tool use and file reads
-}
 
 impl Default for App {
     fn default() -> Self {
@@ -149,9 +78,11 @@ impl App {
             show_intermediate_steps: true, // Default to showing intermediate steps
         }
     }
+}
 
-    // Method to check if input starts with a command prefix
-    pub fn check_command_mode(&mut self) {
+// Implement the various traits for App
+impl CommandHandler for App {
+    fn check_command_mode(&mut self) {
         // Track previous state
         let was_in_command_mode = self.command_mode;
 
@@ -186,8 +117,21 @@ impl App {
         }
     }
 
-    // Method to navigate through commands in the dropdown
-    pub fn select_next_command(&mut self) {
+    fn filtered_commands(&self) -> Vec<SpecialCommand> {
+        if !self.command_mode || self.input.len() <= 1 {
+            // Return all commands when just typing "/"
+            return self.available_commands.clone();
+        }
+
+        // Filter commands that start with the input text
+        self.available_commands
+            .iter()
+            .filter(|cmd| cmd.name.starts_with(&self.input))
+            .cloned()
+            .collect()
+    }
+
+    fn select_next_command(&mut self) {
         // Get filtered commands
         let filtered = self.filtered_commands();
 
@@ -217,7 +161,7 @@ impl App {
         }
     }
 
-    pub fn select_prev_command(&mut self) {
+    fn select_prev_command(&mut self) {
         // Get filtered commands
         let filtered = self.filtered_commands();
 
@@ -251,23 +195,7 @@ impl App {
         }
     }
 
-    // Method to get filtered commands based on current input
-    pub fn filtered_commands(&self) -> Vec<SpecialCommand> {
-        if !self.command_mode || self.input.len() <= 1 {
-            // Return all commands when just typing "/"
-            return self.available_commands.clone();
-        }
-
-        // Filter commands that start with the input text
-        self.available_commands
-            .iter()
-            .filter(|cmd| cmd.name.starts_with(&self.input))
-            .cloned()
-            .collect()
-    }
-
-    // Method to execute a command
-    pub fn execute_command(&mut self) -> bool {
+    fn execute_command(&mut self) -> bool {
         if !self.command_mode {
             return false;
         }
@@ -347,155 +275,23 @@ impl App {
             _ => false,
         }
     }
+}
 
-    pub fn setup_agent(&mut self) -> Result<()> {
-        // Check if API keys are available either from env vars or from user input
-        let has_anthropic_key =
-            std::env::var("ANTHROPIC_API_KEY").is_ok() || self.api_key.is_some();
-        let has_openai_key = std::env::var("OPENAI_API_KEY").is_ok() || self.api_key.is_some();
-
-        // Determine appropriate provider based on the selected model
-        let provider = match self.current_model().name.as_str() {
-            "GPT-4o" => {
-                if !has_openai_key {
-                    self.messages.push(
-                        "No API key found for OpenAI. Agent features will be disabled.".into(),
-                    );
-                    self.messages.push(
-                        "To enable agent features, set OPENAI_API_KEY environment variable.".into(),
-                    );
-                    self.use_agent = false;
-                    return Ok(());
-                }
-                LLMProvider::OpenAI
-            }
-            "Claude 3.7 Sonnet" => {
-                if !has_anthropic_key {
-                    self.messages.push(
-                        "No API key found for Anthropic. Agent features will be disabled.".into(),
-                    );
-                    self.messages.push(
-                        "To enable agent features, set ANTHROPIC_API_KEY environment variable."
-                            .into(),
-                    );
-                    self.use_agent = false;
-                    return Ok(());
-                }
-                LLMProvider::Anthropic
-            }
-            _ => {
-                // If we're using another model that doesn't match either provider
-                if has_anthropic_key {
-                    LLMProvider::Anthropic
-                } else if has_openai_key {
-                    LLMProvider::OpenAI
-                } else {
-                    self.messages.push(
-                        "No API key found for any provider. Agent features will be disabled."
-                            .into(),
-                    );
-                    self.messages.push("To enable agent features, set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable.".into());
-                    self.use_agent = false;
-                    return Ok(());
-                }
-            }
-        };
-
-        // Create progress channel
-        let (tx, rx) = mpsc::channel();
-        self.agent_progress_rx = Some(rx);
-
-        // Create the agent with API key if provided by user
-        let mut agent = if let Some(api_key) = &self.api_key {
-            Agent::new_with_api_key(provider.clone(), api_key.clone())
-        } else {
-            Agent::new(provider.clone())
-        };
-
-        // Add model if specified
-        if let Some(model) = self.get_agent_model() {
-            agent = agent.with_model(model);
-        }
-
-        // Initialize agent in the tokio runtime
-        if let Some(runtime) = &self.tokio_runtime {
-            runtime.block_on(async {
-                let result = if let Some(api_key) = self.api_key.clone() {
-                    // If we have a direct API key, use it (handles both user-input and env var)
-                    agent.initialize_with_api_key(api_key).await
-                } else {
-                    // Otherwise try to initialize from environment variables
-                    agent.initialize().await
-                };
-
-                if let Err(e) = result {
-                    tx.send(format!("Failed to initialize agent: {}", e))
-                        .unwrap();
-                    return;
-                }
-                tx.send("Agent initialized successfully".to_string())
-                    .unwrap();
-            });
-
-            self.agent = Some(agent);
-            self.use_agent = true;
-
-            // Show provider-specific message
-            match provider {
-                LLMProvider::Anthropic => {
-                    self.messages
-                        .push("Claude 3.7 Sonnet agent capabilities enabled!".into());
-                }
-                LLMProvider::OpenAI => {
-                    self.messages
-                        .push("GPT-4o agent capabilities enabled!".into());
-                }
-            }
-        } else {
-            self.messages
-                .push("Failed to create async runtime. Agent features will be disabled.".into());
-            self.use_agent = false;
-        }
-
-        Ok(())
-    }
-
-    fn get_agent_model(&self) -> Option<String> {
-        // Return the appropriate model ID based on the current selected model
-        match self.current_model().name.as_str() {
-            "Claude 3.7 Sonnet" => {
-                if std::env::var("ANTHROPIC_API_KEY").is_ok() || self.api_key.is_some() {
-                    Some("claude-3-7-sonnet-20250219".to_string())
-                } else {
-                    None
-                }
-            }
-            "GPT-4o" => {
-                if std::env::var("OPENAI_API_KEY").is_ok() || self.api_key.is_some() {
-                    Some("gpt-4o".to_string())
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
-    // Methods for scrolling through chat history
-    pub fn scroll_up(&mut self, amount: usize) {
+impl Scrollable for App {
+    fn scroll_up(&mut self, amount: usize) {
         if self.scroll_position > 0 {
             self.scroll_position = self.scroll_position.saturating_sub(amount);
         }
     }
 
-    pub fn scroll_down(&mut self, amount: usize) {
+    fn scroll_down(&mut self, amount: usize) {
         let max_scroll = self.messages.len().saturating_sub(10);
         if self.scroll_position < max_scroll {
             self.scroll_position = (self.scroll_position + amount).min(max_scroll);
         }
     }
 
-    pub fn auto_scroll_to_bottom(&mut self) {
+    fn auto_scroll_to_bottom(&mut self) {
         // Calculate a better scroll position that ensures the latest messages are visible
         // We need to consider the actual height of the terminal window, but since that's
         // not directly available here, we use a conservative estimate to ensure we're
@@ -510,14 +306,34 @@ impl App {
         // even if multiple messages come in rapid succession
         self.messages.push("".to_string()); // Add empty line to ensure spacing
     }
+}
 
-    // Get current selected model config
-    pub fn current_model(&self) -> &ModelConfig {
+impl ErrorHandler for App {
+    fn handle_error(&mut self, message: String) {
+        self.error_message = Some(message.clone());
+        self.messages.push(format!("Error: {}", message));
+    }
+}
+
+impl ModelManager for App {
+    fn current_model(&self) -> &ModelConfig {
         &self.available_models[self.selected_model]
     }
 
-    pub fn models_dir() -> Result<PathBuf> {
-        let models_dir = home_dir()
+    fn select_next_model(&mut self) {
+        self.selected_model = (self.selected_model + 1) % self.available_models.len();
+    }
+
+    fn select_prev_model(&mut self) {
+        self.selected_model = if self.selected_model == 0 {
+            self.available_models.len() - 1
+        } else {
+            self.selected_model - 1
+        };
+    }
+
+    fn models_dir() -> Result<PathBuf> {
+        let models_dir = dirs::home_dir()
             .context("Failed to find home directory")?
             .join(".oli")
             .join("models");
@@ -530,13 +346,203 @@ impl App {
         Ok(models_dir)
     }
 
-    // Get a path for a specific model
-    pub fn model_path(&self, model_name: &str) -> Result<PathBuf> {
+    fn model_path(&self, model_name: &str) -> Result<PathBuf> {
         let models_dir = Self::models_dir()?;
         Ok(models_dir.join(model_name))
     }
 
-    pub fn setup_models(&mut self, tx: mpsc::Sender<String>) -> Result<()> {
+    fn verify_model(&self, path: &Path) -> Result<()> {
+        // Check if file exists and has a reasonable size
+        let metadata = std::fs::metadata(path)?;
+        if metadata.len() < 1000 {
+            anyhow::bail!(
+                "File too small to be a valid model ({}bytes)",
+                metadata.len()
+            );
+        }
+
+        // Read first few bytes to check the file format
+        let mut file = File::open(path)?;
+        let mut header = [0u8; 8];
+
+        if file.read_exact(&mut header[0..4]).is_err() {
+            anyhow::bail!("Failed to read header - file may be corrupted");
+        }
+
+        // Check for GGUF format
+        if &header[0..4] == b"GGUF" {
+            return Ok(());
+        }
+
+        // Check for GGML format (older models)
+        if &header[0..4] == b"GGML" {
+            return Ok(());
+        }
+
+        // Read first ~100 bytes to check for HTML error pages
+        let mut start_bytes = vec![0u8; 100];
+        file.seek(SeekFrom::Start(0))?; // Reset to beginning of file
+        let n = file.read(&mut start_bytes)?;
+        start_bytes.truncate(n);
+
+        let start_text = String::from_utf8_lossy(&start_bytes);
+
+        // Check if the file is actually an HTML error page
+        if start_text.contains("<html")
+            || start_text.contains("<!DOCTYPE")
+            || start_text.contains("<HTML")
+            || start_text.contains("<?xml")
+        {
+            anyhow::bail!("Received HTML page instead of model file");
+        }
+
+        // If the file is large enough, assume it's a valid model despite unknown format
+        if metadata.len() > 100 * 1024 * 1024 {
+            // > 100MB
+            return Ok(());
+        }
+
+        anyhow::bail!(
+            "Unrecognized model format (magic: {:?} or '{}')",
+            &header[0..4],
+            String::from_utf8_lossy(&header[0..4])
+        )
+    }
+
+    fn verify_static(path: &Path) -> Result<()> {
+        let mut file = File::open(path)?;
+        let mut header = [0u8; 8]; // Read more bytes to check different formats
+
+        if let Err(e) = file.read_exact(&mut header[0..4]) {
+            anyhow::bail!("Failed to read file header: {}", e);
+        }
+
+        // Check for GGUF format (standard)
+        if &header[0..4] == b"GGUF" {
+            return Ok(());
+        }
+
+        // Check for GGML format (older models)
+        if &header[0..4] == b"GGML" {
+            return Ok(());
+        }
+
+        // Try to read a bit more to check for binary format
+        if let Ok(()) = file.read_exact(&mut header[4..8]) {
+            // Some binary signatures to check
+            if header[0] == 0x80
+                && header[1] <= 0x02
+                && (header[2] == 0x00 || header[2] == 0x01)
+                && header[3] == 0x00
+            {
+                return Ok(());
+            }
+        }
+
+        // Get the file size to see if it's reasonable for an LLM
+        if let Ok(metadata) = std::fs::metadata(path) {
+            let size_mb = metadata.len() / (1024 * 1024);
+            // If file is reasonably large (> 100MB), accept it despite unknown format
+            if size_mb > 100 {
+                return Ok(());
+            }
+        }
+
+        // If we get here, the file format wasn't recognized
+        let magic_str = String::from_utf8_lossy(&header[0..4]);
+        anyhow::bail!(
+            "Unknown model format (magic: {:?} or '{}')",
+            &header[0..4],
+            magic_str
+        )
+    }
+
+    fn get_agent_model(&self) -> Option<String> {
+        // Return the appropriate model ID based on the current selected model
+        let model_name = self.current_model().name.as_str();
+        let has_api_key = std::env::var("ANTHROPIC_API_KEY").is_ok()
+            || std::env::var("OPENAI_API_KEY").is_ok()
+            || self.api_key.is_some();
+
+        agent::determine_agent_model(model_name, has_api_key)
+    }
+
+    fn load_model(&mut self, model_path: &Path) -> Result<()> {
+        if self.debug_messages {
+            self.messages
+                .push(format!("DEBUG: Loading model from {:?}", model_path));
+            self.messages.push(format!(
+                "DEBUG: Using {} GPU layers",
+                self.current_model().n_gpu_layers
+            ));
+        }
+
+        let n_gpu_layers = self.current_model().n_gpu_layers;
+        let model_config = self.current_model();
+
+        // Check if the model supports agent capabilities
+        let supports_agent = model_config
+            .agentic_capabilities
+            .as_ref()
+            .map(|caps| !caps.is_empty())
+            .unwrap_or(false);
+
+        // Try setting up agent if supported
+        if supports_agent {
+            if let Err(e) = self.setup_agent() {
+                self.messages.push(format!(
+                    "WARNING: Failed to initialize agent capabilities: {}",
+                    e
+                ));
+                self.use_agent = false;
+            } else if self.use_agent {
+                self.messages.push(
+                    "💡 Agent capabilities enabled! You can now use advanced code tasks.".into(),
+                );
+                self.messages
+                    .push("Try asking about files, editing code, or running commands.".into());
+                self.download_active = false;
+                self.state = AppState::Chat;
+
+                // If agent is successfully set up, we can skip loading the local model
+                if self.agent.is_some() {
+                    return Ok(());
+                }
+            }
+        }
+
+        // Fall back to loading local model
+        match inference::ModelSession::new(model_path, n_gpu_layers) {
+            Ok(inference) => {
+                self.inference = Some(inference);
+                self.messages.push("Model loaded successfully!".into());
+                self.messages
+                    .push("You can now ask questions about coding tasks.".into());
+                self.messages.push("Try asking about specific programming concepts, debugging help, or code explanations.".into());
+                self.download_active = false;
+                self.state = AppState::Chat;
+                Ok(())
+            }
+            Err(e) => {
+                let error_msg = format!("Failed to load model: {}", e);
+                self.messages.push(format!("ERROR: {}", error_msg));
+
+                // Add more detailed diagnostic info
+                if self.debug_messages {
+                    self.messages
+                        .push(format!("DEBUG: Model file exists: {}", model_path.exists()));
+                    if let Ok(metadata) = std::fs::metadata(model_path) {
+                        self.messages
+                            .push(format!("DEBUG: Model file size: {} bytes", metadata.len()));
+                    }
+                }
+
+                Err(anyhow::anyhow!(error_msg))
+            }
+        }
+    }
+
+    fn setup_models(&mut self, tx: mpsc::Sender<String>) -> Result<()> {
         if self.debug_messages {
             self.messages.push("DEBUG: setup_models called".into());
         }
@@ -666,82 +672,6 @@ impl App {
                 .push(format!("DEBUG: download_active={}", self.download_active));
         }
         self.download_file(primary_url, fallback_url, path, tx)
-    }
-
-    // Add methods to change selected model
-    pub fn select_next_model(&mut self) {
-        self.selected_model = (self.selected_model + 1) % self.available_models.len();
-    }
-
-    pub fn select_prev_model(&mut self) {
-        self.selected_model = if self.selected_model == 0 {
-            self.available_models.len() - 1
-        } else {
-            self.selected_model - 1
-        };
-    }
-
-    fn handle_error(&mut self, message: String) {
-        self.error_message = Some(message.clone());
-        self.messages.push(format!("Error: {}", message));
-    }
-
-    fn verify_model(&self, path: &Path) -> Result<()> {
-        // Check if file exists and has a reasonable size
-        let metadata = std::fs::metadata(path)?;
-        if metadata.len() < 1000 {
-            anyhow::bail!(
-                "File too small to be a valid model ({}bytes)",
-                metadata.len()
-            );
-        }
-
-        // Read first few bytes to check the file format
-        let mut file = File::open(path)?;
-        let mut header = [0u8; 8];
-
-        if file.read_exact(&mut header[0..4]).is_err() {
-            anyhow::bail!("Failed to read header - file may be corrupted");
-        }
-
-        // Check for GGUF format
-        if &header[0..4] == b"GGUF" {
-            return Ok(());
-        }
-
-        // Check for GGML format (older models)
-        if &header[0..4] == b"GGML" {
-            return Ok(());
-        }
-
-        // Read first ~100 bytes to check for HTML error pages
-        let mut start_bytes = vec![0u8; 100];
-        file.seek(SeekFrom::Start(0))?; // Reset to beginning of file
-        let n = file.read(&mut start_bytes)?;
-        start_bytes.truncate(n);
-
-        let start_text = String::from_utf8_lossy(&start_bytes);
-
-        // Check if the file is actually an HTML error page
-        if start_text.contains("<html")
-            || start_text.contains("<!DOCTYPE")
-            || start_text.contains("<HTML")
-            || start_text.contains("<?xml")
-        {
-            anyhow::bail!("Received HTML page instead of model file");
-        }
-
-        // If the file is large enough, assume it's a valid model despite unknown format
-        if metadata.len() > 100 * 1024 * 1024 {
-            // > 100MB
-            return Ok(());
-        }
-
-        anyhow::bail!(
-            "Unrecognized model format (magic: {:?} or '{}')",
-            &header[0..4],
-            String::from_utf8_lossy(&header[0..4])
-        )
     }
 
     fn download_file(
@@ -881,182 +811,10 @@ impl App {
 
         Ok(())
     }
+}
 
-    fn verify_static(path: &Path) -> Result<()> {
-        let mut file = File::open(path)?;
-        let mut header = [0u8; 8]; // Read more bytes to check different formats
-
-        if let Err(e) = file.read_exact(&mut header[0..4]) {
-            anyhow::bail!("Failed to read file header: {}", e);
-        }
-
-        // Check for GGUF format (standard)
-        if &header[0..4] == b"GGUF" {
-            return Ok(());
-        }
-
-        // Check for GGML format (older models)
-        if &header[0..4] == b"GGML" {
-            return Ok(());
-        }
-
-        // Try to read a bit more to check for binary format
-        if let Ok(()) = file.read_exact(&mut header[4..8]) {
-            // Some binary signatures to check
-            if header[0] == 0x80
-                && header[1] <= 0x02
-                && (header[2] == 0x00 || header[2] == 0x01)
-                && header[3] == 0x00
-            {
-                return Ok(());
-            }
-        }
-
-        // Get the file size to see if it's reasonable for an LLM
-        if let Ok(metadata) = std::fs::metadata(path) {
-            let size_mb = metadata.len() / (1024 * 1024);
-            // If file is reasonably large (> 100MB), accept it despite unknown format
-            if size_mb > 100 {
-                return Ok(());
-            }
-        }
-
-        // If we get here, the file format wasn't recognized
-        let magic_str = String::from_utf8_lossy(&header[0..4]);
-        anyhow::bail!(
-            "Unknown model format (magic: {:?} or '{}')",
-            &header[0..4],
-            magic_str
-        )
-    }
-
-    pub fn load_model(&mut self, model_path: &Path) -> Result<()> {
-        if self.debug_messages {
-            self.messages
-                .push(format!("DEBUG: Loading model from {:?}", model_path));
-            self.messages.push(format!(
-                "DEBUG: Using {} GPU layers",
-                self.current_model().n_gpu_layers
-            ));
-        }
-
-        let n_gpu_layers = self.current_model().n_gpu_layers;
-        let model_config = self.current_model();
-
-        // Check if the model supports agent capabilities
-        let supports_agent = model_config
-            .agentic_capabilities
-            .as_ref()
-            .map(|caps| !caps.is_empty())
-            .unwrap_or(false);
-
-        // Try setting up agent if supported
-        if supports_agent {
-            if let Err(e) = self.setup_agent() {
-                self.messages.push(format!(
-                    "WARNING: Failed to initialize agent capabilities: {}",
-                    e
-                ));
-                self.use_agent = false;
-            } else if self.use_agent {
-                self.messages.push(
-                    "💡 Agent capabilities enabled! You can now use advanced code tasks.".into(),
-                );
-                self.messages
-                    .push("Try asking about files, editing code, or running commands.".into());
-                self.download_active = false;
-                self.state = AppState::Chat;
-
-                // If agent is successfully set up, we can skip loading the local model
-                if self.agent.is_some() {
-                    return Ok(());
-                }
-            }
-        }
-
-        // Fall back to loading local model
-        match inference::ModelSession::new(model_path, n_gpu_layers) {
-            Ok(inference) => {
-                self.inference = Some(inference);
-                self.messages.push("Model loaded successfully!".into());
-                self.messages
-                    .push("You can now ask questions about coding tasks.".into());
-                self.messages.push("Try asking about specific programming concepts, debugging help, or code explanations.".into());
-                self.download_active = false;
-                self.state = AppState::Chat;
-                Ok(())
-            }
-            Err(e) => {
-                let error_msg = format!("Failed to load model: {}", e);
-                self.messages.push(format!("ERROR: {}", error_msg));
-
-                // Add more detailed diagnostic info
-                if self.debug_messages {
-                    self.messages
-                        .push(format!("DEBUG: Model file exists: {}", model_path.exists()));
-                    if let Ok(metadata) = std::fs::metadata(model_path) {
-                        self.messages
-                            .push(format!("DEBUG: Model file size: {} bytes", metadata.len()));
-                    }
-                }
-
-                Err(anyhow::anyhow!(error_msg))
-            }
-        }
-    }
-
-    pub fn query_model(&mut self, prompt: &str) -> Result<String> {
-        if self.debug_messages {
-            self.messages.push(format!(
-                "DEBUG: Querying with: {}",
-                if prompt.len() > 50 {
-                    format!("{}...", &prompt[..50])
-                } else {
-                    prompt.to_string()
-                }
-            ));
-        }
-
-        // Try using agent if enabled
-        if self.use_agent && self.agent.is_some() {
-            return self.query_with_agent(prompt);
-        }
-
-        // Fall back to local model if agent is not available
-        // Check if the model is loaded
-        match self.inference.as_mut() {
-            Some(inference) => {
-                // Attempt to generate a response
-                match inference.generate(prompt) {
-                    Ok(response) => {
-                        // Successful response
-                        if self.debug_messages {
-                            self.messages.push(format!(
-                                "DEBUG: Generated response of {} characters",
-                                response.len()
-                            ));
-                        }
-                        Ok(response)
-                    }
-                    Err(e) => {
-                        // Handle generation error
-                        let error_msg = format!("Error generating response: {}", e);
-                        self.messages.push(format!("ERROR: {}", error_msg));
-                        Err(anyhow::anyhow!(error_msg))
-                    }
-                }
-            }
-            None => {
-                // Model not loaded
-                let error_msg = "Model not loaded".to_string();
-                self.messages.push(format!("ERROR: {}", error_msg));
-                Err(anyhow::anyhow!(error_msg))
-            }
-        }
-    }
-
-    // Check if a tool requires permission before execution
-    pub fn requires_permission(&self, tool_name: &str) -> bool {
+impl PermissionHandler for App {
+    fn requires_permission(&self, tool_name: &str) -> bool {
         // Tools that require permission for potentially destructive operations
         match tool_name {
             "Edit" | "Replace" | "NotebookEditCell" => true, // File modification
@@ -1066,8 +824,7 @@ impl App {
         }
     }
 
-    // Request permission for tool execution
-    pub fn request_tool_permission(&mut self, tool_name: &str, args: &str) -> ToolPermissionStatus {
+    fn request_tool_permission(&mut self, tool_name: &str, args: &str) -> ToolPermissionStatus {
         // If permission is not required for this tool, auto-grant
         if !self.requires_permission(tool_name) {
             return ToolPermissionStatus::Granted;
@@ -1129,7 +886,19 @@ impl App {
         ToolPermissionStatus::Pending
     }
 
-    // Helper method to extract an argument value from JSON-like args string
+    fn handle_permission_response(&mut self, granted: bool) {
+        if granted {
+            self.tool_permission_status = ToolPermissionStatus::Granted;
+            self.messages
+                .push("[permission] ✅ Permission granted, executing tool...".to_string());
+        } else {
+            self.tool_permission_status = ToolPermissionStatus::Denied;
+            self.messages
+                .push("[permission] ❌ Permission denied, skipping tool execution".to_string());
+        }
+        self.auto_scroll_to_bottom();
+    }
+
     fn extract_argument(&self, args: &str, arg_name: &str) -> Option<String> {
         // Simple parsing of JSON-like string to extract a specific argument
         if let Some(start_idx) = args.find(&format!("\"{}\":", arg_name)) {
@@ -1155,21 +924,146 @@ impl App {
         }
     }
 
-    // Handle permission response from user
-    pub fn handle_permission_response(&mut self, granted: bool) {
-        if granted {
-            self.tool_permission_status = ToolPermissionStatus::Granted;
-            self.messages
-                .push("[permission] ✅ Permission granted, executing tool...".to_string());
+    fn requires_permission_check(&self) -> bool {
+        true // Default to requiring permission for risky operations
+    }
+}
+
+impl AgentManager for App {
+    fn setup_agent(&mut self) -> Result<()> {
+        // Check if API keys are available either from env vars or from user input
+        let has_anthropic_key =
+            std::env::var("ANTHROPIC_API_KEY").is_ok() || self.api_key.is_some();
+        let has_openai_key = std::env::var("OPENAI_API_KEY").is_ok() || self.api_key.is_some();
+
+        // Determine appropriate provider based on the selected model
+        let provider = match agent::determine_provider(
+            self.current_model().name.as_str(),
+            has_anthropic_key,
+            has_openai_key,
+        ) {
+            Some(provider) => provider,
+            None => {
+                // No valid provider found
+                self.messages.push(
+                    "No API key found for any provider. Agent features will be disabled.".into(),
+                );
+                self.messages.push("To enable agent features, set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable.".into());
+                self.use_agent = false;
+                return Ok(());
+            }
+        };
+
+        // Create progress channel
+        let (tx, rx) = mpsc::channel();
+        self.agent_progress_rx = Some(rx);
+
+        // Create the agent with API key if provided by user
+        let mut agent = if let Some(api_key) = &self.api_key {
+            Agent::new_with_api_key(provider.clone(), api_key.clone())
         } else {
-            self.tool_permission_status = ToolPermissionStatus::Denied;
-            self.messages
-                .push("[permission] ❌ Permission denied, skipping tool execution".to_string());
+            Agent::new(provider.clone())
+        };
+
+        // Add model if specified
+        if let Some(model) = self.get_agent_model() {
+            agent = agent.with_model(model);
         }
-        self.auto_scroll_to_bottom();
+
+        // Initialize agent in the tokio runtime
+        if let Some(runtime) = &self.tokio_runtime {
+            runtime.block_on(async {
+                let result = if let Some(api_key) = self.api_key.clone() {
+                    // If we have a direct API key, use it (handles both user-input and env var)
+                    agent.initialize_with_api_key(api_key).await
+                } else {
+                    // Otherwise try to initialize from environment variables
+                    agent.initialize().await
+                };
+
+                if let Err(e) = result {
+                    tx.send(format!("Failed to initialize agent: {}", e))
+                        .unwrap();
+                    return;
+                }
+                tx.send("Agent initialized successfully".to_string())
+                    .unwrap();
+            });
+
+            self.agent = Some(agent);
+            self.use_agent = true;
+
+            // Show provider-specific message
+            match provider {
+                LLMProvider::Anthropic => {
+                    self.messages
+                        .push("Claude 3.7 Sonnet agent capabilities enabled!".into());
+                }
+                LLMProvider::OpenAI => {
+                    self.messages
+                        .push("GPT-4o agent capabilities enabled!".into());
+                }
+            }
+        } else {
+            self.messages
+                .push("Failed to create async runtime. Agent features will be disabled.".into());
+            self.use_agent = false;
+        }
+
+        Ok(())
     }
 
-    pub fn query_with_agent(&mut self, prompt: &str) -> Result<String> {
+    fn query_model(&mut self, prompt: &str) -> Result<String> {
+        if self.debug_messages {
+            self.messages.push(format!(
+                "DEBUG: Querying with: {}",
+                if prompt.len() > 50 {
+                    format!("{}...", &prompt[..50])
+                } else {
+                    prompt.to_string()
+                }
+            ));
+        }
+
+        // Try using agent if enabled
+        if self.use_agent && self.agent.is_some() {
+            return self.query_with_agent(prompt);
+        }
+
+        // Fall back to local model if agent is not available
+        // Check if the model is loaded
+        match self.inference.as_mut() {
+            Some(inference) => {
+                // Attempt to generate a response
+                match inference.generate(prompt) {
+                    Ok(response) => {
+                        // Successful response
+                        if self.debug_messages {
+                            self.messages.push(format!(
+                                "DEBUG: Generated response of {} characters",
+                                response.len()
+                            ));
+                        }
+                        Ok(response)
+                    }
+                    Err(e) => {
+                        // Handle generation error
+                        let error_msg = format!("Error generating response: {}", e);
+                        self.messages.push(format!("ERROR: {}", error_msg));
+                        Err(anyhow::anyhow!(error_msg))
+                    }
+                }
+            }
+            None => {
+                // Model not loaded
+                let error_msg = "Model not loaded".to_string();
+                self.messages.push(format!("ERROR: {}", error_msg));
+                Err(anyhow::anyhow!(error_msg))
+            }
+        }
+    }
+
+    fn query_with_agent(&mut self, prompt: &str) -> Result<String> {
         // Make sure we have a tokio runtime
         let runtime = match &self.tokio_runtime {
             Some(rt) => rt,
@@ -1330,10 +1224,5 @@ impl App {
         self.pending_tool = None;
 
         result
-    }
-
-    // Helper function to check if we should check for tool permissions
-    pub fn requires_permission_check(&self) -> bool {
-        true // Default to requiring permission for risky operations
     }
 }

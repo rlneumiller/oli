@@ -7,5 +7,7 @@ mod inference;
 mod models;
 mod ui;
 
-pub use app::App;
+// Re-export App and UI for the main application
+pub use app::state::App;
+pub use app::state::AppState;
 pub use ui::run_app;

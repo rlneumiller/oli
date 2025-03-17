@@ -1,6 +1,11 @@
 #![allow(clippy::needless_borrow)]
 
-use crate::app::{App, AppState};
+use crate::app::agent::AgentManager;
+use crate::app::commands::CommandHandler;
+use crate::app::models::ModelManager;
+use crate::app::permissions::PermissionHandler;
+use crate::app::state::{App, AppState};
+use crate::app::utils::Scrollable;
 use crate::ui::draw::ui;
 use crate::ui::guards::TerminalGuard;
 use crate::ui::messages::{initialize_setup_messages, process_message};
@@ -280,7 +285,7 @@ fn handle_enter_key(
 
                 // Query the model
                 match app.query_model(&input) {
-                    Ok(response) => {
+                    Ok(response_string) => {
                         // Remove the thinking message (both old and new formats)
                         if let Some(last) = app.messages.last() {
                             if last == "Thinking..." || last.starts_with("[thinking]") {
@@ -300,7 +305,7 @@ fn handle_enter_key(
                         }
 
                         // Process and format the response for better display
-                        format_and_display_response(app, &response);
+                        format_and_display_response(app, &response_string);
 
                         // Force scrolling to the bottom to show the new response
                         app.auto_scroll_to_bottom();

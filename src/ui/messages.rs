@@ -1,4 +1,7 @@
-use crate::app::{App, AppState};
+use crate::app::models::ModelManager;
+use crate::app::permissions::PermissionHandler;
+use crate::app::state::{App, AppState};
+use crate::app::utils::Scrollable;
 use anyhow::Result;
 
 /// Initializes welcome messages for the setup screen
