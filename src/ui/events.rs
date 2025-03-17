@@ -10,7 +10,7 @@ use crate::ui::draw::ui;
 use crate::ui::guards::TerminalGuard;
 use crate::ui::messages::{initialize_setup_messages, process_message};
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode};
+use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{io, sync::mpsc, time::Duration};
 
@@ -56,7 +56,8 @@ pub fn run_app() -> Result<()> {
         // Process user input
         if crossterm::event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = crossterm::event::read()? {
-                process_key_event(&mut app, key.code, &tx, &mut terminal)?;
+                // Pass both the key code and the modifiers to the process_key_event function
+                process_key_event(&mut app, key.code, key.modifiers, &tx, &mut terminal)?;
             }
         } else {
             std::thread::sleep(Duration::from_millis(5));
@@ -155,6 +156,7 @@ fn process_auto_scroll(
 fn process_key_event(
     app: &mut App,
     key: KeyCode,
+    modifiers: KeyModifiers,
     tx: &mpsc::Sender<String>,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
@@ -194,12 +196,28 @@ fn process_key_event(
             }
             app.state = AppState::Error("quit".into());
         }
-        KeyCode::Enter => handle_enter_key(app, tx, terminal)?,
+        // Enter handling with special case for backslash-newline
+        KeyCode::Enter => {
+            // Check if the input ends with backslash - treat as newline request
+            if app.state == AppState::Chat && app.input.ends_with('\\') {
+                // Remove the backslash
+                app.input.pop();
+
+                // Add a newline character
+                app.input.push('\n');
+
+                // Force immediate redraw to update input box size and cursor position
+                terminal.draw(|f| ui(f, &app))?;
+            } else {
+                // Regular Enter handling
+                handle_enter_key(app, tx, terminal)?;
+            }
+        }
         KeyCode::Down => handle_down_key(app, terminal)?,
         KeyCode::Tab => handle_tab_key(app, terminal)?,
         KeyCode::Up => handle_up_key(app, terminal)?,
         KeyCode::BackTab => handle_backtab_key(app, terminal)?,
-        KeyCode::Char(c) => handle_char_key(app, c, terminal)?,
+        KeyCode::Char(c) => handle_char_key(app, c, modifiers, terminal)?,
         KeyCode::Backspace => handle_backspace_key(app, terminal)?,
         KeyCode::PageUp => handle_page_up_key(app, terminal)?,
         KeyCode::PageDown => handle_page_down_key(app, terminal)?,
@@ -272,6 +290,9 @@ fn handle_enter_key(
 
             let input = std::mem::take(&mut app.input);
             if !input.is_empty() {
+                // No debug output needed here
+
+                // Add user message with preserved newlines
                 app.messages.push(format!("> {}", input));
 
                 // Show a "thinking" message - this will soon be replaced with real-time tool execution
@@ -470,10 +491,13 @@ fn handle_backtab_key(
 fn handle_char_key(
     app: &mut App,
     c: char,
+    _: KeyModifiers, // Unused parameter
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     match app.state {
         AppState::Chat | AppState::ApiKeyInput => {
+            // Newlines are handled in the Enter key handler
+
             app.input.push(c);
 
             // Check if we're entering command mode with the / character
@@ -481,6 +505,8 @@ fn handle_char_key(
                 app.command_mode = true;
                 app.show_command_menu = true;
                 app.selected_command = 0;
+                // Hide detailed shortcuts when typing /
+                app.show_detailed_shortcuts = false;
             } else if app.state == AppState::Chat && c == '?' && app.input.len() == 1 {
                 // Toggle detailed shortcuts display and clear the '?' from input
                 app.show_detailed_shortcuts = !app.show_detailed_shortcuts;
@@ -488,6 +514,9 @@ fn handle_char_key(
             } else if app.command_mode {
                 // Update command mode state
                 app.check_command_mode();
+            } else {
+                // Hide detailed shortcuts when typing anything else
+                app.show_detailed_shortcuts = false;
             }
 
             terminal.draw(|f| ui(f, &app))?;

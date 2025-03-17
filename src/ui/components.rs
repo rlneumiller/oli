@@ -45,10 +45,7 @@ pub fn create_status_bar(app: &App) -> Line {
         Span::raw(" | "),
         Span::styled(scroll_info, Style::default().fg(Color::DarkGray)),
         Span::raw(" | "),
-        Span::styled(
-            " PgUp/PgDn: Scroll  Esc: Quit  Type / for commands ",
-            AppStyles::status_bar(),
-        ),
+        Span::styled(" Esc: Quit ", AppStyles::status_bar()),
     ])
 }
 
@@ -69,31 +66,82 @@ pub fn create_message_list(app: &App, visible_area: Rect) -> Paragraph {
     let highlight_on =
         animation_active && (std::time::Instant::now().elapsed().as_millis() % 500) < 300; // blink pattern
 
-    // Then apply scrolling and create styled Lines
-    let visible_messages: Vec<Line> = display_messages
-        .iter()
-        .enumerate()
-        // Apply scrolling - show messages based on scroll position
-        .filter(|(idx, _)| {
-            // Only show messages at or after the scroll position
-            *idx >= app.scroll_position &&
-            // Only show messages that would fit in the visible area
-            *idx < app.scroll_position + visible_area.height as usize
-        })
-        .map(|(idx, &m)| {
-            format_message(
-                m,
+    // Process messages, handling multi-line messages
+    let mut all_lines: Vec<Line> = Vec::new();
+    let total_messages = display_messages.len();
+
+    for (idx, &message) in display_messages.iter().enumerate() {
+        if let Some(stripped) = message.strip_prefix("> ") {
+            // Special handling for user messages with newlines
+            if stripped.contains('\n') {
+                // Split the message by newlines
+                let lines: Vec<&str> = stripped.split('\n').collect();
+
+                // Process the first line with the "YOU: " prefix
+                all_lines.push(Line::from(vec![
+                    Span::styled(
+                        "YOU: ",
+                        Style::default()
+                            .fg(Color::LightBlue)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(lines[0], AppStyles::user_input()),
+                ]));
+
+                // Process additional lines with indentation
+                for line in &lines[1..] {
+                    all_lines.push(Line::from(vec![
+                        Span::styled(
+                            "     ", // 5 spaces to align with "YOU: "
+                            Style::default()
+                                .fg(Color::LightBlue)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(*line, AppStyles::user_input()),
+                    ]));
+                }
+            } else {
+                // Single-line user message
+                all_lines.push(format_message(
+                    message,
+                    idx,
+                    total_messages,
+                    highlight_on,
+                    app.debug_messages,
+                ));
+            }
+        } else {
+            // Regular message formatting for non-user messages
+            all_lines.push(format_message(
+                message,
                 idx,
-                display_messages.len(),
+                total_messages,
                 highlight_on,
                 app.debug_messages,
-            )
-        })
-        .collect();
+            ));
+        }
+    }
+
+    // Apply scrolling to show only messages that fit in the visible area
+    let visible_messages = if all_lines.len() <= visible_area.height as usize {
+        // If all lines fit, show them all
+        all_lines
+    } else {
+        // Apply scrolling with bounds checking
+        let max_scroll = all_lines.len().saturating_sub(visible_area.height as usize);
+        let effective_scroll = app.scroll_position.min(max_scroll);
+
+        all_lines
+            .into_iter()
+            .skip(effective_scroll)
+            .take(visible_area.height as usize)
+            .collect()
+    };
 
     // Create a scrollable paragraph for the messages
     let has_more_above = app.scroll_position > 0;
-    let has_more_below = app.scroll_position + (visible_area.height as usize) < app.messages.len();
+    let has_more_below =
+        app.scroll_position + (visible_area.height as usize) < display_messages.len(); // Use original message count for scroll indication
 
     // Create title with scroll indicators
     let title = if has_more_above && has_more_below {
@@ -139,12 +187,65 @@ pub fn create_input_box(app: &App, is_api_key: bool) -> Paragraph {
 
     // Create appropriate input content based on mode
     let input_content = if app.input.is_empty() {
-        Span::styled(format!("> {}", placeholder), AppStyles::hint())
+        // For empty input, just show the prompt and placeholder
+        Text::from(Span::styled(
+            format!("> {}", placeholder),
+            AppStyles::hint(),
+        ))
     } else if is_api_key {
         // Mask the API key with asterisks for privacy
-        Span::raw(format!("> {}", "*".repeat(app.input.len())))
+        Text::from(Span::raw(format!("> {}", "*".repeat(app.input.len()))))
+    } else if !app.input.contains('\n') {
+        // Single line input - simpler case
+        Text::from(vec![Line::from(vec![
+            Span::raw("> "),
+            Span::styled(
+                app.input.as_str(),
+                Style::default()
+                    .fg(Color::LightCyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])])
     } else {
-        Span::raw(format!("> {}", app.input.as_str()))
+        // Multiline input
+        let text_style = Style::default()
+            .fg(Color::LightCyan)
+            .add_modifier(Modifier::BOLD);
+
+        // Split input into lines and process each one
+        let input_str = app.input.as_str(); // Get a reference to the string
+        let lines: Vec<&str> = input_str.split('\n').collect();
+        let trailing_newline = input_str.ends_with('\n');
+
+        // Convert to styled Lines
+        let mut styled_lines = Vec::new();
+
+        // Process each line
+        for (idx, &line) in lines.iter().enumerate() {
+            if idx == 0 {
+                // First line gets the prompt
+                styled_lines.push(Line::from(vec![
+                    Span::raw("> "),
+                    Span::styled(line, text_style),
+                ]));
+            } else {
+                // Subsequent lines get indentation
+                styled_lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(line, text_style),
+                ]));
+            }
+        }
+
+        // If the input ends with a newline, add an empty line with indentation
+        if trailing_newline {
+            styled_lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("", text_style),
+            ]));
+        }
+
+        Text::from(styled_lines)
     };
 
     // Create the title based on context
@@ -161,7 +262,7 @@ pub fn create_input_box(app: &App, is_api_key: bool) -> Paragraph {
                 .title(title)
                 .border_style(Style::default().fg(Color::Cyan)),
         )
-        .wrap(Wrap { trim: true })
+        .wrap(Wrap { trim: false }) // Don't trim to preserve proper newline formatting
 }
 
 /// Create a command menu list for selection
@@ -340,6 +441,7 @@ pub fn create_permission_content(app: &App) -> Paragraph {
 }
 
 /// Format a message based on its type and content
+/// Returns the styled line for the message
 fn format_message(
     message: &str,
     idx: usize,
@@ -590,76 +692,55 @@ fn format_model_response(message: &str) -> Line {
 
 /// Create a shortcuts panel for display below the input box
 pub fn create_shortcuts_panel(app: &App) -> Paragraph {
-    if app.show_detailed_shortcuts {
-        // Show all shortcuts when ? is pressed
-        let shortcuts_text = Text::from(vec![
-            Line::from(vec![Span::styled(
-                "Keyboard Shortcuts",
-                Style::default().add_modifier(Modifier::BOLD),
-            )]),
-            Line::from(vec![
-                Span::styled(
-                    "/ ",
-                    Style::default()
-                        .fg(Color::LightBlue)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Show commands menu"),
-            ]),
-            Line::from(vec![
+    // Only show shortcuts when the input is empty
+    if app.input.is_empty() {
+        if app.show_detailed_shortcuts {
+            // Show detailed shortcuts when ? has been pressed and input is empty
+            let shortcuts_text = Text::from(vec![
+                Line::from(vec![Span::styled(
+                    "Keyboard Shortcuts",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )]),
+                Line::from(vec![
+                    Span::styled(
+                        "/ ",
+                        Style::default()
+                            .fg(Color::LightBlue)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("Show commands menu"),
+                ]),
+                Line::from(vec![
+                    Span::styled(
+                        "\\⏎ ",
+                        Style::default()
+                            .fg(Color::LightBlue)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("Add newline in input"),
+                ]),
+            ]);
+
+            Paragraph::new(shortcuts_text).style(Style::default().fg(Color::Gray))
+        } else if app.show_shortcuts_hint {
+            // Show the basic hint only when input is empty
+            let shortcuts_text = Text::from(vec![Line::from(vec![
                 Span::styled(
                     "? ",
                     Style::default()
                         .fg(Color::LightBlue)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw("Toggle this help panel"),
-            ]),
-            Line::from(vec![
-                Span::styled(
-                    "Esc ",
-                    Style::default()
-                        .fg(Color::LightBlue)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Exit command mode / Quit app"),
-            ]),
-            Line::from(vec![
-                Span::styled(
-                    "PgUp/PgDn ",
-                    Style::default()
-                        .fg(Color::LightBlue)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Scroll message history"),
-            ]),
-        ]);
+                Span::styled("for shortcuts", Style::default().fg(Color::DarkGray)),
+            ])]);
 
-        Paragraph::new(shortcuts_text).style(Style::default().fg(Color::Gray))
-    } else if app.show_shortcuts_hint && app.input.is_empty() {
-        // Show just the hint when input is empty
-        let shortcuts_text = Text::from(vec![Line::from(vec![
-            Span::styled("Tip: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                "? ",
-                Style::default()
-                    .fg(Color::LightBlue)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("for shortcuts", Style::default().fg(Color::DarkGray)),
-            Span::raw(" | "),
-            Span::styled(
-                "/ ",
-                Style::default()
-                    .fg(Color::LightBlue)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("for commands", Style::default().fg(Color::DarkGray)),
-        ])]);
-
-        Paragraph::new(shortcuts_text).style(Style::default().fg(Color::Gray))
+            Paragraph::new(shortcuts_text).style(Style::default().fg(Color::Gray))
+        } else {
+            // Empty placeholder
+            Paragraph::new("")
+        }
     } else {
-        // Empty placeholder when not showing shortcuts
+        // Hide shortcuts when anything is typed in the input
         Paragraph::new("")
     }
 }

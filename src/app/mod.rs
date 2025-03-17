@@ -55,7 +55,7 @@ impl App {
             inference: None,
             download_active: false,
             error_message: None,
-            debug_messages: false, // Default to debug messages off
+            debug_messages: false, // Debug mode off by default
             scroll_position: 0,
             last_query_time: std::time::Instant::now(),
             last_message_time: std::time::Instant::now(), // For animation effects

@@ -100,22 +100,38 @@ pub fn draw_api_key_input(f: &mut Frame, app: &App) {
 /// Draw chat screen with message history and input
 pub fn draw_chat(f: &mut Frame, app: &App) {
     // Use three chunks - header, message history, and input (with command menu if active)
+
+    // Count newlines in input to determine input box height
+    let newline_count = app.input.chars().filter(|&c| c == '\n').count();
+
+    // Calculate base input height (min 3, grows with newlines but caps at half the available height)
+    // First, estimate the total available height (area height minus margins and other UI elements)
+    let estimated_available_height = f.area().height.saturating_sub(4); // Subtract margins and status bar
+    let max_input_height = estimated_available_height / 2; // Allow up to half the available height
+
+    // Base height starts at 3 lines and grows with newlines, up to half the screen height
+    let base_input_height = (3 + newline_count).min(max_input_height as usize);
+
     let input_height = if app.show_command_menu {
         // Increase the input area height to make room for the command menu
         let cmd_count = app.filtered_commands().len();
-        // Limit to 5 commands at a time, with at least 3 lines for input
-        3 + cmd_count.min(5)
+        // Add command menu height (up to 5) to the base input height
+        base_input_height + cmd_count.min(5)
     } else {
-        3 // Default input height
+        base_input_height // Use calculated height based on content
     };
 
-    // Calculate height for shortcuts area
-    let shortcuts_height = if app.show_detailed_shortcuts {
-        6 // Height for detailed shortcuts panel
-    } else if app.show_shortcuts_hint && app.input.is_empty() {
-        1 // Height for shortcut hint
+    // Calculate height for shortcuts area - only show when input is empty
+    let shortcuts_height = if app.input.is_empty() {
+        if app.show_detailed_shortcuts {
+            4 // Height for detailed shortcuts panel (increased for new shortcut)
+        } else if app.show_shortcuts_hint {
+            1 // Height for shortcut hint
+        } else {
+            0 // No height when shortcuts are disabled
+        }
     } else {
-        0 // No height when not showing shortcuts
+        0 // No height when anything is typed in the input
     };
 
     let chunks = Layout::default()
@@ -157,12 +173,11 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
         let commands_list = create_command_menu(app);
         f.render_widget(commands_list, input_chunks[1]);
 
-        // Set cursor position at end of input
+        // Set cursor position at end of input, handling multiline input
         if !app.input.is_empty() {
-            f.set_cursor_position((
-                input_chunks[0].x + app.input.len() as u16 + 3, // +3: +1 for border, +2 for "> " prefix
-                input_chunks[0].y + 1,
-            ));
+            let (cursor_x, cursor_y) =
+                calculate_cursor_position(&app.input, input_chunks[0].x, input_chunks[0].y);
+            f.set_cursor_position((cursor_x, cursor_y));
         }
     } else {
         // Regular input box without command menu
@@ -171,9 +186,10 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
 
         // Only show cursor if there is input
         if !app.input.is_empty() {
-            // Set cursor position at end of input
-            f.set_cursor_position((chunks[2].x + app.input.len() as u16 + 3, chunks[2].y + 1));
-            // +3: +1 for border, +2 for "> " prefix
+            // Set cursor position at end of input, handling multiline input
+            let (cursor_x, cursor_y) =
+                calculate_cursor_position(&app.input, chunks[2].x, chunks[2].y);
+            f.set_cursor_position((cursor_x, cursor_y));
         }
     }
 
@@ -216,6 +232,47 @@ pub fn draw_error(f: &mut Frame, _app: &App, error_msg: &str) {
         .style(Style::default().fg(Color::Yellow))
         .alignment(Alignment::Center);
     f.render_widget(instruction, chunks[2]);
+}
+
+/// Calculate cursor position for multiline input
+fn calculate_cursor_position(input: &str, base_x: u16, base_y: u16) -> (u16, u16) {
+    if !input.contains('\n') {
+        // Single line input
+        // +1 for border, +2 for "> " prefix
+        return (base_x + input.len() as u16 + 3, base_y + 1);
+    }
+
+    // For multiline input, place cursor at the end of the last line
+    // Check if input ends with newline
+    let trailing_newline = input.ends_with('\n');
+
+    // Split the input by newlines
+    let lines: Vec<&str> = input.split('\n').collect();
+
+    // Determine the position of the cursor
+    let line_count = lines.len();
+
+    // Calculate the last line index (always the last line)
+    let last_line_idx = line_count - 1;
+
+    // Get the last line text
+    let last_line = if trailing_newline {
+        "" // Empty string for newline
+    } else {
+        lines.last().unwrap_or(&"")
+    };
+
+    // Cursor x position depends on whether we're on the first line or subsequent lines
+    let indent_width = 2; // Width of the indentation ("  " or "> ")
+    let border_offset = 1; // Offset for the border
+
+    // Set x position at start of line + indentation + text length
+    let x = base_x + border_offset + indent_width + last_line.len() as u16;
+
+    // Set y position (add 1 for 0-indexed lines and 1 for the top border)
+    let y = base_y + 1 + last_line_idx as u16;
+
+    (x, y)
 }
 
 /// Draw permission dialog over the current UI
