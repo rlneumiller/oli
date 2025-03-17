@@ -61,45 +61,41 @@ pub fn run_app() -> Result<()> {
             terminal.draw(|f| ui(f, &app))?;
         }
 
-        // Check for messages from agent progress
-        let agent_messages = if let Some(ref agent_rx) = app.agent_progress_rx {
-            let mut messages = Vec::new();
-            while let Ok(msg) = agent_rx.try_recv() {
+        // Check for messages from agent progress - process one at a time for better animation effect
+        if let Some(ref agent_rx) = app.agent_progress_rx {
+            // Process one message at a time for better visual effect
+            if let Ok(msg) = agent_rx.try_recv() {
                 // Add debug message if debug is enabled
                 if app.debug_messages {
                     app.messages
                         .push(format!("DEBUG: Received agent message: {}", msg));
                 }
 
-                // All tool-related messages will be processed by the process_message function directly
-                // to display them immediately during execution
+                // Handle ANSI escape sequences by stripping them for storage but preserving their meaning
+                let processed_msg = if msg.contains("\x1b[") {
+                    // Store a version without the ANSI codes for message matching but preserve the styling
+                    // in a way that the UI can process
+                    let clean_msg = msg.replace("\x1b[32m", "").replace("\x1b[0m", "");
+                    app.messages.push(format!("[ansi_styled] {}", clean_msg));
 
-                // Always add the message to be processed normally
-                messages.push(msg);
+                    // Return the message for further processing
+                    clean_msg
+                } else {
+                    msg
+                };
+
+                // Process the message and immediately draw to screen
+                process_message(&mut app, &processed_msg)?;
+                
+                // Force auto-scroll to keep focus on the latest message
+                app.auto_scroll_to_bottom();
+                
+                // Immediately redraw after each message for real-time effect
+                terminal.draw(|f| ui(f, &app))?;
+                
+                // Small delay to create visual animation effect (200ms between updates)
+                std::thread::sleep(Duration::from_millis(200));
             }
-            messages
-        } else {
-            Vec::new()
-        };
-
-        // Process agent messages - note that messages with color codes will need special handling
-        for msg in agent_messages {
-            // Handle ANSI escape sequences by stripping them for storage but preserving their meaning
-            let processed_msg = if msg.contains("\x1b[") {
-                // Store a version without the ANSI codes for message matching but preserve the styling
-                // in a way that the UI can process
-                let clean_msg = msg.replace("\x1b[32m", "").replace("\x1b[0m", "");
-                app.messages.push(format!("[ansi_styled] {}", clean_msg));
-
-                // Return the message for further processing
-                clean_msg
-            } else {
-                msg
-            };
-
-            // Process the message normally
-            process_message(&mut app, &processed_msg)?;
-            terminal.draw(|f| ui(f, &app))?;
         }
 
         // Check if we need to auto-scroll after processing messages
@@ -519,6 +515,8 @@ fn process_message(app: &mut App, msg: &str) -> Result<()> {
             app.messages.push(format!("⚪ {}", msg));
         }
         // Force immediate redraw to show AI thinking in real-time
+        // Add timestamp to make this message "active" for a short period
+        app.last_message_time = std::time::Instant::now();
         app.auto_scroll_to_bottom();
     } else if msg.starts_with("[tool]") {
         // This is a formatted tool operation, style it properly with green indicator
@@ -534,6 +532,8 @@ fn process_message(app: &mut App, msg: &str) -> Result<()> {
             let content = msg.strip_prefix("[tool] ").unwrap_or(msg);
             app.messages.push(format!("\x1b[32m⏺\x1b[0m {}", content));
         }
+        // Update timestamp for animation effect
+        app.last_message_time = std::time::Instant::now();
         // Force immediate redraw to show tool usage in real-time
         app.auto_scroll_to_bottom();
     } else if msg.starts_with("Tool result:") {
@@ -559,10 +559,16 @@ fn process_message(app: &mut App, msg: &str) -> Result<()> {
 
             // Display the tool execution with indented output
             app.messages.push(format!("\x1b[32m⏺\x1b[0m {}", header));
+            // Update timestamp for animation effect
+            app.last_message_time = std::time::Instant::now();
+            
             if parts.len() > 1 {
                 let lines = parts[1].lines().take(10); // Limit to 10 lines max
                 for line in lines {
                     app.messages.push(line.to_string()); // Already has indentation
+                    // Small delay between adding each line for a typing effect
+                    std::thread::sleep(Duration::from_millis(50));
+                    // Don't try to force redraw - we'll let the main loop handle it
                 }
 
                 // If there are more lines, show a line count
@@ -575,6 +581,8 @@ fn process_message(app: &mut App, msg: &str) -> Result<()> {
         } else {
             // Simple single-line result
             app.messages.push(format!("\x1b[32m⏺\x1b[0m {}", content));
+            // Update timestamp for animation effect
+            app.last_message_time = std::time::Instant::now();
         }
         // Force immediate redraw to show tool results in real-time
         app.auto_scroll_to_bottom();
@@ -787,6 +795,13 @@ fn draw_chat(f: &mut Frame, app: &App) {
         .filter(|msg| *msg != "_AUTO_SCROLL_")
         .collect();
 
+    // Calculate if we should show animation effects (blinking) for new messages
+    // Messages added in the last second get a highlight effect
+    let animation_active = app.last_message_time.elapsed() < Duration::from_millis(1000);
+    // Blink rate - make it blink about twice per second for newly added messages
+    let highlight_on = animation_active && 
+        (std::time::Instant::now().elapsed().as_millis() % 500) < 300; // blink pattern
+
     // Then apply scrolling and create styled Lines
     let visible_messages: Vec<Line> = display_messages
         .iter()
@@ -798,7 +813,9 @@ fn draw_chat(f: &mut Frame, app: &App) {
             // Only show messages that would fit in the visible area
             *idx < app.scroll_position + chunks[1].height as usize
         })
-        .map(|(_, &m)| {
+        .map(|(idx, &m)| {
+            // Check if this is the last message and should be highlighted
+            let is_newest_msg = idx == display_messages.len() - 1;
             if m.starts_with("DEBUG:") {
                 // Only show debug messages in debug mode
                 if app.debug_messages {
@@ -854,48 +871,81 @@ fn draw_chat(f: &mut Frame, app: &App) {
             } else if m.starts_with("[thinking]") {
                 // AI Thinking/reasoning message
                 let thinking_content = m.strip_prefix("[thinking] ").unwrap_or(m);
+                
+                // Add pulsing animation effect to make it more noticeable
+                let style = if is_newest_msg {
+                    // Always highlight thinking messages when they're new
+                    // This creates a pulsing effect by alternating between normal and bright
+                    if highlight_on {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::ITALIC)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                            .fg(Color::LightYellow)
+                            .add_modifier(Modifier::ITALIC)
+                    }
+                } else {
+                    // Normal style for older messages
+                    Style::default()
+                        .fg(Color::LightYellow)
+                        .add_modifier(Modifier::ITALIC)
+                };
 
                 if thinking_content.starts_with("⚪ ") {
                     // New format with white circle - already has the icon
-                    Line::from(vec![Span::styled(
-                        m,
-                        Style::default()
-                            .fg(Color::LightYellow)
-                            .add_modifier(Modifier::ITALIC),
-                    )])
+                    Line::from(vec![Span::styled(m, style)])
                 } else {
                     // Legacy format without icon - add the circle
                     Line::from(vec![
-                        Span::styled("⏺ ", Style::default().fg(Color::Yellow)),
                         Span::styled(
-                            thinking_content,
-                            Style::default()
-                                .fg(Color::LightYellow)
-                                .add_modifier(Modifier::ITALIC),
+                            "⏺ ", 
+                            if is_newest_msg && highlight_on {
+                                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default().fg(Color::Yellow)
+                            }
                         ),
+                        Span::styled(thinking_content, style),
                     ])
                 }
             } else if m.starts_with("[tool] ") {
                 // Tool execution message
                 let tool_content = m.strip_prefix("[tool] ").unwrap_or(m);
+                
+                // Apply animation highlight effect for newest message
+                let style = if is_newest_msg && highlight_on {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::LightBlue)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                        .fg(Color::LightBlue)
+                        .add_modifier(Modifier::BOLD)
+                };
 
-                if tool_content.starts_with("🟢 ") {
-                    // New format with green circle
+                if tool_content.starts_with("🟢 ") || tool_content.starts_with("🔧 ") {
+                    // New format with emoji icon
                     Line::from(vec![Span::styled(
                         tool_content,
-                        Style::default()
-                            .fg(Color::LightBlue)
-                            .add_modifier(Modifier::BOLD),
+                        style,
                     )])
                 } else {
                     // Legacy format with old indicator
                     Line::from(vec![
-                        Span::styled("⏺ ", Style::default().fg(Color::Blue)),
+                        Span::styled(
+                            "⏺ ", 
+                            if is_newest_msg && highlight_on {
+                                Style::default().fg(Color::Blue).bg(Color::LightBlue)
+                            } else {
+                                Style::default().fg(Color::Blue)
+                            }
+                        ),
                         Span::styled(
                             tool_content,
-                            Style::default()
-                                .fg(Color::LightBlue)
-                                .add_modifier(Modifier::BOLD),
+                            style,
                         ),
                     ])
                 }

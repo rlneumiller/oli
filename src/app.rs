@@ -60,6 +60,7 @@ pub struct App {
     pub debug_messages: bool,
     pub scroll_position: usize,
     pub last_query_time: std::time::Instant,
+    pub last_message_time: std::time::Instant, // Timestamp for message animations
     pub use_agent: bool,
     pub agent: Option<Agent>,
     pub tokio_runtime: Option<Runtime>,
@@ -105,6 +106,7 @@ impl App {
             debug_messages: false, // Default to debug messages off
             scroll_position: 0,
             last_query_time: std::time::Instant::now(),
+            last_message_time: std::time::Instant::now(), // For animation effects
             use_agent: false,
             agent: None,
             tokio_runtime,
