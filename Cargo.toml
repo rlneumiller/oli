@@ -8,7 +8,6 @@ repository = "https://github.com/amrit110/oli"
 documentation = "https://docs.rs/oli-cli"
 readme = "README.md"
 keywords = ["tui", "assistant", "smart"]
-categories = ["tui"]
 
 [lib]
 name = "oli_tui"
