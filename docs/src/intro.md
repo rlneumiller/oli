@@ -3,7 +3,7 @@
 OLI is an open-source alternative to Claude Code, built in Rust to provide powerful agentic capabilities for coding assistance. It features:
 
 - A flexible TUI interface for working with code
-- Support for both local LLMs (via vLLM or llama_cpp) and cloud APIs (currently only tested using Anthropic Claude Sonnet 3.7 and OpenAI GPT4o but other APIs and local LLM support coming soon!)
+- Support for both local LLMs (via vLLM or ollama) and cloud APIs (currently only tested using Anthropic Claude Sonnet 3.7 and OpenAI GPT4o but other APIs and local LLM support coming soon!)
 - Complete agentic capabilities including file search, edit, and command execution
 
 ⚠️ This project is in a very early stage and is prone to bugs and issues! Please post your issues as you encounter them.
