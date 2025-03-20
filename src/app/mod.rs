@@ -7,12 +7,12 @@ pub mod utils;
 
 use anyhow::{Context, Result};
 use dotenv::dotenv;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+// IO operations are handled elsewhere in specific modules
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 use tokio::runtime::Runtime;
+use tui_textarea::TextArea;
 
 // Re-exports
 pub use agent::{determine_agent_model, determine_provider, AgentManager};
@@ -44,8 +44,15 @@ impl App {
             .ok()
             .map(|p| p.to_string_lossy().to_string());
 
+        // Initialize TextArea for better input handling
+        let mut textarea = TextArea::default();
+        // Configure TextArea to match the app's style
+        textarea.set_placeholder_text("Type your message here or type / for commands");
+        textarea.set_cursor_line_style(ratatui::style::Style::default());
+
         Self {
             state: AppState::Setup,
+            textarea,
             input: String::new(),
             messages: vec![],
             download_progress: None,
@@ -88,9 +95,15 @@ impl CommandHandler for App {
         // Track previous state
         let was_in_command_mode = self.command_mode;
 
+        // Get the current text from the textarea
+        let input_text = self.textarea.lines().join("\n");
+
+        // Update the legacy input field for compatibility
+        self.input = input_text.clone();
+
         // Update command mode state
-        self.command_mode = self.input.starts_with('/');
-        self.show_command_menu = self.command_mode && !self.input.contains(' ');
+        self.command_mode = input_text.starts_with('/');
+        self.show_command_menu = self.command_mode && !input_text.contains(' ');
 
         // Always reset the command selection in these cases:
         if self.command_mode {
@@ -100,7 +113,7 @@ impl CommandHandler for App {
             // 1. Just entered command mode (typed '/')
             // 2. Selection is out of bounds
             // 3. Input has changed significantly
-            let should_reset = (self.input.len() == 1 && !was_in_command_mode)
+            let should_reset = (input_text.len() == 1 && !was_in_command_mode)
                 || (filtered.is_empty() || self.selected_command >= filtered.len());
 
             if should_reset {
@@ -111,7 +124,7 @@ impl CommandHandler for App {
                 if self.debug_messages {
                     self.messages.push(format!(
                         "DEBUG: Reset command selection. Input: '{}', Commands: {}",
-                        self.input,
+                        input_text,
                         filtered.len()
                     ));
                 }
@@ -353,110 +366,14 @@ impl ModelManager for App {
         Ok(models_dir.join(model_name))
     }
 
-    fn verify_model(&self, path: &Path) -> Result<()> {
-        // Check if file exists and has a reasonable size
-        let metadata = std::fs::metadata(path)?;
-        if metadata.len() < 1000 {
-            anyhow::bail!(
-                "File too small to be a valid model ({}bytes)",
-                metadata.len()
-            );
-        }
-
-        // Read first few bytes to check the file format
-        let mut file = File::open(path)?;
-        let mut header = [0u8; 8];
-
-        if file.read_exact(&mut header[0..4]).is_err() {
-            anyhow::bail!("Failed to read header - file may be corrupted");
-        }
-
-        // Check for GGUF format
-        if &header[0..4] == b"GGUF" {
-            return Ok(());
-        }
-
-        // Check for GGML format (older models)
-        if &header[0..4] == b"GGML" {
-            return Ok(());
-        }
-
-        // Read first ~100 bytes to check for HTML error pages
-        let mut start_bytes = vec![0u8; 100];
-        file.seek(SeekFrom::Start(0))?; // Reset to beginning of file
-        let n = file.read(&mut start_bytes)?;
-        start_bytes.truncate(n);
-
-        let start_text = String::from_utf8_lossy(&start_bytes);
-
-        // Check if the file is actually an HTML error page
-        if start_text.contains("<html")
-            || start_text.contains("<!DOCTYPE")
-            || start_text.contains("<HTML")
-            || start_text.contains("<?xml")
-        {
-            anyhow::bail!("Received HTML page instead of model file");
-        }
-
-        // If the file is large enough, assume it's a valid model despite unknown format
-        if metadata.len() > 100 * 1024 * 1024 {
-            // > 100MB
-            return Ok(());
-        }
-
-        anyhow::bail!(
-            "Unrecognized model format (magic: {:?} or '{}')",
-            &header[0..4],
-            String::from_utf8_lossy(&header[0..4])
-        )
+    fn verify_model(&self, _path: &Path) -> Result<()> {
+        // Local model verification removed - will be replaced with Ollama integration
+        anyhow::bail!("Local model support has been temporarily removed")
     }
 
-    fn verify_static(path: &Path) -> Result<()> {
-        let mut file = File::open(path)?;
-        let mut header = [0u8; 8]; // Read more bytes to check different formats
-
-        if let Err(e) = file.read_exact(&mut header[0..4]) {
-            anyhow::bail!("Failed to read file header: {}", e);
-        }
-
-        // Check for GGUF format (standard)
-        if &header[0..4] == b"GGUF" {
-            return Ok(());
-        }
-
-        // Check for GGML format (older models)
-        if &header[0..4] == b"GGML" {
-            return Ok(());
-        }
-
-        // Try to read a bit more to check for binary format
-        if let Ok(()) = file.read_exact(&mut header[4..8]) {
-            // Some binary signatures to check
-            if header[0] == 0x80
-                && header[1] <= 0x02
-                && (header[2] == 0x00 || header[2] == 0x01)
-                && header[3] == 0x00
-            {
-                return Ok(());
-            }
-        }
-
-        // Get the file size to see if it's reasonable for an LLM
-        if let Ok(metadata) = std::fs::metadata(path) {
-            let size_mb = metadata.len() / (1024 * 1024);
-            // If file is reasonably large (> 100MB), accept it despite unknown format
-            if size_mb > 100 {
-                return Ok(());
-            }
-        }
-
-        // If we get here, the file format wasn't recognized
-        let magic_str = String::from_utf8_lossy(&header[0..4]);
-        anyhow::bail!(
-            "Unknown model format (magic: {:?} or '{}')",
-            &header[0..4],
-            magic_str
-        )
+    fn verify_static(_path: &Path) -> Result<()> {
+        // Local model verification removed - will be replaced with Ollama integration
+        anyhow::bail!("Local model support has been temporarily removed")
     }
 
     fn get_agent_model(&self) -> Option<String> {
@@ -469,14 +386,9 @@ impl ModelManager for App {
         agent::determine_agent_model(model_name, has_api_key)
     }
 
-    fn load_model(&mut self, model_path: &Path) -> Result<()> {
+    fn load_model(&mut self, _model_path: &Path) -> Result<()> {
         if self.debug_messages {
-            self.messages
-                .push(format!("DEBUG: Loading model from {:?}", model_path));
-            self.messages.push(format!(
-                "DEBUG: Using {} GPU layers",
-                self.current_model().n_gpu_layers
-            ));
+            self.messages.push("DEBUG: Model loading requested".into());
         }
 
         let model_config = self.current_model();
@@ -535,265 +447,90 @@ impl ModelManager for App {
         self.error_message = None;
 
         let model_name = self.current_model().name.clone();
-        let model_file_name = self.current_model().file_name.clone();
-        let model_primary_url = self.current_model().primary_url.clone();
-        let model_fallback_url = self.current_model().fallback_url.clone();
-        let model_size = self.current_model().size_gb;
 
         self.messages
             .push(format!("Setting up model: {}", model_name));
 
-        // For cloud-based models (size 0.0)
-        if model_size == 0.0 {
-            if self.debug_messages {
-                self.messages
-                    .push(format!("DEBUG: Setting up {}", model_name));
+        // Check if we need to ask for API key based on the selected model
+        let needs_api_key = match model_name.as_str() {
+            "GPT-4o" => std::env::var("OPENAI_API_KEY").is_err() && self.api_key.is_none(),
+            "Claude 3.7 Sonnet" => {
+                std::env::var("ANTHROPIC_API_KEY").is_err() && self.api_key.is_none()
             }
+            _ => true, // Default to requiring API key
+        };
 
-            // Check if we need to ask for API key based on the selected model
-            let needs_api_key = match model_name.as_str() {
-                "GPT-4o" => std::env::var("OPENAI_API_KEY").is_err() && self.api_key.is_none(),
-                "Claude 3.7 Sonnet" => {
-                    std::env::var("ANTHROPIC_API_KEY").is_err() && self.api_key.is_none()
-                }
-                _ => true, // Default to requiring API key
-            };
-
-            if needs_api_key {
-                // Transition to API key input state
-                self.state = AppState::ApiKeyInput;
-                self.input.clear();
-                tx.send("api_key_needed".into())?;
-                return Ok(());
-            }
-
-            // Setup agent with the appropriate model
-            if let Err(e) = self.setup_agent() {
-                self.handle_error(format!("Failed to setup {}: {}", model_name, e));
-                tx.send("setup_failed".into())?;
-                return Ok(());
-            }
-
-            // If agent is successfully set up, we're done
-            if self.use_agent && self.agent.is_some() {
-                tx.send("setup_complete".into())?;
-                return Ok(());
-            } else {
-                let provider_name = match model_name.as_str() {
-                    "GPT-4o" => "OpenAI",
-                    _ => "Anthropic",
-                };
-                self.handle_error(format!("{} API key not found or is invalid", provider_name));
-                tx.send("setup_failed".into())?;
-                return Ok(());
-            }
-        }
-
-        // For local models, continue with the normal setup process
-        // Initialize download state for local models
-        self.download_active = true;
-
-        // Get the path for the selected model
-        let model_path = self.model_path(&model_file_name)?;
-        if model_path.exists() {
-            if self.debug_messages {
-                self.messages
-                    .push(format!("DEBUG: Model file exists at {:?}", model_path));
-            }
-
-            match self.verify_model(&model_path) {
-                Ok(()) => match self.load_model(&model_path) {
-                    Ok(()) => {
-                        if self.debug_messages {
-                            self.messages
-                                .push("DEBUG: Model loaded successfully".into());
-                        }
-                        tx.send("setup_complete".into())?;
-                    }
-                    Err(e) => {
-                        self.handle_error(format!("Failed to load model: {}", e));
-                        tx.send("setup_failed".into())?;
-                    }
-                },
-                Err(e) => {
-                    self.handle_error(format!("Invalid model file: {}", e));
-                    std::fs::remove_file(&model_path).ok();
-                    self.download_active = true;
-                    self.messages
-                        .push("Starting download after validation failure...".into());
-                    self.download_model_with_path(
-                        tx.clone(),
-                        &model_path,
-                        &model_primary_url,
-                        &model_fallback_url,
-                    )?;
-                }
-            }
+        if needs_api_key {
+            // Transition to API key input state
+            self.state = AppState::ApiKeyInput;
+            self.input.clear();
+            tx.send("api_key_needed".into())?;
             return Ok(());
         }
 
-        if self.debug_messages {
-            self.messages
-                .push("DEBUG: Model file does not exist, downloading...".to_string());
+        // Setup agent with the appropriate model
+        if let Err(e) = self.setup_agent() {
+            self.handle_error(format!("Failed to setup {}: {}", model_name, e));
+            tx.send("setup_failed".into())?;
+            return Ok(());
         }
 
-        self.download_active = true;
-        self.messages
-            .push(format!("Starting download of {}...", model_name));
-        self.download_model_with_path(tx, &model_path, &model_primary_url, &model_fallback_url)
+        // If agent is successfully set up, we're done
+        if self.use_agent && self.agent.is_some() {
+            tx.send("setup_complete".into())?;
+            Ok(())
+        } else {
+            let provider_name = match model_name.as_str() {
+                "GPT-4o" => "OpenAI",
+                _ => "Anthropic",
+            };
+            self.handle_error(format!("{} API key not found or is invalid", provider_name));
+            tx.send("setup_failed".into())?;
+            Ok(())
+        }
     }
 
     fn download_model_with_path(
         &mut self,
         tx: mpsc::Sender<String>,
-        path: &Path,
-        primary_url: &str,
-        fallback_url: &str,
+        _path: &Path,
+        _primary_url: &str,
+        _fallback_url: &str,
     ) -> Result<()> {
-        if self.debug_messages {
-            self.messages
-                .push(format!("DEBUG: Downloading to {:?}", path));
-            self.messages
-                .push(format!("DEBUG: download_active={}", self.download_active));
-        }
-        self.download_file(primary_url, fallback_url, path, tx)
+        // Model downloading is removed - will be replaced with Ollama integration
+        self.messages
+            .push("Local model support has been temporarily removed.".into());
+        self.messages
+            .push("Ollama integration will be added in a future update.".into());
+        self.messages
+            .push("Please use cloud-based models like Claude or GPT instead.".into());
+
+        // Set appropriate app state
+        self.download_active = false;
+        self.state = AppState::Chat;
+
+        tx.send("setup_complete".into())?;
+        Ok(())
     }
 
     fn download_file(
         &mut self,
-        primary_url: &str,
-        fallback_url: &str,
-        path: &Path,
+        _primary_url: &str,
+        _fallback_url: &str,
+        _path: &Path,
         tx: mpsc::Sender<String>,
     ) -> Result<()> {
-        let primary_url = primary_url.to_string();
-        let fallback_url = fallback_url.to_string();
-        let path = path.to_path_buf();
-        let tx_clone = tx.clone();
-
-        // Ensure download_active is set to true
-        self.download_active = true;
-
-        std::thread::spawn(move || {
-            let download_result = {
-                match Self::attempt_download(&primary_url, &path, &tx_clone) {
-                    Ok(()) => Ok(()),
-                    Err(e) => {
-                        tx_clone
-                            .send(format!("retry:First download attempt failed: {}", e))
-                            .ok();
-
-                        match Self::attempt_download(&fallback_url, &path, &tx_clone) {
-                            Ok(()) => Ok(()),
-                            Err(e2) => Err(format!(
-                                "Both download attempts failed. Primary: {}, Fallback: {}",
-                                e, e2
-                            )),
-                        }
-                    }
-                }
-            };
-
-            match download_result {
-                Ok(()) => {
-                    // Send a success message
-                    tx_clone
-                        .send("status:Download successful, verifying file...".into())
-                        .unwrap();
-
-                    // Verify after download completes
-                    match Self::verify_static(&path) {
-                        Ok(()) => {
-                            tx_clone
-                                .send("status:File verified successfully".into())
-                                .unwrap();
-                            tx_clone.send("download_complete".into()).unwrap()
-                        }
-                        Err(e) => tx_clone.send(format!("error:{}", e)).unwrap(),
-                    }
-                }
-                Err(e) => tx_clone.send(format!("error:{}", e)).unwrap(),
-            }
-        });
-
+        // Model downloading is removed - will be replaced with Ollama integration
+        tx.send("setup_complete".into())?;
         Ok(())
     }
 
-    fn attempt_download(url: &str, path: &Path, tx: &mpsc::Sender<String>) -> Result<(), String> {
-        // Send an initial message to indicate download is starting
-        tx.send(format!("download_started:{}", url))
-            .map_err(|e| format!("Channel error: {}", e))?;
-
-        let client = reqwest::blocking::Client::builder()
-            .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
-            .timeout(Duration::from_secs(300)) // Longer timeout for large files (5 min)
-            .redirect(reqwest::redirect::Policy::limited(10))
-            .build()
-            .map_err(|e| format!("Client build failed: {}", e))?;
-
-        // Notify about connection attempt
-        tx.send(format!("status:Connecting to {}...", url))
-            .map_err(|e| format!("Channel error: {}", e))?;
-
-        let mut response = client
-            .get(url)
-            .header(reqwest::header::ACCEPT, "*/*")
-            .send()
-            .map_err(|e| format!("Network error: {}", e))?;
-
-        if !response.status().is_success() {
-            return Err(format!("HTTP error: {} for URL {}", response.status(), url));
-        }
-
-        // Get the content length to track progress
-        let total_size = response.content_length().unwrap_or(0);
-        tx.send(format!(
-            "status:Downloading {}MB file...",
-            total_size / 1_000_000
-        ))
-        .map_err(|e| format!("Channel error: {}", e))?;
-
-        let mut file = File::create(path).map_err(|e| format!("File creation failed: {}", e))?;
-
-        // Initial progress
-        tx.send(format!("progress:0:{}", total_size))
-            .map_err(|e| format!("Channel error: {}", e))?;
-
-        // Create a buffer for reading chunks
-        let mut buffer = [0; 8192]; // 8KB buffer
-        let mut downloaded: u64 = 0;
-        let mut last_progress_time = std::time::Instant::now();
-
-        // Read and write in chunks to show progress
-        loop {
-            match response.read(&mut buffer) {
-                Ok(0) => break, // End of file
-                Ok(n) => {
-                    file.write_all(&buffer[..n])
-                        .map_err(|e| format!("Write error: {}", e))?;
-
-                    downloaded += n as u64;
-
-                    // Update progress at most every 500ms to avoid flooding
-                    let now = std::time::Instant::now();
-                    if now.duration_since(last_progress_time).as_millis() > 500 {
-                        tx.send(format!("progress:{}:{}", downloaded, total_size))
-                            .map_err(|e| format!("Channel error: {}", e))?;
-                        last_progress_time = now;
-                    }
-                }
-                Err(e) => return Err(format!("Download error: {}", e)),
-            }
-        }
-
-        // Final progress update
-        tx.send(format!("progress:{}:{}", downloaded, total_size))
-            .map_err(|e| format!("Channel error: {}", e))?;
-
-        // Ensure file is written to disk
-        file.sync_all()
-            .map_err(|e| format!("File sync error: {}", e))?;
-
+    fn attempt_download(
+        _url: &str,
+        _path: &Path,
+        _tx: &mpsc::Sender<String>,
+    ) -> Result<(), String> {
+        // Model downloading is removed - will be replaced with Ollama integration
         Ok(())
     }
 }
