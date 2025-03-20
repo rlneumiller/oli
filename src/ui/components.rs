@@ -935,7 +935,7 @@ pub fn create_shortcuts_panel(app: &App) -> Paragraph {
             // Define shortcuts and their descriptions
             let shortcuts = [
                 ("/ ", "Show commands menu"),
-                ("\\⏎ ", "Add newline in input"),
+                ("Ctrl+j", "Add newline in input"),
             ];
 
             // Calculate max shortcut length for vertical alignment

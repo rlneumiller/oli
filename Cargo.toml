@@ -20,7 +20,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.97"
 async-trait = "0.1.78"
-crossterm = { version = "0.28.1", features = ["serde"] }
+crossterm = { version = "0.28.1", features = ["serde", "event-stream"] }
 dirs = "6.0.0"
 dotenv = "0.15.0"
 glob = "0.3.1"

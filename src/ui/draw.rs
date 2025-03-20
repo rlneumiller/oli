@@ -106,13 +106,37 @@ pub fn draw_chat(f: &mut Frame, app: &mut App) {
     // Count lines in textarea to determine input box height
     let line_count = app.textarea.lines().len();
 
+    // Calculate how many wrapped lines we might need based on the terminal width
+    // This helps with large pastes that would otherwise overflow horizontally
+    let terminal_width = f.area().width.saturating_sub(4); // Account for borders and padding
+    let wrapped_line_count = app
+        .textarea
+        .lines()
+        .iter()
+        .map(|line| {
+            if line.is_empty() {
+                1 // Empty lines still need one line
+            } else {
+                // Calculate how many lines this content would wrap to
+                // Using div_ceil pattern for proper ceiling division
+                (line.len() as u16)
+                    .saturating_add(terminal_width)
+                    .saturating_sub(1)
+                    / terminal_width
+            }
+        })
+        .sum::<u16>() as usize;
+
+    // Use the larger of actual lines or wrapped lines to determine height
+    let effective_line_count = line_count.max(wrapped_line_count);
+
     // Calculate base input height (min 3, grows with lines but caps at half the available height)
     // First, estimate the total available height (area height minus margins and other UI elements)
     let estimated_available_height = f.area().height.saturating_sub(4); // Subtract margins and status bar
     let max_input_height = estimated_available_height / 2; // Allow up to half the available height
 
     // Base height starts at 3 lines and grows with content, up to half the screen height
-    let base_input_height = (3 + line_count).min(max_input_height as usize);
+    let base_input_height = (3 + effective_line_count).min(max_input_height as usize);
 
     let input_height = if app.show_command_menu {
         // Increase the input area height to make room for the command menu

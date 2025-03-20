@@ -217,6 +217,10 @@ fn process_key_event(
     tx: &mpsc::Sender<String>,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
+    // Handle paste shortcuts - relies on terminal emulator's built-in paste support
+    // Most terminals automatically handle paste operations by sending the text as if typed
+    // We don't need to explicitly implement clipboard access, as the terminal will send
+    // each character of the pasted content through the normal input channel
     // Handle permission response first if permission is required
     if app.permission_required {
         match key {
@@ -254,18 +258,30 @@ fn process_key_event(
             app.state = AppState::Error("quit".into());
         }
         KeyCode::Enter => {
-            // Check if we need to handle traditional backslash-newline (for backward compatibility)
-            if app.state == AppState::Chat && modifiers.contains(KeyModifiers::SHIFT) {
-                // Insert a newline at cursor position (use TextArea's functionality)
-                app.textarea.insert_newline();
+            // Enhanced handling of newlines and Enter key
+            if app.state == AppState::Chat {
+                if modifiers.contains(KeyModifiers::SHIFT) || modifiers.contains(KeyModifiers::ALT)
+                {
+                    // Shift+Enter or Alt+Enter directly inserts a newline
+                    // Using input method to ensure proper handling by tui-textarea
+                    app.textarea.input(Input {
+                        key: Key::Enter,
+                        ctrl: false,
+                        alt: modifiers.contains(KeyModifiers::ALT),
+                        shift: modifiers.contains(KeyModifiers::SHIFT),
+                    });
 
-                // Update the legacy input for compatibility
-                app.input = app.textarea.lines().join("\n");
+                    // Update the legacy input for compatibility
+                    app.input = app.textarea.lines().join("\n");
 
-                // Force immediate redraw to update input box size and cursor position
-                terminal.draw(|f| ui(f, &mut app))?;
+                    // Force immediate redraw to update input box size and cursor position
+                    terminal.draw(|f| ui(f, &mut app))?;
+                } else {
+                    // Regular Enter handling
+                    handle_enter_key(app, tx, terminal)?;
+                }
             } else {
-                // Regular Enter handling
+                // Regular Enter handling for non-Chat states
                 handle_enter_key(app, tx, terminal)?;
             }
         }
@@ -610,7 +626,7 @@ fn handle_backtab_key(
 fn handle_char_key(
     mut app: &mut App,
     c: char,
-    _: KeyModifiers, // Unused parameter
+    modifiers: KeyModifiers,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     match app.state {
@@ -623,12 +639,39 @@ fn handle_char_key(
                 return Ok(());
             }
 
+            // Special handling for 'j' key with Ctrl modifier to add a newline (common shortcut in many editors)
+            if app.state == AppState::Chat
+                && (c == 'j' || c == 'J')
+                && modifiers.contains(KeyModifiers::CONTROL)
+            {
+                // Insert a newline character
+                app.textarea.insert_char('\n');
+
+                // Update legacy input for compatibility
+                app.input = app.textarea.lines().join("\n");
+
+                // Update cursor position for compatibility
+                let (x, y) = app.textarea.cursor();
+                app.cursor_position = app
+                    .textarea
+                    .lines()
+                    .iter()
+                    .take(y)
+                    .map(|line| line.len() + 1) // +1 for newline
+                    .sum::<usize>()
+                    + x;
+
+                // Force immediate redraw to update input box size and cursor position
+                terminal.draw(|f| ui(f, &mut app))?;
+                return Ok(());
+            }
+
             // Insert the character using proper input method
             app.textarea.input(Input {
                 key: Key::Char(c),
-                ctrl: false,
-                alt: false,
-                shift: false,
+                ctrl: modifiers.contains(KeyModifiers::CONTROL),
+                alt: modifiers.contains(KeyModifiers::ALT),
+                shift: modifiers.contains(KeyModifiers::SHIFT),
             });
 
             // Update legacy input field for compatibility
