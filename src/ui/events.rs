@@ -13,6 +13,7 @@ use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{io, sync::mpsc, time::Duration};
+use tui_textarea::{Input, Key};
 
 /// Main application run loop
 pub fn run_app() -> Result<()> {
@@ -69,7 +70,7 @@ pub fn run_app() -> Result<()> {
 
 /// Process messages from the message channel
 fn process_channel_messages(
-    app: &mut App,
+    mut app: &mut App,
     rx: &mpsc::Receiver<String>,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
@@ -86,7 +87,7 @@ fn process_channel_messages(
 
 /// Process messages from the agent progress channel
 fn process_agent_messages(
-    app: &mut App,
+    mut app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     if let Some(ref agent_rx) = app.agent_progress_rx {
@@ -134,7 +135,7 @@ fn process_agent_messages(
 
 /// Process auto-scroll markers in messages
 fn process_auto_scroll(
-    app: &mut App,
+    mut app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     // Check if we need to auto-scroll after processing messages
@@ -154,27 +155,25 @@ fn process_auto_scroll(
 
 /// Handle Left arrow key for cursor movement
 fn handle_left_key(
-    app: &mut App,
+    mut app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     match app.state {
         AppState::Chat | AppState::ApiKeyInput => {
-            // Use internal cursor movement for left key
-            let (x, y) = app.textarea.cursor(); 
-            if x > 0 {
-                // Simulate move cursor left
-                let c = app.textarea.lines().get(y).map_or(String::new(), |l| l.clone());
-                app.textarea = TextArea::new(vec![c]);
-                // Adjust cursor to be one position left
-                app.textarea.move_cursor_to(x-1, y);
-            }
-            
+            // Use textarea's built-in input method with proper conversion
+            app.textarea.input(Input {
+                key: Key::Left,
+                ctrl: false,
+                alt: false,
+                shift: false,
+            });
+
             // Update legacy cursor position for compatibility
             app.input = app.textarea.lines().join("\n");
             if app.cursor_position > 0 {
                 app.cursor_position -= 1;
             }
-            
+
             terminal.draw(|f| ui(f, &mut app))?;
         }
         _ => {}
@@ -184,20 +183,25 @@ fn handle_left_key(
 
 /// Handle Right arrow key for cursor movement
 fn handle_right_key(
-    app: &mut App,
+    mut app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     match app.state {
         AppState::Chat | AppState::ApiKeyInput => {
-            // Move cursor right using tui-textarea method
-            app.textarea.input(crossterm::event::KeyCode::Right);
-            
+            // Move cursor right using proper tui-textarea input
+            app.textarea.input(Input {
+                key: Key::Right,
+                ctrl: false,
+                alt: false,
+                shift: false,
+            });
+
             // Update legacy cursor position for compatibility
             app.input = app.textarea.lines().join("\n");
             if app.cursor_position < app.input.len() {
                 app.cursor_position += 1;
             }
-            
+
             terminal.draw(|f| ui(f, &mut app))?;
         }
         _ => {}
@@ -254,10 +258,10 @@ fn process_key_event(
             if app.state == AppState::Chat && modifiers.contains(KeyModifiers::SHIFT) {
                 // Insert a newline at cursor position (use TextArea's functionality)
                 app.textarea.insert_newline();
-                
+
                 // Update the legacy input for compatibility
                 app.input = app.textarea.lines().join("\n");
-                
+
                 // Force immediate redraw to update input box size and cursor position
                 terminal.draw(|f| ui(f, &mut app))?;
             } else {
@@ -285,7 +289,7 @@ fn process_key_event(
 
 /// Handle Enter key in different application states
 fn handle_enter_key(
-    app: &mut App,
+    mut app: &mut App,
     tx: &mpsc::Sender<String>,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
@@ -308,7 +312,7 @@ fn handle_enter_key(
             let api_key = app.textarea.lines().join("\n");
             // Clear the textarea
             app.textarea.delete_line_by_end();
-            
+
             if !api_key.is_empty() {
                 app.messages
                     .push("DEBUG: API key entered, continuing setup...".into());
@@ -316,7 +320,7 @@ fn handle_enter_key(
                 // Set the API key and return to setup state
                 app.api_key = Some(api_key);
                 app.state = AppState::Setup;
-                
+
                 // When returning to regular input, unmask characters (use space as "no mask")
                 app.textarea.set_mask_char(' ');
 
@@ -353,17 +357,22 @@ fn handle_enter_key(
 
             // Get the input from the textarea
             let input = app.textarea.lines().join("\n");
-            
+
             // Clear the textarea after submitting
             while !app.textarea.is_empty() {
                 app.textarea.delete_line_by_end();
                 app.textarea.delete_line_by_head();
                 if !app.textarea.is_empty() {
                     // Move to next line if there are more lines
-                    app.textarea.input(crossterm::event::KeyCode::Down);
+                    app.textarea.input(Input {
+                        key: Key::Down,
+                        ctrl: false,
+                        alt: false,
+                        shift: false,
+                    });
                 }
             }
-            
+
             // Update legacy input field for compatibility
             app.input.clear();
 
@@ -479,7 +488,7 @@ fn format_and_display_response(app: &mut App, response: &str) {
 
 /// Handle Down key in different application states
 fn handle_down_key(
-    app: &mut App,
+    mut app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     match app.state {
@@ -497,11 +506,16 @@ fn handle_down_key(
             // When not in command mode, handle multiline navigation with TextArea
             else if !app.textarea.is_empty() {
                 // Move down using tui-textarea method
-                app.textarea.input(crossterm::event::KeyCode::Down);
-                
+                app.textarea.input(Input {
+                    key: Key::Down,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                });
+
                 // Update legacy input and cursor for compatibility
                 app.input = app.textarea.lines().join("\n");
-                
+
                 // Force redraw to update cursor position
                 terminal.draw(|f| ui(f, &mut app))?;
             }
@@ -513,7 +527,7 @@ fn handle_down_key(
 
 /// Handle Tab key in different application states
 fn handle_tab_key(
-    app: &mut App,
+    mut app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     match app.state {
@@ -542,7 +556,7 @@ fn handle_tab_key(
 
 /// Handle Up key in different application states
 fn handle_up_key(
-    app: &mut App,
+    mut app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     match app.state {
@@ -560,11 +574,16 @@ fn handle_up_key(
             // When not in command mode, handle multiline navigation with TextArea
             else if !app.textarea.is_empty() {
                 // Move up using tui-textarea method
-                app.textarea.input(crossterm::event::KeyCode::Up);
-                
+                app.textarea.input(Input {
+                    key: Key::Up,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                });
+
                 // Update legacy input and cursor for compatibility
                 app.input = app.textarea.lines().join("\n");
-                
+
                 // Force redraw to update cursor position
                 terminal.draw(|f| ui(f, &mut app))?;
             }
@@ -576,7 +595,7 @@ fn handle_up_key(
 
 /// Handle BackTab key in different application states
 fn handle_backtab_key(
-    app: &mut App,
+    mut app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     if let AppState::Setup = app.state {
@@ -589,7 +608,7 @@ fn handle_backtab_key(
 
 /// Handle character key in different application states
 fn handle_char_key(
-    app: &mut App,
+    mut app: &mut App,
     c: char,
     _: KeyModifiers, // Unused parameter
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -603,19 +622,36 @@ fn handle_char_key(
                 terminal.draw(|f| ui(f, &mut app))?;
                 return Ok(());
             }
-            
-            // Insert the character at the current cursor position
-            app.textarea.insert_char(c);
-            
+
+            // Insert the character using proper input method
+            app.textarea.input(Input {
+                key: Key::Char(c),
+                ctrl: false,
+                alt: false,
+                shift: false,
+            });
+
             // Update legacy input field for compatibility
             app.input = app.textarea.lines().join("\n");
-            
-            // Make sure cursor within bounds (not needed with TextArea, but kept for compatibility)
-            app.cursor_position = app.textarea.cursor().0 + app.textarea.cursor().1 * (app.input.len() + 1);
-            app.cursor_position = app.cursor_position.min(app.input.len());
+
+            // Update cursor position for compatibility
+            let (x, y) = app.textarea.cursor();
+            // Calculate cursor position based on line length up to the current line plus current position
+            app.cursor_position = app
+                .textarea
+                .lines()
+                .iter()
+                .take(y)
+                .map(|line| line.len() + 1) // +1 for newline
+                .sum::<usize>()
+                + x;
 
             // Check if we're entering command mode with the / character
-            if app.state == AppState::Chat && c == '/' && app.textarea.lines().len() == 1 && app.textarea.lines()[0] == "/" {
+            if app.state == AppState::Chat
+                && c == '/'
+                && app.textarea.lines().len() == 1
+                && app.textarea.lines()[0] == "/"
+            {
                 app.command_mode = true;
                 app.show_command_menu = true;
                 app.selected_command = 0;
@@ -638,17 +674,22 @@ fn handle_char_key(
 
 /// Handle backspace key in different application states
 fn handle_backspace_key(
-    app: &mut App,
+    mut app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     match app.state {
         AppState::Chat | AppState::ApiKeyInput => {
-            // Delete the character before the cursor
-            app.textarea.delete_char();
-            
+            // Delete the character before the cursor using proper input method
+            app.textarea.input(Input {
+                key: Key::Backspace,
+                ctrl: false,
+                alt: false,
+                shift: false,
+            });
+
             // Update legacy input field for compatibility
             app.input = app.textarea.lines().join("\n");
-            
+
             // Update legacy cursor position for compatibility
             if app.cursor_position > 0 {
                 app.cursor_position -= 1;
@@ -668,7 +709,7 @@ fn handle_backspace_key(
 
 /// Handle PageUp key for scrolling
 fn handle_page_up_key(
-    app: &mut App,
+    mut app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     if let AppState::Chat = app.state {
@@ -680,7 +721,7 @@ fn handle_page_up_key(
 
 /// Handle PageDown key for scrolling
 fn handle_page_down_key(
-    app: &mut App,
+    mut app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     if let AppState::Chat = app.state {
@@ -692,7 +733,7 @@ fn handle_page_down_key(
 
 /// Handle Home key for scrolling to top and moving cursor to start of input
 fn handle_home_key(
-    app: &mut App,
+    mut app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     match app.state {
@@ -702,18 +743,28 @@ fn handle_home_key(
                 app.scroll_position = 0; // Scroll to top
             } else {
                 // Move to start of line
-                app.textarea.input(crossterm::event::KeyCode::Home);
-                
+                app.textarea.input(Input {
+                    key: Key::Home,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                });
+
                 // Update legacy cursor position for compatibility
                 app.input = app.textarea.lines().join("\n");
-                let (x, y) = app.textarea.cursor();
+                let (x, _y) = app.textarea.cursor();
                 app.cursor_position = x;
             }
             terminal.draw(|f| ui(f, &mut app))?;
         }
         AppState::ApiKeyInput => {
             // Move cursor to start of input
-            app.textarea.input(crossterm::event::KeyCode::Home);
+            app.textarea.input(Input {
+                key: Key::Home,
+                ctrl: false,
+                alt: false,
+                shift: false,
+            });
             app.cursor_position = 0; // Update legacy cursor position
             terminal.draw(|f| ui(f, &mut app))?;
         }
@@ -724,7 +775,7 @@ fn handle_home_key(
 
 /// Handle End key for scrolling to bottom and moving cursor to end of input
 fn handle_end_key(
-    app: &mut App,
+    mut app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     match app.state {
@@ -734,8 +785,13 @@ fn handle_end_key(
                 app.auto_scroll_to_bottom(); // Scroll to bottom
             } else {
                 // Move to end of line
-                app.textarea.input(crossterm::event::KeyCode::End);
-                
+                app.textarea.input(Input {
+                    key: Key::End,
+                    ctrl: false,
+                    alt: false,
+                    shift: false,
+                });
+
                 // Update legacy cursor position for compatibility
                 app.input = app.textarea.lines().join("\n");
                 app.cursor_position = app.input.len();
@@ -744,12 +800,17 @@ fn handle_end_key(
         }
         AppState::ApiKeyInput => {
             // Move cursor to end of input
-            app.textarea.input(crossterm::event::KeyCode::End);
-            
+            app.textarea.input(Input {
+                key: Key::End,
+                ctrl: false,
+                alt: false,
+                shift: false,
+            });
+
             // Update legacy cursor position
             app.input = app.textarea.lines().join("\n");
             app.cursor_position = app.input.len();
-            
+
             terminal.draw(|f| ui(f, &mut app))?;
         }
         _ => {}

@@ -19,8 +19,8 @@ use tui_textarea::TextArea;
 
 pub struct App {
     pub state: AppState,
-    pub textarea: TextArea<'static>,  // TextArea widget for improved multiline input
-    pub input: String,                // Keep for backward compatibility during transition
+    pub textarea: TextArea<'static>, // TextArea widget for improved multiline input
+    pub input: String,               // Keep for backward compatibility during transition
     pub messages: Vec<String>,
     pub download_progress: Option<(u64, u64)>,
     pub selected_model: usize,

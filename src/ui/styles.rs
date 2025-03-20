@@ -8,17 +8,17 @@ impl AppStyles {
     pub fn primary_color() -> Color {
         Color::Rgb(86, 182, 194) // Soft teal
     }
-    
+
     /// Secondary color for the application
     pub fn secondary_color() -> Color {
         Color::Rgb(240, 240, 240) // Almost white
     }
-    
+
     /// Accent color for highlights and important elements
     pub fn accent_color() -> Color {
         Color::Rgb(95, 129, 157) // Soft blue
     }
-    
+
     /// Background color for selected elements
     pub fn selection_bg() -> Color {
         Color::Rgb(45, 45, 45) // Dark gray
@@ -78,18 +78,19 @@ impl AppStyles {
     }
 
     /// Style for the text cursor
+    #[allow(dead_code)]
     pub fn cursor() -> Style {
         Style::default()
             .fg(Color::Black)
             .bg(Self::primary_color())
             .add_modifier(Modifier::BOLD)
     }
-    
+
     /// Border style for panels
     pub fn border() -> Style {
         Style::default().fg(Color::Rgb(100, 100, 100)) // Subtle border
     }
-    
+
     /// Style for section headers
     pub fn section_header() -> Style {
         Style::default()

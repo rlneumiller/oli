@@ -32,7 +32,9 @@ pub fn create_status_bar(app: &App) -> Line {
     } else {
         Span::styled(
             " 🖥️ Local ",
-            Style::default().fg(Color::Black).bg(Color::Rgb(240, 180, 100)), // Soft amber background
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Rgb(240, 180, 100)), // Soft amber background
         )
     };
 
@@ -190,6 +192,7 @@ pub fn create_message_list(app: &App, visible_area: Rect) -> Paragraph {
 }
 
 /// Create an input box for chat or API key input
+#[allow(dead_code)]
 pub fn create_input_box(app: &App, is_api_key: bool) -> Paragraph {
     // Determine placeholder text based on input context
     let placeholder = if is_api_key {
@@ -478,12 +481,14 @@ pub fn create_model_list(app: &App) -> List {
         .collect();
 
     List::new(models)
-        .block(Block::default()
-            .borders(Borders::ALL)
-            .title(" Models ")
-            .title_alignment(Alignment::Left)
-            .border_style(AppStyles::border())
-            .padding(Padding::new(1, 0, 1, 0)))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Models ")
+                .title_alignment(Alignment::Left)
+                .border_style(AppStyles::border())
+                .padding(Padding::new(1, 0, 1, 0)),
+        )
         .highlight_style(AppStyles::highlight())
 }
 
@@ -524,12 +529,14 @@ pub fn create_progress_display(app: &App) -> Paragraph {
     };
 
     Paragraph::new(progress_text)
-        .block(Block::default()
-            .borders(Borders::ALL)
-            .title(" Progress ")
-            .title_alignment(Alignment::Left)
-            .border_style(AppStyles::border())
-            .padding(Padding::new(1, 0, 0, 0)))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Progress ")
+                .title_alignment(Alignment::Left)
+                .border_style(AppStyles::border())
+                .padding(Padding::new(1, 0, 0, 0)),
+        )
         .style(AppStyles::success())
 }
 
@@ -562,12 +569,14 @@ pub fn create_api_key_info(app: &App) -> List {
     };
 
     List::new(message_items)
-        .block(Block::default()
-            .borders(Borders::ALL)
-            .title(" Information ")
-            .title_alignment(Alignment::Left)
-            .border_style(AppStyles::border())
-            .padding(Padding::new(1, 0, 0, 0)))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Information ")
+                .title_alignment(Alignment::Left)
+                .border_style(AppStyles::border())
+                .padding(Padding::new(1, 0, 0, 0)),
+        )
         .style(Style::default().fg(Color::Rgb(240, 180, 100)))
 }
 
@@ -599,11 +608,17 @@ pub fn create_permission_content(app: &App) -> Paragraph {
         Line::from(""),
         Line::from(vec![
             Span::raw("Tool: "),
-            Span::styled(&tool.tool_name, Style::default().fg(AppStyles::primary_color())),
+            Span::styled(
+                &tool.tool_name,
+                Style::default().fg(AppStyles::primary_color()),
+            ),
         ]),
         Line::from(vec![
             Span::raw("Action: "),
-            Span::styled(description, Style::default().fg(AppStyles::secondary_color())),
+            Span::styled(
+                description,
+                Style::default().fg(AppStyles::secondary_color()),
+            ),
         ]),
         Line::from(""),
         Line::from(vec![Span::styled(

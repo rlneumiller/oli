@@ -7,8 +7,7 @@ pub mod utils;
 
 use anyhow::{Context, Result};
 use dotenv::dotenv;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+// IO operations are handled elsewhere in specific modules
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -50,7 +49,7 @@ impl App {
         // Configure TextArea to match the app's style
         textarea.set_placeholder_text("Type your message here or type / for commands");
         textarea.set_cursor_line_style(ratatui::style::Style::default());
-        
+
         Self {
             state: AppState::Setup,
             textarea,
@@ -98,7 +97,7 @@ impl CommandHandler for App {
 
         // Get the current text from the textarea
         let input_text = self.textarea.lines().join("\n");
-        
+
         // Update the legacy input field for compatibility
         self.input = input_text.clone();
 
@@ -448,7 +447,7 @@ impl ModelManager for App {
         self.error_message = None;
 
         let model_name = self.current_model().name.clone();
-        
+
         self.messages
             .push(format!("Setting up model: {}", model_name));
 
@@ -479,7 +478,7 @@ impl ModelManager for App {
         // If agent is successfully set up, we're done
         if self.use_agent && self.agent.is_some() {
             tx.send("setup_complete".into())?;
-            return Ok(());
+            Ok(())
         } else {
             let provider_name = match model_name.as_str() {
                 "GPT-4o" => "OpenAI",
@@ -487,7 +486,7 @@ impl ModelManager for App {
             };
             self.handle_error(format!("{} API key not found or is invalid", provider_name));
             tx.send("setup_failed".into())?;
-            return Ok(());
+            Ok(())
         }
     }
 
@@ -499,14 +498,17 @@ impl ModelManager for App {
         _fallback_url: &str,
     ) -> Result<()> {
         // Model downloading is removed - will be replaced with Ollama integration
-        self.messages.push("Local model support has been temporarily removed.".into());
-        self.messages.push("Ollama integration will be added in a future update.".into());
-        self.messages.push("Please use cloud-based models like Claude or GPT instead.".into());
-        
+        self.messages
+            .push("Local model support has been temporarily removed.".into());
+        self.messages
+            .push("Ollama integration will be added in a future update.".into());
+        self.messages
+            .push("Please use cloud-based models like Claude or GPT instead.".into());
+
         // Set appropriate app state
         self.download_active = false;
         self.state = AppState::Chat;
-        
+
         tx.send("setup_complete".into())?;
         Ok(())
     }
@@ -523,7 +525,11 @@ impl ModelManager for App {
         Ok(())
     }
 
-    fn attempt_download(_url: &str, _path: &Path, _tx: &mpsc::Sender<String>) -> Result<(), String> {
+    fn attempt_download(
+        _url: &str,
+        _path: &Path,
+        _tx: &mpsc::Sender<String>,
+    ) -> Result<(), String> {
         // Model downloading is removed - will be replaced with Ollama integration
         Ok(())
     }

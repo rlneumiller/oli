@@ -16,7 +16,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         AppState::Setup => draw_setup(f, app),
         AppState::ApiKeyInput => draw_api_key_input(f, app),
         AppState::Chat => draw_chat(f, app),
-        AppState::Error(ref error_msg) => draw_error(f, app, error_msg),
+        AppState::Error(ref error_msg) => draw_error(f, error_msg),
     }
 
     // Note: We no longer need to mutate app here as this is handled
@@ -90,11 +90,11 @@ pub fn draw_api_key_input(f: &mut Frame, app: &mut App) {
         .title(" API Key ")
         .title_alignment(Alignment::Left)
         .border_style(AppStyles::border());
-    
+
     // Set the block for textarea and mask characters
     app.textarea.set_block(input_block);
     app.textarea.set_mask_char('*'); // Mask input with asterisks
-    
+
     // Render the masked textarea
     f.render_widget(&app.textarea, chunks[2]);
 }
@@ -173,10 +173,10 @@ pub fn draw_chat(f: &mut Frame, app: &mut App) {
             .title(" Input (Type / for commands) ")
             .title_alignment(Alignment::Left)
             .border_style(AppStyles::border());
-        
+
         // Set the block for the textarea
         app.textarea.set_block(input_block);
-        
+
         // Render the textarea
         f.render_widget(&app.textarea, input_chunks[0]);
 
@@ -190,10 +190,10 @@ pub fn draw_chat(f: &mut Frame, app: &mut App) {
             .title(" Input (Type / for commands) ")
             .title_alignment(Alignment::Left)
             .border_style(AppStyles::border());
-        
+
         // Set the block for the textarea
         app.textarea.set_block(input_block);
-        
+
         // Render the textarea with its block
         f.render_widget(&app.textarea, chunks[2]);
     }
@@ -206,7 +206,7 @@ pub fn draw_chat(f: &mut Frame, app: &mut App) {
 }
 
 /// Draw error screen
-pub fn draw_error(f: &mut Frame, _app: &mut App, error_msg: &str) {
+pub fn draw_error(f: &mut Frame, error_msg: &str) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(3)
@@ -236,55 +236,18 @@ pub fn draw_error(f: &mut Frame, _app: &mut App, error_msg: &str) {
     f.render_widget(error_text, chunks[1]);
 
     let instruction = Paragraph::new("Press Enter to return to setup or Esc to exit")
-        .block(Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
-            .padding(Padding::new(0, 0, 0, 0)))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .padding(Padding::new(0, 0, 0, 0)),
+        )
         .style(Style::default().fg(Color::Yellow))
         .alignment(Alignment::Center);
     f.render_widget(instruction, chunks[2]);
 }
 
-/// Calculate cursor position for multiline input
-fn calculate_cursor_position(input: &str, base_x: u16, base_y: u16) -> (u16, u16) {
-    if !input.contains('\n') {
-        // Single line input
-        // +1 for border, +2 for "> " prefix
-        return (base_x + input.len() as u16 + 3, base_y + 1);
-    }
-
-    // For multiline input, place cursor at the end of the last line
-    // Check if input ends with newline
-    let trailing_newline = input.ends_with('\n');
-
-    // Split the input by newlines
-    let lines: Vec<&str> = input.split('\n').collect();
-
-    // Determine the position of the cursor
-    let line_count = lines.len();
-
-    // Calculate the last line index (always the last line)
-    let last_line_idx = line_count - 1;
-
-    // Get the last line text
-    let last_line = if trailing_newline {
-        "" // Empty string for newline
-    } else {
-        lines.last().unwrap_or(&"")
-    };
-
-    // Cursor x position depends on whether we're on the first line or subsequent lines
-    let indent_width = 2; // Width of the indentation ("  " or "> ")
-    let border_offset = 1; // Offset for the border
-
-    // Set x position at start of line + indentation + text length
-    let x = base_x + border_offset + indent_width + last_line.len() as u16;
-
-    // Set y position (add 1 for 0-indexed lines and 1 for the top border)
-    let y = base_y + 1 + last_line_idx as u16;
-
-    (x, y)
-}
+// Cursor positioning now handled by tui-textarea component
 
 /// Draw permission dialog over the current UI
 pub fn draw_permission_dialog(f: &mut Frame, app: &App) {
