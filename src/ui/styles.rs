@@ -54,4 +54,13 @@ impl AppStyles {
     pub fn hint() -> Style {
         Style::default().fg(Color::DarkGray)
     }
+
+    /// Style for the text cursor
+    pub fn cursor() -> Style {
+        Style::default()
+            .fg(Color::Black) // Black text
+            .bg(Color::LightCyan) // Light cyan background
+            .add_modifier(Modifier::BOLD)
+            .add_modifier(Modifier::REVERSED) // Reversed colors for high visibility
+    }
 }

@@ -23,7 +23,6 @@ pub use state::{App, AppState};
 pub use utils::{ErrorHandler, Scrollable};
 
 use crate::agent::core::{Agent, LLMProvider};
-use crate::inference;
 use crate::models::{get_available_models, ModelConfig};
 
 impl Default for App {
@@ -52,7 +51,6 @@ impl App {
             download_progress: None,
             selected_model: 0,
             available_models: get_available_models(),
-            inference: None,
             download_active: false,
             error_message: None,
             debug_messages: false, // Debug mode off by default
@@ -78,6 +76,8 @@ impl App {
             show_intermediate_steps: true, // Default to showing intermediate steps
             show_shortcuts_hint: true,     // Default to showing shortcut hints
             show_detailed_shortcuts: false, // Default to not showing detailed shortcuts
+            // Initialize cursor position
+            cursor_position: 0, // Start at the beginning of the input
         }
     }
 }
@@ -479,7 +479,6 @@ impl ModelManager for App {
             ));
         }
 
-        let n_gpu_layers = self.current_model().n_gpu_layers;
         let model_config = self.current_model();
 
         // Check if the model supports agent capabilities
@@ -506,42 +505,26 @@ impl ModelManager for App {
                 self.download_active = false;
                 self.state = AppState::Chat;
 
-                // If agent is successfully set up, we can skip loading the local model
+                // If agent is successfully set up, we're done
                 if self.agent.is_some() {
                     return Ok(());
                 }
             }
         }
 
-        // Fall back to loading local model
-        match inference::ModelSession::new(model_path, n_gpu_layers) {
-            Ok(inference) => {
-                self.inference = Some(inference);
-                self.messages.push("Model loaded successfully!".into());
-                self.messages
-                    .push("You can now ask questions about coding tasks.".into());
-                self.messages.push("Try asking about specific programming concepts, debugging help, or code explanations.".into());
-                self.download_active = false;
-                self.state = AppState::Chat;
-                Ok(())
-            }
-            Err(e) => {
-                let error_msg = format!("Failed to load model: {}", e);
-                self.messages.push(format!("ERROR: {}", error_msg));
+        // Show message that local models are not supported yet
+        self.messages
+            .push("Local model support has been temporarily removed.".into());
+        self.messages
+            .push("Ollama integration will be added in a future update.".into());
+        self.messages
+            .push("Please use cloud-based models like Claude or GPT instead.".into());
 
-                // Add more detailed diagnostic info
-                if self.debug_messages {
-                    self.messages
-                        .push(format!("DEBUG: Model file exists: {}", model_path.exists()));
-                    if let Ok(metadata) = std::fs::metadata(model_path) {
-                        self.messages
-                            .push(format!("DEBUG: Model file size: {} bytes", metadata.len()));
-                    }
-                }
+        // Set appropriate app state
+        self.download_active = false;
+        self.state = AppState::Chat;
 
-                Err(anyhow::anyhow!(error_msg))
-            }
-        }
+        Ok(())
     }
 
     fn setup_models(&mut self, tx: mpsc::Sender<String>) -> Result<()> {
@@ -1032,37 +1015,13 @@ impl AgentManager for App {
             return self.query_with_agent(prompt);
         }
 
-        // Fall back to local model if agent is not available
-        // Check if the model is loaded
-        match self.inference.as_mut() {
-            Some(inference) => {
-                // Attempt to generate a response
-                match inference.generate(prompt) {
-                    Ok(response) => {
-                        // Successful response
-                        if self.debug_messages {
-                            self.messages.push(format!(
-                                "DEBUG: Generated response of {} characters",
-                                response.len()
-                            ));
-                        }
-                        Ok(response)
-                    }
-                    Err(e) => {
-                        // Handle generation error
-                        let error_msg = format!("Error generating response: {}", e);
-                        self.messages.push(format!("ERROR: {}", error_msg));
-                        Err(anyhow::anyhow!(error_msg))
-                    }
-                }
-            }
-            None => {
-                // Model not loaded
-                let error_msg = "Model not loaded".to_string();
-                self.messages.push(format!("ERROR: {}", error_msg));
-                Err(anyhow::anyhow!(error_msg))
-            }
-        }
+        // Local models are no longer supported
+        let error_msg = "Local model support has been temporarily removed. Please use cloud-based models instead.";
+        self.messages.push(format!("NOTE: {}", error_msg));
+        self.messages
+            .push("Ollama integration will be added in a future update.".into());
+
+        Err(anyhow::anyhow!(error_msg))
     }
 
     fn query_with_agent(&mut self, prompt: &str) -> Result<String> {
