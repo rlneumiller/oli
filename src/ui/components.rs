@@ -187,30 +187,93 @@ pub fn create_input_box(app: &App, is_api_key: bool) -> Paragraph {
 
     // Create appropriate input content based on mode
     let input_content = if app.input.is_empty() {
-        // For empty input, just show the prompt and placeholder
-        Text::from(Span::styled(
-            format!("> {}", placeholder),
-            AppStyles::hint(),
-        ))
-    } else if is_api_key {
-        // Mask the API key with asterisks for privacy
-        Text::from(Span::raw(format!("> {}", "*".repeat(app.input.len()))))
-    } else if !app.input.contains('\n') {
-        // Single line input - simpler case
+        // For empty input, show the prompt, placeholder, and cursor
         Text::from(vec![Line::from(vec![
             Span::raw("> "),
-            Span::styled(
-                app.input.as_str(),
-                Style::default()
-                    .fg(Color::LightCyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            // Only show the placeholder if there's something defined
+            if !placeholder.is_empty() {
+                Span::styled(placeholder, AppStyles::hint())
+            } else {
+                Span::raw("")
+            },
+            // Always show the block cursor
+            Span::styled("█", AppStyles::cursor()),
         ])])
-    } else {
-        // Multiline input
+    } else if is_api_key {
+        // Mask the API key with asterisks for privacy and add cursor
+        let (before_cursor, after_cursor) = if app.cursor_position < app.input.len() {
+            (app.cursor_position, app.input.len() - app.cursor_position)
+        } else {
+            (app.input.len(), 0)
+        };
+
+        let mut spans = vec![Span::raw("> ")];
+        if before_cursor > 0 {
+            spans.push(Span::raw("*".repeat(before_cursor)));
+        }
+        spans.push(Span::styled("█", AppStyles::cursor()));
+        if after_cursor > 0 {
+            spans.push(Span::raw("*".repeat(after_cursor)));
+        }
+
+        Text::from(vec![Line::from(spans)])
+    } else if !app.input.contains('\n') {
+        // Single line input - add cursor indicator at cursor position
+        let (before_cursor, after_cursor) = app.input.split_at(app.cursor_position);
+
+        // Text style for normal content
         let text_style = Style::default()
             .fg(Color::LightCyan)
             .add_modifier(Modifier::BOLD);
+
+        // Use our consistent cursor style from AppStyles
+        let cursor_style = AppStyles::cursor();
+
+        // Create spans with cursor indicator
+        let mut spans = vec![Span::raw("> ")];
+
+        // Add text before cursor
+        if !before_cursor.is_empty() {
+            spans.push(Span::styled(before_cursor, text_style));
+        }
+
+        // Handle cursor and text after cursor differently based on position
+        if app.cursor_position < app.input.len() {
+            // We're at a position with a character
+            // Get the character at cursor position
+            let cursor_char = after_cursor.chars().next().unwrap();
+
+            // Split after_cursor into first character and rest
+            let first_char = cursor_char.to_string();
+            let rest_of_text = if after_cursor.len() > cursor_char.len_utf8() {
+                &after_cursor[cursor_char.len_utf8()..]
+            } else {
+                ""
+            };
+
+            // Add the character at cursor position with inverted colors
+            // to make it highly visible
+            spans.push(Span::styled(first_char, cursor_style));
+
+            // Add the rest of the text with normal style
+            if !rest_of_text.is_empty() {
+                spans.push(Span::styled(rest_of_text, text_style));
+            }
+        } else {
+            // We're at the end of text, show a block cursor
+            spans.push(Span::styled("█", cursor_style));
+        }
+
+        Text::from(vec![Line::from(spans)])
+    } else {
+        // Multiline input - more complex cursor positioning
+        // Define consistent styles for normal text and cursor
+        let text_style = Style::default()
+            .fg(Color::LightCyan)
+            .add_modifier(Modifier::BOLD);
+
+        // Use our consistent cursor style from AppStyles
+        let cursor_style = AppStyles::cursor();
 
         // Split input into lines and process each one
         let input_str = app.input.as_str(); // Get a reference to the string
@@ -220,25 +283,95 @@ pub fn create_input_box(app: &App, is_api_key: bool) -> Paragraph {
         // Convert to styled Lines
         let mut styled_lines = Vec::new();
 
+        // Track position within the overall string
+        let mut char_pos = 0;
+        let cursor_pos = app.cursor_position.min(input_str.len()); // Ensure cursor is within bounds
+
         // Process each line
         for (idx, &line) in lines.iter().enumerate() {
-            if idx == 0 {
-                // First line gets the prompt
-                styled_lines.push(Line::from(vec![
-                    Span::raw("> "),
-                    Span::styled(line, text_style),
-                ]));
+            let line_start_pos = char_pos;
+            let line_end_pos = line_start_pos + line.len();
+
+            // Check if cursor is on this line
+            let cursor_on_this_line = cursor_pos >= line_start_pos
+                && (cursor_pos <= line_end_pos
+                    || (idx == lines.len() - 1
+                        && trailing_newline
+                        && cursor_pos == line_end_pos + 1));
+
+            let line_prefix = if idx == 0 { "> " } else { "  " };
+
+            if cursor_on_this_line {
+                // Line with cursor - split at cursor position
+                let cursor_offset = cursor_pos - line_start_pos;
+
+                if cursor_offset <= line.len() {
+                    // Regular cursor position within the line
+                    let (before_cursor, after_cursor) = line.split_at(cursor_offset);
+
+                    let mut spans = vec![Span::raw(line_prefix)];
+
+                    // Add text before cursor
+                    if !before_cursor.is_empty() {
+                        spans.push(Span::styled(before_cursor, text_style));
+                    }
+
+                    // Handle cursor rendering in multiline input
+                    if !after_cursor.is_empty() {
+                        // We're at a position with a character
+                        // Get the character at cursor position
+                        let cursor_char = after_cursor.chars().next().unwrap();
+
+                        // Split after_cursor into first character and rest
+                        let first_char = cursor_char.to_string();
+                        let rest_of_text = if after_cursor.len() > cursor_char.len_utf8() {
+                            &after_cursor[cursor_char.len_utf8()..]
+                        } else {
+                            ""
+                        };
+
+                        // Add the character at cursor position with the cursor style
+                        spans.push(Span::styled(first_char, cursor_style));
+
+                        // Add the rest of the text with normal style
+                        if !rest_of_text.is_empty() {
+                            spans.push(Span::styled(rest_of_text, text_style));
+                        }
+                    } else {
+                        // At the end of text, just add the block cursor
+                        spans.push(Span::styled("█", cursor_style));
+                    }
+
+                    styled_lines.push(Line::from(spans));
+                } else {
+                    // This should only happen at the end of a line with trailing newline
+                    styled_lines.push(Line::from(vec![
+                        Span::raw(line_prefix),
+                        Span::styled(line, text_style),
+                        Span::styled("█", cursor_style),
+                    ]));
+                }
             } else {
-                // Subsequent lines get indentation
+                // Regular line without cursor
                 styled_lines.push(Line::from(vec![
-                    Span::raw("  "),
+                    Span::raw(line_prefix),
                     Span::styled(line, text_style),
                 ]));
             }
+
+            // Update position counters (add 1 for the newline character)
+            char_pos = line_end_pos + 1;
         }
 
-        // If the input ends with a newline, add an empty line with indentation
-        if trailing_newline {
+        // If the input ends with a newline and cursor is at the end, add a cursor on a new line
+        if trailing_newline && cursor_pos == input_str.len() {
+            styled_lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("█", cursor_style),
+            ]));
+        }
+        // If the input ends with a newline but cursor is not at the end, add an empty line
+        else if trailing_newline {
             styled_lines.push(Line::from(vec![
                 Span::raw("  "),
                 Span::styled("", text_style),
@@ -275,18 +408,28 @@ pub fn create_command_menu(app: &App) -> List {
         app.selected_command.min(filtered_commands.len() - 1)
     };
 
+    // Calculate maximum command name length for proper alignment
+    let max_cmd_length = filtered_commands
+        .iter()
+        .map(|cmd| cmd.name.len())
+        .max()
+        .unwrap_or(0);
+
     let command_items: Vec<ListItem> = filtered_commands
         .iter()
         .enumerate()
         .map(|(i, cmd)| {
+            // Calculate padding needed for alignment
+            let padding = " ".repeat(max_cmd_length.saturating_sub(cmd.name.len()) + 4);
+
             if i == valid_selected {
                 // Highlight the selected command with an arrow indicator and blue text
-                ListItem::new(format!("▶ {} - {}", cmd.name, cmd.description))
+                ListItem::new(format!("▶ {}{}{}", cmd.name, padding, cmd.description))
                     .style(AppStyles::command_highlight())
             } else {
                 // Non-selected commands with proper spacing
-                ListItem::new(format!("  {} - {}", cmd.name, cmd.description))
-                    .style(Style::default().fg(Color::Gray))
+                ListItem::new(format!("  {}{}{}", cmd.name, padding, cmd.description))
+                    .style(Style::default().fg(Color::DarkGray))
             }
         })
         .collect();
@@ -294,7 +437,7 @@ pub fn create_command_menu(app: &App) -> List {
     // Create the list with a subtle style
     List::new(command_items)
         .block(Block::default().borders(Borders::NONE))
-        .style(Style::default().fg(Color::Gray)) // Default text color
+        .style(Style::default().fg(Color::DarkGray)) // Default text color
         .highlight_style(AppStyles::command_highlight()) // Use the same style for consistency
 }
 
@@ -740,45 +883,54 @@ pub fn create_shortcuts_panel(app: &App) -> Paragraph {
     if app.input.is_empty() {
         if app.show_detailed_shortcuts {
             // Show detailed shortcuts when ? has been pressed and input is empty
-            let shortcuts_text = Text::from(vec![
-                Line::from(vec![Span::styled(
-                    "Keyboard Shortcuts",
-                    Style::default().add_modifier(Modifier::BOLD),
-                )]),
-                Line::from(vec![
-                    Span::styled(
-                        "/ ",
-                        Style::default()
-                            .fg(Color::LightBlue)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw("Show commands menu"),
-                ]),
-                Line::from(vec![
-                    Span::styled(
-                        "\\⏎ ",
-                        Style::default()
-                            .fg(Color::LightBlue)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw("Add newline in input"),
-                ]),
-            ]);
+            // Define shortcuts and their descriptions
+            let shortcuts = [
+                ("/ ", "Show commands menu"),
+                ("\\⏎ ", "Add newline in input"),
+            ];
 
-            Paragraph::new(shortcuts_text).style(Style::default().fg(Color::Gray))
+            // Calculate max shortcut length for vertical alignment
+            let max_shortcut_length = shortcuts.iter().map(|(s, _)| s.len()).max().unwrap_or(0);
+
+            // Create the title and shortcut lines
+            let mut lines = vec![Line::from(vec![Span::styled(
+                "Keyboard Shortcuts",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )])];
+
+            // Add each shortcut with proper alignment
+            for (shortcut, description) in shortcuts.iter() {
+                let padding = " ".repeat(max_shortcut_length.saturating_sub(shortcut.len()) + 2);
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        *shortcut,
+                        Style::default()
+                            .fg(Color::Gray)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(padding, Style::default()),
+                    Span::styled(*description, Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+
+            let shortcuts_text = Text::from(lines);
+
+            Paragraph::new(shortcuts_text)
         } else if app.show_shortcuts_hint {
             // Show the basic hint only when input is empty
             let shortcuts_text = Text::from(vec![Line::from(vec![
                 Span::styled(
                     "? ",
                     Style::default()
-                        .fg(Color::LightBlue)
+                        .fg(Color::Gray)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("for shortcuts", Style::default().fg(Color::DarkGray)),
             ])]);
 
-            Paragraph::new(shortcuts_text).style(Style::default().fg(Color::Gray))
+            Paragraph::new(shortcuts_text)
         } else {
             // Empty placeholder
             Paragraph::new("")

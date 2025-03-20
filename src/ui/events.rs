@@ -152,6 +152,42 @@ fn process_auto_scroll(
     Ok(())
 }
 
+/// Handle Left arrow key for cursor movement
+fn handle_left_key(
+    app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+) -> Result<()> {
+    match app.state {
+        AppState::Chat | AppState::ApiKeyInput => {
+            // Move cursor left if not at the beginning
+            if app.cursor_position > 0 {
+                app.cursor_position -= 1;
+                terminal.draw(|f| ui(f, &app))?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Handle Right arrow key for cursor movement
+fn handle_right_key(
+    app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+) -> Result<()> {
+    match app.state {
+        AppState::Chat | AppState::ApiKeyInput => {
+            // Move cursor right if not at the end
+            if app.cursor_position < app.input.len() {
+                app.cursor_position += 1;
+                terminal.draw(|f| ui(f, &app))?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Process keyboard events
 fn process_key_event(
     app: &mut App,
@@ -200,11 +236,38 @@ fn process_key_event(
         KeyCode::Enter => {
             // Check if the input ends with backslash - treat as newline request
             if app.state == AppState::Chat && app.input.ends_with('\\') {
+                // Check if cursor is at the end before making changes
+                let cursor_at_end = app.cursor_position == app.input.len();
+
+                // Store cursor position before changes
+                let cursor_pos = app.cursor_position;
+
                 // Remove the backslash
                 app.input.pop();
 
-                // Add a newline character
-                app.input.push('\n');
+                // If cursor was at the end, keep it at the end after changes
+                if cursor_at_end {
+                    // Add a newline character
+                    app.input.push('\n');
+                    // Move cursor to end of input
+                    app.cursor_position = app.input.len();
+                } else if cursor_pos == app.input.len() + 1 {
+                    // If cursor was at the position of the removed backslash
+                    // Add a newline character
+                    app.input.push('\n');
+                    // Keep cursor at same position (now after newline)
+                    app.cursor_position = app.input.len();
+                } else {
+                    // If cursor was somewhere else, just add the newline
+                    // and adjust cursor position if needed
+                    app.input.push('\n');
+
+                    // If cursor was after the removed backslash, adjust it
+                    // by moving it back one position
+                    if cursor_pos > app.input.len() - 1 {
+                        app.cursor_position = cursor_pos - 1;
+                    }
+                }
 
                 // Force immediate redraw to update input box size and cursor position
                 terminal.draw(|f| ui(f, &app))?;
@@ -216,6 +279,8 @@ fn process_key_event(
         KeyCode::Down => handle_down_key(app, terminal)?,
         KeyCode::Tab => handle_tab_key(app, terminal)?,
         KeyCode::Up => handle_up_key(app, terminal)?,
+        KeyCode::Left => handle_left_key(app, terminal)?,
+        KeyCode::Right => handle_right_key(app, terminal)?,
         KeyCode::BackTab => handle_backtab_key(app, terminal)?,
         KeyCode::Char(c) => handle_char_key(app, c, modifiers, terminal)?,
         KeyCode::Backspace => handle_backspace_key(app, terminal)?,
@@ -289,6 +354,9 @@ fn handle_enter_key(
             }
 
             let input = std::mem::take(&mut app.input);
+            // Reset cursor position since input is cleared
+            app.cursor_position = 0;
+
             if !input.is_empty() {
                 // No debug output needed here
 
@@ -416,6 +484,50 @@ fn handle_down_key(
                 app.select_next_command();
                 terminal.draw(|f| ui(f, &app))?;
             }
+            // When not in command mode and multiline input, move cursor down
+            else if app.input.contains('\n') {
+                // Find the current line and position within that line
+                let mut current_pos = 0;
+                let mut current_line_start = 0;
+                let mut next_line_start = 0;
+                let mut found_next_line = false;
+
+                // Analyze the input to find line boundaries
+                for (i, c) in app.input.chars().enumerate() {
+                    if i == app.cursor_position {
+                        // Mark the position on the current line
+                        current_pos = i - current_line_start;
+                    }
+
+                    if c == '\n' {
+                        if i < app.cursor_position {
+                            // This newline is before the cursor, update current line
+                            current_line_start = i + 1;
+                        } else if !found_next_line {
+                            // This is the end of the current line (start of next line)
+                            next_line_start = i + 1;
+                            found_next_line = true;
+                        }
+                    }
+                }
+
+                // Only move down if there's a line below
+                if found_next_line && next_line_start < app.input.len() {
+                    // Find the position on the next line (same column if possible)
+                    let next_line_end = app.input[next_line_start..]
+                        .find('\n')
+                        .map(|pos| next_line_start + pos)
+                        .unwrap_or(app.input.len());
+
+                    // Calculate the new cursor position
+                    let next_line_length = next_line_end - next_line_start;
+                    let new_pos = next_line_start + current_pos.min(next_line_length);
+
+                    // Update cursor position
+                    app.cursor_position = new_pos;
+                    terminal.draw(|f| ui(f, &app))?;
+                }
+            }
         }
         _ => {}
     }
@@ -468,6 +580,42 @@ fn handle_up_key(
                 app.select_prev_command();
                 terminal.draw(|f| ui(f, &app))?;
             }
+            // When not in command mode and multiline input, move cursor up
+            else if app.input.contains('\n') {
+                // Find the current line and position within that line
+                let mut current_pos = 0;
+                let mut current_line_start = 0;
+                let mut prev_line_start = 0;
+                let mut prev_line_end = 0;
+                let mut on_first_line = true;
+
+                // Analyze the input to find line boundaries
+                for (i, c) in app.input.chars().enumerate() {
+                    if c == '\n' && i < app.cursor_position {
+                        // This newline is before the cursor
+                        prev_line_start = current_line_start;
+                        prev_line_end = i;
+                        current_line_start = i + 1;
+                        on_first_line = false;
+                    }
+
+                    if i == app.cursor_position {
+                        // Mark the position on the current line
+                        current_pos = i - current_line_start;
+                    }
+                }
+
+                // Only move up if not on the first line
+                if !on_first_line {
+                    // Calculate the new cursor position
+                    let prev_line_length = prev_line_end - prev_line_start;
+                    let new_pos = prev_line_start + current_pos.min(prev_line_length);
+
+                    // Update cursor position
+                    app.cursor_position = new_pos;
+                    terminal.draw(|f| ui(f, &app))?;
+                }
+            }
         }
         _ => {}
     }
@@ -498,7 +646,17 @@ fn handle_char_key(
         AppState::Chat | AppState::ApiKeyInput => {
             // Newlines are handled in the Enter key handler
 
-            app.input.push(c);
+            // Insert character at cursor position instead of appending
+            app.input.insert(app.cursor_position, c);
+
+            // Move cursor forward (after the just-inserted character)
+            app.cursor_position += 1;
+
+            // Make sure cursor is always within bounds
+            app.cursor_position = app.cursor_position.min(app.input.len());
+
+            // Force immediate redraw to ensure cursor remains visible
+            terminal.draw(|f| ui(f, &app))?;
 
             // Check if we're entering command mode with the / character
             if app.state == AppState::Chat && c == '/' && app.input.len() == 1 {
@@ -511,6 +669,7 @@ fn handle_char_key(
                 // Toggle detailed shortcuts display and clear the '?' from input
                 app.show_detailed_shortcuts = !app.show_detailed_shortcuts;
                 app.input.clear();
+                app.cursor_position = 0; // Reset cursor position
             } else if app.command_mode {
                 // Update command mode state
                 app.check_command_mode();
@@ -533,7 +692,13 @@ fn handle_backspace_key(
 ) -> Result<()> {
     match app.state {
         AppState::Chat | AppState::ApiKeyInput => {
-            app.input.pop();
+            // Only delete a character if the cursor is not at the beginning of the string
+            if app.cursor_position > 0 {
+                // Remove the character before the cursor
+                app.input.remove(app.cursor_position - 1);
+                // Move the cursor back one position
+                app.cursor_position -= 1;
+            }
 
             // Check if we've exited command mode
             if app.state == AppState::Chat {
@@ -571,26 +736,87 @@ fn handle_page_down_key(
     Ok(())
 }
 
-/// Handle Home key for scrolling to top
+/// Handle Home key for scrolling to top and moving cursor to start of input
 fn handle_home_key(
     app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
-    if let AppState::Chat = app.state {
-        app.scroll_position = 0; // Scroll to top
-        terminal.draw(|f| ui(f, &app))?;
+    match app.state {
+        AppState::Chat => {
+            if app.input.is_empty() {
+                // If no input, use Home to scroll the message window to top
+                app.scroll_position = 0; // Scroll to top
+            } else if app.input.contains('\n') {
+                // In multiline mode, go to start of current line
+                let mut current_line_start = 0;
+
+                // Find the start of the current line
+                for (i, c) in app.input.chars().enumerate() {
+                    if c == '\n' && i < app.cursor_position {
+                        current_line_start = i + 1;
+                    }
+                    if i >= app.cursor_position {
+                        break;
+                    }
+                }
+
+                // Move to start of current line
+                app.cursor_position = current_line_start;
+            } else {
+                // In single line mode, go to start of input
+                app.cursor_position = 0;
+            }
+            terminal.draw(|f| ui(f, &app))?;
+        }
+        AppState::ApiKeyInput => {
+            // Move cursor to start of input
+            app.cursor_position = 0;
+            terminal.draw(|f| ui(f, &app))?;
+        }
+        _ => {}
     }
     Ok(())
 }
 
-/// Handle End key for scrolling to bottom
+/// Handle End key for scrolling to bottom and moving cursor to end of input
 fn handle_end_key(
     app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
-    if let AppState::Chat = app.state {
-        app.auto_scroll_to_bottom(); // Scroll to bottom
-        terminal.draw(|f| ui(f, &app))?;
+    match app.state {
+        AppState::Chat => {
+            if app.input.is_empty() {
+                // If no input, use End to scroll the message window to bottom
+                app.auto_scroll_to_bottom(); // Scroll to bottom
+            } else if app.input.contains('\n') {
+                // In multiline mode, go to end of current line
+                let mut current_line_end = app.input.len();
+
+                // Find the end of the current line
+                for (i, c) in app.input.chars().enumerate() {
+                    if i <= app.cursor_position {
+                        continue;
+                    }
+                    if c == '\n' {
+                        current_line_end = i;
+                        break;
+                    }
+                }
+
+                // Move to end of current line
+                app.cursor_position = current_line_end;
+            } else {
+                // In single line mode, go to end of input
+                app.cursor_position = app.input.len();
+            }
+            terminal.draw(|f| ui(f, &app))?;
+        }
+        AppState::ApiKeyInput => {
+            // Move cursor to end of input
+            app.cursor_position = app.input.len();
+            terminal.draw(|f| ui(f, &app))?;
+        }
+        _ => {}
     }
     Ok(())
 }

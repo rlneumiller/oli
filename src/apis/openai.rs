@@ -217,11 +217,31 @@ impl ApiClient for OpenAIClient {
         };
 
         // Add structured output format if specified in options
-        if let Some(json_schema) = &options.json_schema {
+        if let Some(_json_schema) = &options.json_schema {
             request.response_format = Some(json!({
-                "type": "json_object",
-                "schema": serde_json::from_str(json_schema).unwrap_or(json!({}))
+                "type": "json_object"
             }));
+
+            // Ensure at least one message contains the word "json" when using json_object response format
+            let has_json_keyword = request.messages.iter().any(|msg| {
+                msg.content
+                    .as_ref()
+                    .is_some_and(|content| content.to_lowercase().contains("json"))
+            });
+
+            if !has_json_keyword && !request.messages.is_empty() {
+                // Add "json" to the user's last message if it doesn't already contain it
+                if let Some(last_user_msg) = request
+                    .messages
+                    .iter_mut()
+                    .rev()
+                    .find(|msg| msg.role == "user")
+                {
+                    if let Some(content) = &mut last_user_msg.content {
+                        *content = format!("{} (Please provide the response as JSON)", content);
+                    }
+                }
+            }
         }
 
         let response = self
@@ -298,24 +318,25 @@ impl ApiClient for OpenAIClient {
         // Add tool results only if there's an assistant message with tool calls
         if let Some(results) = tool_results {
             if last_assistant_msg_with_tools {
-                // Only add tool results for IDs that exist in the conversation
-                for result in results {
-                    // Make sure result tool_call_id is found in our tracked IDs
-                    if found_tool_ids.contains(&result.tool_call_id) {
-                        openai_messages.push(OpenAIMessage {
-                            role: "tool".to_string(),
-                            content: Some(result.output),
-                            tool_calls: None,
-                            tool_call_id: Some(result.tool_call_id),
-                        });
-                    } else {
-                        // Log that we're skipping a tool result with an unknown ID
-                        // but don't stop execution
-                        eprintln!(
-                            "Skipping tool result with ID {} not found in conversation",
-                            result.tool_call_id
-                        );
-                    }
+                // OpenAI requires responses for ALL tool calls in an assistant message
+                let result_map: std::collections::HashMap<String, String> = results
+                    .iter()
+                    .map(|r| (r.tool_call_id.clone(), r.output.clone()))
+                    .collect();
+
+                // Ensure every tool call has a corresponding tool response
+                for tool_id in &found_tool_ids {
+                    let output = result_map.get(tool_id).cloned().unwrap_or_else(|| {
+                        // Provide a generic result for tool calls that don't have responses
+                        "Tool execution completed without detailed results.".to_string()
+                    });
+
+                    openai_messages.push(OpenAIMessage {
+                        role: "tool".to_string(),
+                        content: Some(output),
+                        tool_calls: None,
+                        tool_call_id: Some(tool_id.clone()),
+                    });
                 }
             } else {
                 // Return success but don't add any tool results - this avoids errors when the first tool result is added
@@ -339,11 +360,31 @@ impl ApiClient for OpenAIClient {
         };
 
         // Add structured output format if specified in options
-        if let Some(json_schema) = &options.json_schema {
+        if let Some(_json_schema) = &options.json_schema {
             request.response_format = Some(json!({
-                "type": "json_object",
-                "schema": serde_json::from_str(json_schema).unwrap_or(json!({}))
+                "type": "json_object"
             }));
+
+            // Ensure at least one message contains the word "json" when using json_object response format
+            let has_json_keyword = request.messages.iter().any(|msg| {
+                msg.content
+                    .as_ref()
+                    .is_some_and(|content| content.to_lowercase().contains("json"))
+            });
+
+            if !has_json_keyword && !request.messages.is_empty() {
+                // Add "json" to the user's last message if it doesn't already contain it
+                if let Some(last_user_msg) = request
+                    .messages
+                    .iter_mut()
+                    .rev()
+                    .find(|msg| msg.role == "user")
+                {
+                    if let Some(content) = &mut last_user_msg.content {
+                        *content = format!("{} (Please provide the response as JSON)", content);
+                    }
+                }
+            }
         }
 
         // Add tools if they exist

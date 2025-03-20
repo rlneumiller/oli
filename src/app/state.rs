@@ -2,7 +2,6 @@ use crate::agent::core::Agent;
 use crate::app::commands::SpecialCommand;
 use crate::app::models::ToolPermissionStatus;
 use crate::app::permissions::PendingToolExecution;
-use crate::inference;
 use crate::models::ModelConfig;
 use std::sync::mpsc;
 use std::time::Instant;
@@ -23,7 +22,6 @@ pub struct App {
     pub download_progress: Option<(u64, u64)>,
     pub selected_model: usize,
     pub available_models: Vec<ModelConfig>,
-    pub inference: Option<inference::ModelSession>,
     pub download_active: bool,
     pub error_message: Option<String>,
     pub debug_messages: bool,
@@ -49,4 +47,6 @@ pub struct App {
     pub show_intermediate_steps: bool, // Show intermediate steps like tool use and file reads
     pub show_shortcuts_hint: bool, // Show the shortcut hint below input box
     pub show_detailed_shortcuts: bool, // Show all shortcuts when ? is pressed
+    // Cursor position in input
+    pub cursor_position: usize, // Current cursor position in the input string
 }
