@@ -6,12 +6,12 @@ use crate::ui::styles::AppStyles;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Padding, Paragraph},
     Frame,
 };
 
 /// Main UI rendering function, dispatches to specific screen renderers
-pub fn ui(f: &mut Frame, app: &App) {
+pub fn ui(f: &mut Frame, app: &mut App) {
     match app.state {
         AppState::Setup => draw_setup(f, app),
         AppState::ApiKeyInput => draw_api_key_input(f, app),
@@ -29,19 +29,20 @@ pub fn ui(f: &mut Frame, app: &App) {
 }
 
 /// Draw setup screen with model selection
-pub fn draw_setup(f: &mut Frame, app: &App) {
+pub fn draw_setup(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .margin(2)
+        .margin(3)
         .constraints([
             Constraint::Length(3),
-            Constraint::Min(4),
+            Constraint::Min(5),
             Constraint::Length(3),
         ])
         .split(f.area());
 
-    // Title
-    let title = Paragraph::new("OLI Setup Assistant")
+    // Title with version
+    let version = env!("CARGO_PKG_VERSION");
+    let title = Paragraph::new(format!("OLI v{} Setup Assistant", version))
         .style(AppStyles::title())
         .alignment(Alignment::Center);
     f.render_widget(title, chunks[0]);
@@ -56,21 +57,22 @@ pub fn draw_setup(f: &mut Frame, app: &App) {
 }
 
 /// Draw API key input screen
-pub fn draw_api_key_input(f: &mut Frame, app: &App) {
+pub fn draw_api_key_input(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .margin(2)
+        .margin(3)
         .constraints([
             Constraint::Length(3),
-            Constraint::Min(4),
+            Constraint::Min(5),
             Constraint::Length(3),
         ])
         .split(f.area());
 
     // Determine title based on selected model
+    let version = env!("CARGO_PKG_VERSION");
     let title_text = match app.current_model().name.as_str() {
-        "GPT-4o" => "OpenAI API Key Setup",
-        _ => "Anthropic API Key Setup",
+        "GPT-4o" => format!("Oli v{} - OpenAI API Key Setup", version),
+        _ => format!("Oli v{} - Anthropic API Key Setup", version),
     };
 
     let title = Paragraph::new(title_text)
@@ -82,35 +84,35 @@ pub fn draw_api_key_input(f: &mut Frame, app: &App) {
     let info = create_api_key_info(app);
     f.render_widget(info, chunks[1]);
 
-    // Input box
-    let input_box = create_input_box(app, true);
-    f.render_widget(input_box, chunks[2]);
-
-    // Set cursor position for input
-    if !app.input.is_empty() {
-        // Position the cursor at the end of the masked input
-        f.set_cursor_position((chunks[2].x + app.input.len() as u16 + 3, chunks[2].y + 1));
-    // +3: +1 for border, +2 for "> " prefix
-    } else {
-        // Position at the start of the input area
-        f.set_cursor_position((chunks[2].x + 3, chunks[2].y + 1)); // +3: +1 for border, +2 for "> " prefix
-    }
+    // Create a masked input block for API keys
+    let input_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" API Key ")
+        .title_alignment(Alignment::Left)
+        .border_style(AppStyles::border());
+    
+    // Set the block for textarea and mask characters
+    app.textarea.set_block(input_block);
+    app.textarea.set_mask_char('*'); // Mask input with asterisks
+    
+    // Render the masked textarea
+    f.render_widget(&app.textarea, chunks[2]);
 }
 
 /// Draw chat screen with message history and input
-pub fn draw_chat(f: &mut Frame, app: &App) {
+pub fn draw_chat(f: &mut Frame, app: &mut App) {
     // Use three chunks - header, message history, and input (with command menu if active)
 
-    // Count newlines in input to determine input box height
-    let newline_count = app.input.chars().filter(|&c| c == '\n').count();
+    // Count lines in textarea to determine input box height
+    let line_count = app.textarea.lines().len();
 
-    // Calculate base input height (min 3, grows with newlines but caps at half the available height)
+    // Calculate base input height (min 3, grows with lines but caps at half the available height)
     // First, estimate the total available height (area height minus margins and other UI elements)
     let estimated_available_height = f.area().height.saturating_sub(4); // Subtract margins and status bar
     let max_input_height = estimated_available_height / 2; // Allow up to half the available height
 
-    // Base height starts at 3 lines and grows with newlines, up to half the screen height
-    let base_input_height = (3 + newline_count).min(max_input_height as usize);
+    // Base height starts at 3 lines and grows with content, up to half the screen height
+    let base_input_height = (3 + line_count).min(max_input_height as usize);
 
     let input_height = if app.show_command_menu {
         // Increase the input area height to make room for the command menu
@@ -121,8 +123,8 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
         base_input_height // Use calculated height based on content
     };
 
-    // Calculate height for shortcuts area - only show when input is empty
-    let shortcuts_height = if app.input.is_empty() {
+    // Calculate height for shortcuts area - only show when textarea is empty
+    let shortcuts_height = if app.textarea.is_empty() {
         if app.show_detailed_shortcuts {
             4 // Height for detailed shortcuts panel (increased for new shortcut)
         } else if app.show_shortcuts_hint {
@@ -136,10 +138,10 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .margin(1)
+        .margin(2)
         .constraints([
             Constraint::Length(1),                   // Status bar
-            Constraint::Min(3),                      // Chat history (expandable)
+            Constraint::Min(5),                      // Chat history (expandable)
             Constraint::Length(input_height as u16), // Input area (with variable height for command menu)
             Constraint::Length(shortcuts_height),    // Shortcuts area (variable height)
         ])
@@ -165,32 +167,35 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
             ])
             .split(chunks[2]);
 
-        // Input box
-        let input_window = create_input_box(app, false);
-        f.render_widget(input_window, input_chunks[0]);
+        // Create input block with title
+        let input_block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Input (Type / for commands) ")
+            .title_alignment(Alignment::Left)
+            .border_style(AppStyles::border());
+        
+        // Set the block for the textarea
+        app.textarea.set_block(input_block);
+        
+        // Render the textarea
+        f.render_widget(&app.textarea, input_chunks[0]);
 
         // Commands menu as a list
         let commands_list = create_command_menu(app);
         f.render_widget(commands_list, input_chunks[1]);
-
-        // Set cursor position at end of input, handling multiline input
-        if !app.input.is_empty() {
-            let (cursor_x, cursor_y) =
-                calculate_cursor_position(&app.input, input_chunks[0].x, input_chunks[0].y);
-            f.set_cursor_position((cursor_x, cursor_y));
-        }
     } else {
-        // Regular input box without command menu
-        let input_window = create_input_box(app, false);
-        f.render_widget(input_window, chunks[2]);
-
-        // Only show cursor if there is input
-        if !app.input.is_empty() {
-            // Set cursor position at end of input, handling multiline input
-            let (cursor_x, cursor_y) =
-                calculate_cursor_position(&app.input, chunks[2].x, chunks[2].y);
-            f.set_cursor_position((cursor_x, cursor_y));
-        }
+        // Create input block with title
+        let input_block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Input (Type / for commands) ")
+            .title_alignment(Alignment::Left)
+            .border_style(AppStyles::border());
+        
+        // Set the block for the textarea
+        app.textarea.set_block(input_block);
+        
+        // Render the textarea with its block
+        f.render_widget(&app.textarea, chunks[2]);
     }
 
     // Render shortcuts panel if needed
@@ -201,13 +206,13 @@ pub fn draw_chat(f: &mut Frame, app: &App) {
 }
 
 /// Draw error screen
-pub fn draw_error(f: &mut Frame, _app: &App, error_msg: &str) {
+pub fn draw_error(f: &mut Frame, _app: &mut App, error_msg: &str) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .margin(2)
+        .margin(3)
         .constraints([
             Constraint::Length(3),
-            Constraint::Min(4),
+            Constraint::Min(5),
             Constraint::Length(3),
         ])
         .split(f.area());
@@ -221,14 +226,20 @@ pub fn draw_error(f: &mut Frame, _app: &App, error_msg: &str) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Error Details"),
+                .title(" Error Details ")
+                .title_alignment(Alignment::Left)
+                .border_style(Style::default().fg(Color::Red))
+                .padding(Padding::new(1, 1, 0, 0)),
         )
         .style(Style::default().fg(Color::Red))
         .wrap(ratatui::widgets::Wrap { trim: true });
     f.render_widget(error_text, chunks[1]);
 
     let instruction = Paragraph::new("Press Enter to return to setup or Esc to exit")
-        .block(Block::default().borders(Borders::ALL))
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .padding(Padding::new(0, 0, 0, 0)))
         .style(Style::default().fg(Color::Yellow))
         .alignment(Alignment::Center);
     f.render_widget(instruction, chunks[2]);
@@ -279,8 +290,8 @@ fn calculate_cursor_position(input: &str, base_x: u16, base_y: u16) -> (u16, u16
 pub fn draw_permission_dialog(f: &mut Frame, app: &App) {
     // Calculate dialog size and position (centered)
     let area = f.area();
-    let width = std::cmp::min(70, area.width.saturating_sub(4));
-    let height = 8;
+    let width = std::cmp::min(72, area.width.saturating_sub(8));
+    let height = 10;
     let x = (area.width - width) / 2;
     let y = (area.height - height) / 2;
 

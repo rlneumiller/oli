@@ -6,13 +6,14 @@ use ratatui::{
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, Padding, Paragraph, Wrap},
 };
 use std::time::Duration;
 
 /// Create a status bar for the chat view
 pub fn create_status_bar(app: &App) -> Line {
     let model_name = app.current_model().name.clone();
+    let version = env!("CARGO_PKG_VERSION");
     let scroll_info = format!(
         "Scroll: {}/{} (PageUp/PageDown to scroll)",
         app.scroll_position,
@@ -25,25 +26,35 @@ pub fn create_status_bar(app: &App) -> Line {
             " 🤖 Agent ",
             Style::default()
                 .fg(Color::Black)
-                .bg(Color::LightGreen)
+                .bg(Color::Rgb(142, 192, 124)) // Soft green background
                 .add_modifier(Modifier::BOLD),
         )
     } else {
         Span::styled(
             " 🖥️ Local ",
-            Style::default().fg(Color::Black).bg(Color::Yellow),
+            Style::default().fg(Color::Black).bg(Color::Rgb(240, 180, 100)), // Soft amber background
         )
     };
 
     Line::from(vec![
         Span::styled(
-            format!(" Model: {} ", model_name),
-            Style::default().fg(Color::LightCyan).bg(Color::DarkGray),
+            format!(" oli v{} ", version),
+            Style::default()
+                .fg(Color::Black)
+                .bg(AppStyles::primary_color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!(" {} ", model_name),
+            Style::default()
+                .fg(AppStyles::secondary_color())
+                .bg(AppStyles::selection_bg()),
         ),
         Span::raw(" "),
         agent_indicator,
         Span::raw(" | "),
-        Span::styled(scroll_info, Style::default().fg(Color::DarkGray)),
+        Span::styled(scroll_info, AppStyles::hint()),
         Span::raw(" | "),
         Span::styled(" Esc: Quit ", AppStyles::status_bar()),
     ])
@@ -82,7 +93,7 @@ pub fn create_message_list(app: &App, visible_area: Rect) -> Paragraph {
                     Span::styled(
                         "YOU: ",
                         Style::default()
-                            .fg(Color::LightBlue)
+                            .fg(AppStyles::accent_color())
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(lines[0], AppStyles::user_input()),
@@ -94,7 +105,7 @@ pub fn create_message_list(app: &App, visible_area: Rect) -> Paragraph {
                         Span::styled(
                             "     ", // 5 spaces to align with "YOU: "
                             Style::default()
-                                .fg(Color::LightBlue)
+                                .fg(AppStyles::accent_color())
                                 .add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(*line, AppStyles::user_input()),
@@ -146,25 +157,30 @@ pub fn create_message_list(app: &App, visible_area: Rect) -> Paragraph {
     // Create title with scroll indicators
     let title = if has_more_above && has_more_below {
         Line::from(vec![
-            Span::raw("OLI Assistant "),
-            Span::styled("▲ more above ", Style::default().fg(Color::DarkGray)),
-            Span::styled("▼ more below", Style::default().fg(Color::DarkGray)),
+            Span::styled("OLI Assistant ", AppStyles::section_header()),
+            Span::styled("▲ more above ", AppStyles::hint()),
+            Span::styled("▼ more below", AppStyles::hint()),
         ])
     } else if has_more_above {
         Line::from(vec![
-            Span::raw("OLI Assistant "),
-            Span::styled("▲ more above", Style::default().fg(Color::DarkGray)),
+            Span::styled("OLI Assistant ", AppStyles::section_header()),
+            Span::styled("▲ more above", AppStyles::hint()),
         ])
     } else if has_more_below {
         Line::from(vec![
-            Span::raw("OLI Assistant "),
-            Span::styled("▼ more below", Style::default().fg(Color::DarkGray)),
+            Span::styled("OLI Assistant ", AppStyles::section_header()),
+            Span::styled("▼ more below", AppStyles::hint()),
         ])
     } else {
-        Line::from("OLI Assistant")
+        Line::from(Span::styled("OLI Assistant", AppStyles::section_header()))
     };
 
-    let message_block = Block::default().borders(Borders::ALL).title(title);
+    let message_block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .title_alignment(Alignment::Left)
+        .border_style(AppStyles::border())
+        .padding(Padding::new(1, 1, 0, 0));
 
     // Create paragraph with the styled messages
     Paragraph::new(Text::from(visible_messages))
@@ -392,8 +408,9 @@ pub fn create_input_box(app: &App, is_api_key: bool) -> Paragraph {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(title)
-                .border_style(Style::default().fg(Color::Cyan)),
+                .title(format!(" {} ", title))
+                .title_alignment(Alignment::Left)
+                .border_style(AppStyles::border()),
         )
         .wrap(Wrap { trim: false }) // Don't trim to preserve proper newline formatting
 }
@@ -461,7 +478,12 @@ pub fn create_model_list(app: &App) -> List {
         .collect();
 
     List::new(models)
-        .block(Block::default().borders(Borders::ALL).title("Models"))
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .title(" Models ")
+            .title_alignment(Alignment::Left)
+            .border_style(AppStyles::border())
+            .padding(Padding::new(1, 0, 1, 0)))
         .highlight_style(AppStyles::highlight())
 }
 
@@ -502,7 +524,12 @@ pub fn create_progress_display(app: &App) -> Paragraph {
     };
 
     Paragraph::new(progress_text)
-        .block(Block::default().borders(Borders::ALL).title("Progress"))
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .title(" Progress ")
+            .title_alignment(Alignment::Left)
+            .border_style(AppStyles::border())
+            .padding(Padding::new(1, 0, 0, 0)))
         .style(AppStyles::success())
 }
 
@@ -535,16 +562,23 @@ pub fn create_api_key_info(app: &App) -> List {
     };
 
     List::new(message_items)
-        .block(Block::default().borders(Borders::ALL).title("Information"))
-        .style(Style::default().fg(Color::Yellow))
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .title(" Information ")
+            .title_alignment(Alignment::Left)
+            .border_style(AppStyles::border())
+            .padding(Padding::new(1, 0, 0, 0)))
+        .style(Style::default().fg(Color::Rgb(240, 180, 100)))
 }
 
 /// Create a permission dialog
 pub fn create_permission_dialog(_app: &App, _area: Rect) -> Block {
     Block::default()
-        .title("Permission Required")
+        .title(" Permission Required ")
+        .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
+        .border_style(Style::default().fg(Color::Rgb(240, 180, 100)))
+        .padding(Padding::new(1, 1, 0, 0))
 }
 
 /// Create permission dialog content
@@ -554,27 +588,27 @@ pub fn create_permission_content(app: &App) -> Paragraph {
 
     let info_text = Text::from(vec![
         Line::from(vec![
-            Span::styled("⚠️  ", Style::default().fg(Color::Yellow)),
+            Span::styled("⚠️  ", Style::default().fg(Color::Rgb(240, 180, 100))),
             Span::styled(
                 "Permission Required",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(Color::Rgb(240, 180, 100))
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::raw("Tool: "),
-            Span::styled(&tool.tool_name, Style::default().fg(Color::Cyan)),
+            Span::styled(&tool.tool_name, Style::default().fg(AppStyles::primary_color())),
         ]),
         Line::from(vec![
             Span::raw("Action: "),
-            Span::styled(description, Style::default().fg(Color::White)),
+            Span::styled(description, Style::default().fg(AppStyles::secondary_color())),
         ]),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Press Y to allow or N to deny",
-            Style::default().fg(Color::Gray),
+            AppStyles::hint(),
         )]),
     ]);
 

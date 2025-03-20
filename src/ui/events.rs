@@ -32,13 +32,13 @@ pub fn run_app() -> Result<()> {
     let (tx, rx) = mpsc::channel::<String>();
 
     // Initial UI draw
-    terminal.draw(|f| ui(f, &app))?;
+    terminal.draw(|f| ui(f, &mut app))?;
 
     // Main event loop
     while app.state != AppState::Error("quit".into()) {
         // Always redraw if download is active, agent is processing, or we're waiting for permission
         if app.download_active || app.agent_progress_rx.is_some() || app.permission_required {
-            terminal.draw(|f| ui(f, &app))?;
+            terminal.draw(|f| ui(f, &mut app))?;
         }
 
         // Process messages from various sources
@@ -79,7 +79,7 @@ fn process_channel_messages(
                 .push(format!("DEBUG: Received message: {}", msg));
         }
         process_message(app, &msg)?;
-        terminal.draw(|f| ui(f, app))?;
+        terminal.draw(|f| ui(f, &mut app))?;
     }
     Ok(())
 }
@@ -120,7 +120,7 @@ fn process_agent_messages(
             app.auto_scroll_to_bottom();
 
             // Immediately redraw after each message for real-time effect
-            terminal.draw(|f| ui(f, &app))?;
+            terminal.draw(|f| ui(f, &mut app))?;
 
             // Small delay to create visual animation effect (smaller delay for more fluid updates)
             if !app.permission_required {
@@ -147,7 +147,7 @@ fn process_auto_scroll(
         app.auto_scroll_to_bottom();
 
         // Redraw with the new scroll position - show updates immediately
-        terminal.draw(|f| ui(f, &app))?;
+        terminal.draw(|f| ui(f, &mut app))?;
     }
     Ok(())
 }
@@ -159,11 +159,23 @@ fn handle_left_key(
 ) -> Result<()> {
     match app.state {
         AppState::Chat | AppState::ApiKeyInput => {
-            // Move cursor left if not at the beginning
+            // Use internal cursor movement for left key
+            let (x, y) = app.textarea.cursor(); 
+            if x > 0 {
+                // Simulate move cursor left
+                let c = app.textarea.lines().get(y).map_or(String::new(), |l| l.clone());
+                app.textarea = TextArea::new(vec![c]);
+                // Adjust cursor to be one position left
+                app.textarea.move_cursor_to(x-1, y);
+            }
+            
+            // Update legacy cursor position for compatibility
+            app.input = app.textarea.lines().join("\n");
             if app.cursor_position > 0 {
                 app.cursor_position -= 1;
-                terminal.draw(|f| ui(f, &app))?;
             }
+            
+            terminal.draw(|f| ui(f, &mut app))?;
         }
         _ => {}
     }
@@ -177,11 +189,16 @@ fn handle_right_key(
 ) -> Result<()> {
     match app.state {
         AppState::Chat | AppState::ApiKeyInput => {
-            // Move cursor right if not at the end
+            // Move cursor right using tui-textarea method
+            app.textarea.input(crossterm::event::KeyCode::Right);
+            
+            // Update legacy cursor position for compatibility
+            app.input = app.textarea.lines().join("\n");
             if app.cursor_position < app.input.len() {
                 app.cursor_position += 1;
-                terminal.draw(|f| ui(f, &app))?;
             }
+            
+            terminal.draw(|f| ui(f, &mut app))?;
         }
         _ => {}
     }
@@ -190,7 +207,7 @@ fn handle_right_key(
 
 /// Process keyboard events
 fn process_key_event(
-    app: &mut App,
+    mut app: &mut App,
     key: KeyCode,
     modifiers: KeyModifiers,
     tx: &mpsc::Sender<String>,
@@ -203,21 +220,21 @@ fn process_key_event(
                 // Grant permission
                 app.handle_permission_response(true);
                 app.permission_required = false;
-                terminal.draw(|f| ui(f, &app))?;
+                terminal.draw(|f| ui(f, &mut app))?;
                 return Ok(());
             }
             KeyCode::Char('n') | KeyCode::Char('N') => {
                 // Deny permission
                 app.handle_permission_response(false);
                 app.permission_required = false;
-                terminal.draw(|f| ui(f, &app))?;
+                terminal.draw(|f| ui(f, &mut app))?;
                 return Ok(());
             }
             KeyCode::Esc => {
                 // Cancel permission dialog (treat as deny)
                 app.handle_permission_response(false);
                 app.permission_required = false;
-                terminal.draw(|f| ui(f, &app))?;
+                terminal.draw(|f| ui(f, &mut app))?;
                 return Ok(());
             }
             _ => return Ok(()), // Ignore other keys while permission dialog is active
@@ -232,45 +249,17 @@ fn process_key_event(
             }
             app.state = AppState::Error("quit".into());
         }
-        // Enter handling with special case for backslash-newline
         KeyCode::Enter => {
-            // Check if the input ends with backslash - treat as newline request
-            if app.state == AppState::Chat && app.input.ends_with('\\') {
-                // Check if cursor is at the end before making changes
-                let cursor_at_end = app.cursor_position == app.input.len();
-
-                // Store cursor position before changes
-                let cursor_pos = app.cursor_position;
-
-                // Remove the backslash
-                app.input.pop();
-
-                // If cursor was at the end, keep it at the end after changes
-                if cursor_at_end {
-                    // Add a newline character
-                    app.input.push('\n');
-                    // Move cursor to end of input
-                    app.cursor_position = app.input.len();
-                } else if cursor_pos == app.input.len() + 1 {
-                    // If cursor was at the position of the removed backslash
-                    // Add a newline character
-                    app.input.push('\n');
-                    // Keep cursor at same position (now after newline)
-                    app.cursor_position = app.input.len();
-                } else {
-                    // If cursor was somewhere else, just add the newline
-                    // and adjust cursor position if needed
-                    app.input.push('\n');
-
-                    // If cursor was after the removed backslash, adjust it
-                    // by moving it back one position
-                    if cursor_pos > app.input.len() - 1 {
-                        app.cursor_position = cursor_pos - 1;
-                    }
-                }
-
+            // Check if we need to handle traditional backslash-newline (for backward compatibility)
+            if app.state == AppState::Chat && modifiers.contains(KeyModifiers::SHIFT) {
+                // Insert a newline at cursor position (use TextArea's functionality)
+                app.textarea.insert_newline();
+                
+                // Update the legacy input for compatibility
+                app.input = app.textarea.lines().join("\n");
+                
                 // Force immediate redraw to update input box size and cursor position
-                terminal.draw(|f| ui(f, &app))?;
+                terminal.draw(|f| ui(f, &mut app))?;
             } else {
                 // Regular Enter handling
                 handle_enter_key(app, tx, terminal)?;
@@ -307,15 +296,19 @@ fn handle_enter_key(
     match app.state {
         AppState::Setup => {
             app.messages.push("DEBUG: Starting model setup...".into());
-            terminal.draw(|f| ui(f, &app))?;
+            terminal.draw(|f| ui(f, &mut app))?;
 
             if let Err(e) = app.setup_models(tx.clone()) {
                 app.messages.push(format!("ERROR: Setup failed: {}", e));
             }
-            terminal.draw(|f| ui(f, &app))?;
+            terminal.draw(|f| ui(f, &mut app))?;
         }
         AppState::ApiKeyInput => {
-            let api_key = std::mem::take(&mut app.input);
+            // Get input from the textarea
+            let api_key = app.textarea.lines().join("\n");
+            // Clear the textarea
+            app.textarea.delete_line_by_end();
+            
             if !api_key.is_empty() {
                 app.messages
                     .push("DEBUG: API key entered, continuing setup...".into());
@@ -323,12 +316,15 @@ fn handle_enter_key(
                 // Set the API key and return to setup state
                 app.api_key = Some(api_key);
                 app.state = AppState::Setup;
+                
+                // When returning to regular input, unmask characters (use space as "no mask")
+                app.textarea.set_mask_char(' ');
 
                 // Continue with model setup using the provided API key
                 if let Err(e) = app.setup_models(tx.clone()) {
                     app.messages.push(format!("ERROR: Setup failed: {}", e));
                 }
-                terminal.draw(|f| ui(f, &app))?;
+                terminal.draw(|f| ui(f, &mut app))?;
             } else {
                 app.messages
                     .push("API key cannot be empty. Please enter your Anthropic API key...".into());
@@ -340,22 +336,36 @@ fn handle_enter_key(
                 // Try to execute the command
                 let cmd_executed = app.execute_command();
 
-                // Clear the input field after executing the command
-                app.input.clear();
+                // Clear the textarea after executing the command
+                app.textarea.delete_line_by_end();
+                app.textarea.delete_line_by_head();
+                app.input.clear(); // Clear legacy input for compatibility
                 app.command_mode = false;
                 app.show_command_menu = false;
 
                 // Skip model querying if we executed a command
                 if cmd_executed {
                     // Need to redraw to clear command menu
-                    terminal.draw(|f| ui(f, &app))?;
+                    terminal.draw(|f| ui(f, &mut app))?;
                     return Ok(());
                 }
             }
 
-            let input = std::mem::take(&mut app.input);
-            // Reset cursor position since input is cleared
-            app.cursor_position = 0;
+            // Get the input from the textarea
+            let input = app.textarea.lines().join("\n");
+            
+            // Clear the textarea after submitting
+            while !app.textarea.is_empty() {
+                app.textarea.delete_line_by_end();
+                app.textarea.delete_line_by_head();
+                if !app.textarea.is_empty() {
+                    // Move to next line if there are more lines
+                    app.textarea.input(crossterm::event::KeyCode::Down);
+                }
+            }
+            
+            // Update legacy input field for compatibility
+            app.input.clear();
 
             if !input.is_empty() {
                 // No debug output needed here
@@ -367,7 +377,7 @@ fn handle_enter_key(
                 app.messages.push("[thinking] ⚪ Analyzing query...".into());
                 // Force immediate redraw to show thinking state
                 app.auto_scroll_to_bottom();
-                terminal.draw(|f| ui(f, &app))?;
+                terminal.draw(|f| ui(f, &mut app))?;
 
                 // Update the last query time
                 app.last_query_time = std::time::Instant::now();
@@ -400,7 +410,7 @@ fn handle_enter_key(
                         app.auto_scroll_to_bottom();
 
                         // Ensure the UI redraws immediately to show the response
-                        terminal.draw(|f| ui(f, &app))?;
+                        terminal.draw(|f| ui(f, &mut app))?;
                     }
                     Err(e) => {
                         // Remove the thinking message (both old and new formats)
@@ -415,7 +425,7 @@ fn handle_enter_key(
                 }
 
                 // Make sure to redraw after getting a response
-                terminal.draw(|f| ui(f, &app))?;
+                terminal.draw(|f| ui(f, &mut app))?;
             }
         }
         AppState::Error(_) => {
@@ -423,7 +433,7 @@ fn handle_enter_key(
             app.error_message = None;
         }
     }
-    terminal.draw(|f| ui(f, &app))?;
+    terminal.draw(|f| ui(f, &mut app))?;
 
     Ok(())
 }
@@ -476,57 +486,24 @@ fn handle_down_key(
         AppState::Setup => {
             app.select_next_model();
             app.messages.push("DEBUG: Selected next model".into());
-            terminal.draw(|f| ui(f, &app))?;
+            terminal.draw(|f| ui(f, &mut app))?;
         }
         AppState::Chat => {
             // Navigate commands in command mode
             if app.show_command_menu {
                 app.select_next_command();
-                terminal.draw(|f| ui(f, &app))?;
+                terminal.draw(|f| ui(f, &mut app))?;
             }
-            // When not in command mode and multiline input, move cursor down
-            else if app.input.contains('\n') {
-                // Find the current line and position within that line
-                let mut current_pos = 0;
-                let mut current_line_start = 0;
-                let mut next_line_start = 0;
-                let mut found_next_line = false;
-
-                // Analyze the input to find line boundaries
-                for (i, c) in app.input.chars().enumerate() {
-                    if i == app.cursor_position {
-                        // Mark the position on the current line
-                        current_pos = i - current_line_start;
-                    }
-
-                    if c == '\n' {
-                        if i < app.cursor_position {
-                            // This newline is before the cursor, update current line
-                            current_line_start = i + 1;
-                        } else if !found_next_line {
-                            // This is the end of the current line (start of next line)
-                            next_line_start = i + 1;
-                            found_next_line = true;
-                        }
-                    }
-                }
-
-                // Only move down if there's a line below
-                if found_next_line && next_line_start < app.input.len() {
-                    // Find the position on the next line (same column if possible)
-                    let next_line_end = app.input[next_line_start..]
-                        .find('\n')
-                        .map(|pos| next_line_start + pos)
-                        .unwrap_or(app.input.len());
-
-                    // Calculate the new cursor position
-                    let next_line_length = next_line_end - next_line_start;
-                    let new_pos = next_line_start + current_pos.min(next_line_length);
-
-                    // Update cursor position
-                    app.cursor_position = new_pos;
-                    terminal.draw(|f| ui(f, &app))?;
-                }
+            // When not in command mode, handle multiline navigation with TextArea
+            else if !app.textarea.is_empty() {
+                // Move down using tui-textarea method
+                app.textarea.input(crossterm::event::KeyCode::Down);
+                
+                // Update legacy input and cursor for compatibility
+                app.input = app.textarea.lines().join("\n");
+                
+                // Force redraw to update cursor position
+                terminal.draw(|f| ui(f, &mut app))?;
             }
         }
         _ => {}
@@ -543,7 +520,7 @@ fn handle_tab_key(
         AppState::Setup => {
             app.select_next_model();
             app.messages.push("DEBUG: Selected next model".into());
-            terminal.draw(|f| ui(f, &app))?;
+            terminal.draw(|f| ui(f, &mut app))?;
         }
         AppState::Chat => {
             // Auto-complete command if in command mode
@@ -555,7 +532,7 @@ fn handle_tab_key(
                     app.show_command_menu = true;
                     app.command_mode = true;
                 }
-                terminal.draw(|f| ui(f, &app))?;
+                terminal.draw(|f| ui(f, &mut app))?;
             }
         }
         _ => {}
@@ -572,49 +549,24 @@ fn handle_up_key(
         AppState::Setup => {
             app.select_prev_model();
             app.messages.push("DEBUG: Selected previous model".into());
-            terminal.draw(|f| ui(f, &app))?;
+            terminal.draw(|f| ui(f, &mut app))?;
         }
         AppState::Chat => {
             // Navigate commands in command mode
             if app.show_command_menu {
                 app.select_prev_command();
-                terminal.draw(|f| ui(f, &app))?;
+                terminal.draw(|f| ui(f, &mut app))?;
             }
-            // When not in command mode and multiline input, move cursor up
-            else if app.input.contains('\n') {
-                // Find the current line and position within that line
-                let mut current_pos = 0;
-                let mut current_line_start = 0;
-                let mut prev_line_start = 0;
-                let mut prev_line_end = 0;
-                let mut on_first_line = true;
-
-                // Analyze the input to find line boundaries
-                for (i, c) in app.input.chars().enumerate() {
-                    if c == '\n' && i < app.cursor_position {
-                        // This newline is before the cursor
-                        prev_line_start = current_line_start;
-                        prev_line_end = i;
-                        current_line_start = i + 1;
-                        on_first_line = false;
-                    }
-
-                    if i == app.cursor_position {
-                        // Mark the position on the current line
-                        current_pos = i - current_line_start;
-                    }
-                }
-
-                // Only move up if not on the first line
-                if !on_first_line {
-                    // Calculate the new cursor position
-                    let prev_line_length = prev_line_end - prev_line_start;
-                    let new_pos = prev_line_start + current_pos.min(prev_line_length);
-
-                    // Update cursor position
-                    app.cursor_position = new_pos;
-                    terminal.draw(|f| ui(f, &app))?;
-                }
+            // When not in command mode, handle multiline navigation with TextArea
+            else if !app.textarea.is_empty() {
+                // Move up using tui-textarea method
+                app.textarea.input(crossterm::event::KeyCode::Up);
+                
+                // Update legacy input and cursor for compatibility
+                app.input = app.textarea.lines().join("\n");
+                
+                // Force redraw to update cursor position
+                terminal.draw(|f| ui(f, &mut app))?;
             }
         }
         _ => {}
@@ -630,7 +582,7 @@ fn handle_backtab_key(
     if let AppState::Setup = app.state {
         app.select_prev_model();
         app.messages.push("DEBUG: Selected previous model".into());
-        terminal.draw(|f| ui(f, &app))?;
+        terminal.draw(|f| ui(f, &mut app))?;
     }
     Ok(())
 }
@@ -644,32 +596,31 @@ fn handle_char_key(
 ) -> Result<()> {
     match app.state {
         AppState::Chat | AppState::ApiKeyInput => {
-            // Newlines are handled in the Enter key handler
-
-            // Insert character at cursor position instead of appending
-            app.input.insert(app.cursor_position, c);
-
-            // Move cursor forward (after the just-inserted character)
-            app.cursor_position += 1;
-
-            // Make sure cursor is always within bounds
+            // Special handling for '?' to toggle shortcut display
+            if app.state == AppState::Chat && c == '?' && app.textarea.is_empty() {
+                // Toggle detailed shortcuts display and don't add the character
+                app.show_detailed_shortcuts = !app.show_detailed_shortcuts;
+                terminal.draw(|f| ui(f, &mut app))?;
+                return Ok(());
+            }
+            
+            // Insert the character at the current cursor position
+            app.textarea.insert_char(c);
+            
+            // Update legacy input field for compatibility
+            app.input = app.textarea.lines().join("\n");
+            
+            // Make sure cursor within bounds (not needed with TextArea, but kept for compatibility)
+            app.cursor_position = app.textarea.cursor().0 + app.textarea.cursor().1 * (app.input.len() + 1);
             app.cursor_position = app.cursor_position.min(app.input.len());
 
-            // Force immediate redraw to ensure cursor remains visible
-            terminal.draw(|f| ui(f, &app))?;
-
             // Check if we're entering command mode with the / character
-            if app.state == AppState::Chat && c == '/' && app.input.len() == 1 {
+            if app.state == AppState::Chat && c == '/' && app.textarea.lines().len() == 1 && app.textarea.lines()[0] == "/" {
                 app.command_mode = true;
                 app.show_command_menu = true;
                 app.selected_command = 0;
                 // Hide detailed shortcuts when typing /
                 app.show_detailed_shortcuts = false;
-            } else if app.state == AppState::Chat && c == '?' && app.input.len() == 1 {
-                // Toggle detailed shortcuts display and clear the '?' from input
-                app.show_detailed_shortcuts = !app.show_detailed_shortcuts;
-                app.input.clear();
-                app.cursor_position = 0; // Reset cursor position
             } else if app.command_mode {
                 // Update command mode state
                 app.check_command_mode();
@@ -678,7 +629,7 @@ fn handle_char_key(
                 app.show_detailed_shortcuts = false;
             }
 
-            terminal.draw(|f| ui(f, &app))?;
+            terminal.draw(|f| ui(f, &mut app))?;
         }
         _ => {}
     }
@@ -692,11 +643,14 @@ fn handle_backspace_key(
 ) -> Result<()> {
     match app.state {
         AppState::Chat | AppState::ApiKeyInput => {
-            // Only delete a character if the cursor is not at the beginning of the string
+            // Delete the character before the cursor
+            app.textarea.delete_char();
+            
+            // Update legacy input field for compatibility
+            app.input = app.textarea.lines().join("\n");
+            
+            // Update legacy cursor position for compatibility
             if app.cursor_position > 0 {
-                // Remove the character before the cursor
-                app.input.remove(app.cursor_position - 1);
-                // Move the cursor back one position
                 app.cursor_position -= 1;
             }
 
@@ -705,7 +659,7 @@ fn handle_backspace_key(
                 app.check_command_mode();
             }
 
-            terminal.draw(|f| ui(f, &app))?;
+            terminal.draw(|f| ui(f, &mut app))?;
         }
         _ => {}
     }
@@ -719,7 +673,7 @@ fn handle_page_up_key(
 ) -> Result<()> {
     if let AppState::Chat = app.state {
         app.scroll_up(5); // Scroll up 5 lines
-        terminal.draw(|f| ui(f, &app))?;
+        terminal.draw(|f| ui(f, &mut app))?;
     }
     Ok(())
 }
@@ -731,7 +685,7 @@ fn handle_page_down_key(
 ) -> Result<()> {
     if let AppState::Chat = app.state {
         app.scroll_down(5); // Scroll down 5 lines
-        terminal.draw(|f| ui(f, &app))?;
+        terminal.draw(|f| ui(f, &mut app))?;
     }
     Ok(())
 }
@@ -743,35 +697,25 @@ fn handle_home_key(
 ) -> Result<()> {
     match app.state {
         AppState::Chat => {
-            if app.input.is_empty() {
+            if app.textarea.is_empty() {
                 // If no input, use Home to scroll the message window to top
                 app.scroll_position = 0; // Scroll to top
-            } else if app.input.contains('\n') {
-                // In multiline mode, go to start of current line
-                let mut current_line_start = 0;
-
-                // Find the start of the current line
-                for (i, c) in app.input.chars().enumerate() {
-                    if c == '\n' && i < app.cursor_position {
-                        current_line_start = i + 1;
-                    }
-                    if i >= app.cursor_position {
-                        break;
-                    }
-                }
-
-                // Move to start of current line
-                app.cursor_position = current_line_start;
             } else {
-                // In single line mode, go to start of input
-                app.cursor_position = 0;
+                // Move to start of line
+                app.textarea.input(crossterm::event::KeyCode::Home);
+                
+                // Update legacy cursor position for compatibility
+                app.input = app.textarea.lines().join("\n");
+                let (x, y) = app.textarea.cursor();
+                app.cursor_position = x;
             }
-            terminal.draw(|f| ui(f, &app))?;
+            terminal.draw(|f| ui(f, &mut app))?;
         }
         AppState::ApiKeyInput => {
             // Move cursor to start of input
-            app.cursor_position = 0;
-            terminal.draw(|f| ui(f, &app))?;
+            app.textarea.input(crossterm::event::KeyCode::Home);
+            app.cursor_position = 0; // Update legacy cursor position
+            terminal.draw(|f| ui(f, &mut app))?;
         }
         _ => {}
     }
@@ -785,36 +729,28 @@ fn handle_end_key(
 ) -> Result<()> {
     match app.state {
         AppState::Chat => {
-            if app.input.is_empty() {
+            if app.textarea.is_empty() {
                 // If no input, use End to scroll the message window to bottom
                 app.auto_scroll_to_bottom(); // Scroll to bottom
-            } else if app.input.contains('\n') {
-                // In multiline mode, go to end of current line
-                let mut current_line_end = app.input.len();
-
-                // Find the end of the current line
-                for (i, c) in app.input.chars().enumerate() {
-                    if i <= app.cursor_position {
-                        continue;
-                    }
-                    if c == '\n' {
-                        current_line_end = i;
-                        break;
-                    }
-                }
-
-                // Move to end of current line
-                app.cursor_position = current_line_end;
             } else {
-                // In single line mode, go to end of input
+                // Move to end of line
+                app.textarea.input(crossterm::event::KeyCode::End);
+                
+                // Update legacy cursor position for compatibility
+                app.input = app.textarea.lines().join("\n");
                 app.cursor_position = app.input.len();
             }
-            terminal.draw(|f| ui(f, &app))?;
+            terminal.draw(|f| ui(f, &mut app))?;
         }
         AppState::ApiKeyInput => {
             // Move cursor to end of input
+            app.textarea.input(crossterm::event::KeyCode::End);
+            
+            // Update legacy cursor position
+            app.input = app.textarea.lines().join("\n");
             app.cursor_position = app.input.len();
-            terminal.draw(|f| ui(f, &app))?;
+            
+            terminal.draw(|f| ui(f, &mut app))?;
         }
         _ => {}
     }

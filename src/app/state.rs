@@ -15,9 +15,12 @@ pub enum AppState {
     Chat,
 }
 
+use tui_textarea::TextArea;
+
 pub struct App {
     pub state: AppState,
-    pub input: String,
+    pub textarea: TextArea<'static>,  // TextArea widget for improved multiline input
+    pub input: String,                // Keep for backward compatibility during transition
     pub messages: Vec<String>,
     pub download_progress: Option<(u64, u64)>,
     pub selected_model: usize,
@@ -47,6 +50,6 @@ pub struct App {
     pub show_intermediate_steps: bool, // Show intermediate steps like tool use and file reads
     pub show_shortcuts_hint: bool, // Show the shortcut hint below input box
     pub show_detailed_shortcuts: bool, // Show all shortcuts when ? is pressed
-    // Cursor position in input
+    // Cursor position in input - kept for backward compatibility
     pub cursor_position: usize, // Current cursor position in the input string
 }
