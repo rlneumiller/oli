@@ -223,31 +223,40 @@ fn process_tool_message(app: &mut App, msg: &str) {
         return;
     }
 
-    // Handle the different tool message formats
-    if msg.contains("\x1b[32m⏺\x1b[0m") || msg.contains("\x1b[31m⏺\x1b[0m") {
-        // Already formatted with ANSI color codes
-        app.messages.push(msg.to_string());
+    // Handle the different tool message formats based on status
+    if msg.starts_with("⏺ [completed]") {
+        // Tool completed (will be styled as green in UI)
+        let content = msg.strip_prefix("⏺ [completed]").unwrap_or(msg).trim();
+        app.messages.push(format!("⏺ {}", content));
+    } else if msg.starts_with("⏺ [error]") {
+        // Tool error (will be styled as red in UI)
+        let content = msg.strip_prefix("⏺ [error]").unwrap_or(msg).trim();
+        app.messages.push(format!("⏺ {}", content));
     } else if msg.starts_with("⏺ ") {
-        // Has indicator but not colored
-        let content = msg.strip_prefix("⏺ ").unwrap_or(msg);
-        app.messages.push(format!("\x1b[32m⏺\x1b[0m {}", content));
+        // In-progress tool (will be styled as orange in UI)
+        app.messages.push(msg.to_string());
+    } else if msg.contains("\x1b[32m⏺\x1b[0m") || msg.contains("\x1b[31m⏺\x1b[0m") {
+        // Legacy ANSI colored format - convert to new format
+        let clean_msg = msg
+            .replace("\x1b[32m⏺\x1b[0m", "⏺")
+            .replace("\x1b[31m⏺\x1b[0m", "⏺");
+        app.messages.push(clean_msg);
     } else if msg.starts_with("[tool] ⏺ ") {
         // Legacy format with prefix and indicator
         let content = msg.strip_prefix("[tool] ⏺ ").unwrap_or(msg);
-        app.messages.push(format!("\x1b[32m⏺\x1b[0m {}", content));
-    } else if msg.starts_with("[tool] 🔧") {
-        // Format with wrench emoji
-        app.messages.push(msg.to_string());
-    } else if msg.starts_with("[tool] ") {
-        // Generic tool message
-        let content = msg.strip_prefix("[tool] ").unwrap_or(msg);
-        app.messages.push(format!("\x1b[32m⏺\x1b[0m {}", content));
+        app.messages.push(format!("⏺ {}", content));
+    } else if msg.starts_with("[tool] 🔧") || msg.starts_with("[tool] ") {
+        // Other tool formats
+        let content = msg
+            .strip_prefix("[tool] ")
+            .unwrap_or_else(|| msg.strip_prefix("[tool] 🔧").unwrap_or(msg));
+        app.messages.push(format!("⏺ {}", content));
     } else if msg.starts_with("Executing tool") || msg.starts_with("Running tool") {
         // Tool execution message
-        app.messages.push(format!("⚙️ {}", msg));
+        app.messages.push(format!("⏺ {}", msg));
     } else if msg.starts_with("Using tool") {
         // Tool usage message
-        app.messages.push(format!("⚙️ {}", msg));
+        app.messages.push(format!("⏺ {}", msg));
     }
 
     // Update timestamp and scroll
@@ -340,8 +349,10 @@ fn process_success_message(app: &mut App, msg: &str) {
 /// Check if a message is a tool message
 fn is_tool_message(msg: &str) -> bool {
     msg.starts_with("[tool]") ||
-    msg.contains("\x1b[32m⏺\x1b[0m") || // Green circle for tools
-    msg.contains("\x1b[31m⏺\x1b[0m") || // Red circle for errors
+    msg.contains("\x1b[32m⏺\x1b[0m") || // Legacy green circle for tools
+    msg.contains("\x1b[31m⏺\x1b[0m") || // Legacy red circle for errors
+    msg.starts_with("⏺ [completed]") || // Completed tool
+    msg.starts_with("⏺ [error]") || // Error tool
     (msg.starts_with("⏺ ") && 
      (msg.contains("LS(") || 
       msg.contains("View(") || 

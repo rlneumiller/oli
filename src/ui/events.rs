@@ -37,8 +37,15 @@ pub fn run_app() -> Result<()> {
 
     // Main event loop
     while app.state != AppState::Error("quit".into()) {
+        // Process messages from various sources - this is the key part for async tool display
+        // These functions need to run on every loop iteration for real-time updates
+        process_channel_messages(&mut app, &rx, &mut terminal)?;
+        process_agent_messages(&mut app, &mut terminal)?;
+        process_auto_scroll(&mut app, &mut terminal)?;
+
         // Always redraw if agent is processing, we're waiting for permission,
         // or if there are active tasks in progress to maintain animations
+        // This ensures tool messages are shown in real-time
         if app.agent_progress_rx.is_some()
             || app.permission_required
             || app.tool_execution_in_progress
@@ -46,25 +53,22 @@ pub fn run_app() -> Result<()> {
             terminal.draw(|f| ui(f, &mut app))?;
         }
 
-        // Process messages from various sources
-        process_channel_messages(&mut app, &rx, &mut terminal)?;
-        process_agent_messages(&mut app, &mut terminal)?;
-        process_auto_scroll(&mut app, &mut terminal)?;
-
-        // Check for command mode before handling events (replacing the check in draw.rs)
+        // Check for command mode before handling events
         if let AppState::Chat = app.state {
             if app.input.starts_with('/') {
                 app.check_command_mode();
             }
         }
 
-        // Process user input
-        if crossterm::event::poll(Duration::from_millis(50))? {
+        // Process user input with short timeout to keep processing messages
+        // This shorter poll timeout makes the UI more responsive during tool execution
+        if crossterm::event::poll(Duration::from_millis(25))? {
             if let Event::Key(key) = crossterm::event::read()? {
                 // Pass both the key code and the modifiers to the process_key_event function
                 process_key_event(&mut app, key.code, key.modifiers, &tx, &mut terminal)?;
             }
         } else {
+            // Use a very short sleep to keep checking messages frequently
             std::thread::sleep(Duration::from_millis(5));
         }
     }
@@ -94,68 +98,74 @@ fn process_agent_messages(
     mut app: &mut App,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
-    if let Some(ref agent_rx) = app.agent_progress_rx {
-        // Process one message at a time for better visual effect
-        if let Ok(msg) = agent_rx.try_recv() {
-            // First, check for special tool execution marker before any processing
+    // Collect messages first to avoid borrow checker issues
+    let mut messages_to_process = Vec::new();
+    let mut any_tool_executed = false;
+
+    // Check for agent progress messages and collect them
+    if let Some(ref agent_rx) = &app.agent_progress_rx {
+        // Drain all available messages into our collection
+        while let Ok(msg) = agent_rx.try_recv() {
             if msg == "[TOOL_EXECUTED]" {
-                // Directly increment tool count here, before any message cleaning
-                app.add_tool_use();
-                // Refresh the timestamp for animations
-                app.last_message_time = std::time::Instant::now();
-                // Redraw to update animation state for the tool indicator
-                terminal.draw(|f| ui(f, &mut app))?;
-                // Skip further processing for this marker
-                return Ok(());
-            }
-
-            // Check for tool completion message
-            let is_tool_completion =
-                msg.contains("Result:") || (msg.contains("tool") && msg.contains("completed"));
-
-            // Add debug message if debug is enabled
-            if app.debug_messages {
-                app.messages
-                    .push(format!("DEBUG: Received agent message: {}", msg));
-            }
-
-            // Handle ANSI escape sequences by stripping them for storage but preserving their meaning
-            let processed_msg = if msg.contains("\x1b[") {
-                // Store a version without the ANSI codes for message matching but preserve the styling
-                // in a way that the UI can process
-                let clean_msg = msg.replace("\x1b[32m", "").replace("\x1b[0m", "");
-                if app.debug_messages {
-                    app.messages.push(format!("[ansi_styled] {}", clean_msg));
-                }
-
-                // Return the message for further processing
-                clean_msg
+                any_tool_executed = true;
             } else {
-                msg
-            };
-
-            // Process the message and immediately draw to screen
-            process_message(app, &processed_msg)?;
-
-            // If this is a tool completion message, refresh the animation timestamp
-            // to ensure proper color change from orange to green
-            if is_tool_completion {
-                app.last_message_time = std::time::Instant::now();
-            }
-
-            // Force auto-scroll to keep focus on the latest message
-            app.auto_scroll_to_bottom();
-
-            // Immediately redraw after each message for real-time effect
-            terminal.draw(|f| ui(f, &mut app))?;
-
-            // Small delay to create visual animation effect (smaller delay for more fluid updates)
-            if !app.permission_required {
-                // Don't delay if waiting for permission
-                std::thread::sleep(Duration::from_millis(100));
+                messages_to_process.push(msg);
             }
         }
     }
+
+    // Process tool execution counter first
+    if any_tool_executed {
+        app.add_tool_use();
+        app.last_message_time = std::time::Instant::now();
+    }
+
+    // Process all collected messages
+    let has_messages = !messages_to_process.is_empty();
+    let mut any_completion = false;
+
+    for msg in &messages_to_process {
+        // Check for tool completion message
+        let is_tool_completion =
+            msg.contains("Result:") || (msg.contains("tool") && msg.contains("completed"));
+
+        if is_tool_completion {
+            any_completion = true;
+        }
+
+        // Add debug message if debug is enabled
+        if app.debug_messages {
+            app.messages
+                .push(format!("DEBUG: Received agent message: {}", msg));
+        }
+
+        // Handle ANSI escape sequences by stripping them for storage but preserving their meaning
+        let processed_msg = if msg.contains("\x1b[") {
+            // Store a version without the ANSI codes for message matching but preserve the styling
+            let clean_msg = msg.replace("\x1b[32m", "").replace("\x1b[0m", "");
+            if app.debug_messages {
+                app.messages.push(format!("[ansi_styled] {}", clean_msg));
+            }
+            clean_msg
+        } else {
+            msg.clone()
+        };
+
+        // Process the message
+        process_message(app, &processed_msg)?;
+    }
+
+    // Update animation timestamp for tool completions
+    if any_completion {
+        app.last_message_time = std::time::Instant::now();
+    }
+
+    // Force auto-scroll if we processed any messages
+    if has_messages || any_tool_executed {
+        app.auto_scroll_to_bottom();
+        terminal.draw(|f| ui(f, &mut app))?;
+    }
+
     Ok(())
 }
 
@@ -453,37 +463,99 @@ fn handle_enter_key(
                 // Update the last query time
                 app.last_query_time = std::time::Instant::now();
 
-                // Query the model
-                match app.query_model(&input) {
+                // CRITICAL FIX: We need to process tool messages BEFORE showing the final answer
+                // The key issue is that we need to continue processing agent messages while
+                // the query is being executed, but before we get the final result.
+
+                // Force UI refresh for better UX
+                app.auto_scroll_to_bottom();
+                terminal.draw(|f| ui(f, &mut app))?;
+
+                // Start the model query - this initiates tool execution, but doesn't
+                // return until all tool execution is complete
+                app.tool_execution_in_progress = true; // Set this manually to ensure proper animation
+
+                // Process a batch of agent messages before starting the query
+                // to make sure the UI is set up properly
+                process_agent_messages(app, terminal)?;
+                terminal.draw(|f| ui(f, &mut app))?;
+
+                // Process agent messages in a special loop to ensure they're displayed
+                // BEFORE we get the final result
+                let start_time = std::time::Instant::now();
+                let timeout = Duration::from_secs(2); // Short timeout to ensure tools start processing
+
+                // First phase - wait for the first tool message to appear
+                // This ensures we see "tool executing" before we see results
+                while start_time.elapsed() < timeout {
+                    // Check for and process agent messages
+                    process_agent_messages(app, terminal)?;
+                    process_auto_scroll(app, terminal)?;
+
+                    // Redraw the UI to show any updates
+                    terminal.draw(|f| ui(f, &mut app))?;
+
+                    // If we've processed any tool messages, we can start the query
+                    if app.tool_execution_in_progress {
+                        // Give tools a chance to execute and display
+                        std::thread::sleep(Duration::from_millis(200));
+                        break;
+                    }
+
+                    // Brief pause to avoid busy-waiting
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+
+                // Now execute the actual query and get the final result
+                // This ensures all tool messages are displayed BEFORE we get the final result
+                let result = app.query_model(&input);
+
+                // Final phase - make sure we've displayed all tool messages
+                let final_timeout = Duration::from_millis(500);
+                let final_start = std::time::Instant::now();
+
+                while final_start.elapsed() < final_timeout {
+                    // Process any remaining agent messages
+                    process_agent_messages(app, terminal)?;
+                    process_auto_scroll(app, terminal)?;
+
+                    // Redraw to ensure tools are displayed
+                    terminal.draw(|f| ui(f, &mut app))?;
+
+                    // Brief pause
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+
+                // Process the final result
+                match result {
                     Ok(response_string) => {
-                        // Remove the thinking message (both old and new formats)
+                        // Remove any thinking messages
                         if let Some(last) = app.messages.last() {
-                            if last == "Thinking..." || last.starts_with("[thinking]") {
+                            if last == "Thinking..."
+                                || last.starts_with("[thinking]")
+                                || last.starts_with("⚪ Processing")
+                            {
                                 app.messages.pop();
                             }
                         }
 
-                        // No need to add a final response marker - we want to maintain the async style
-                        // and render output directly without separators
-
                         // Process and format the response for better display
                         format_and_display_response(app, &response_string);
 
-                        // Complete the task with estimated output tokens (based on response length)
-                        // Input tokens are already tracked when the query is sent
+                        // Complete the task with estimated output tokens
                         let estimated_output_tokens = (response_string.len() / 4) as u32;
                         app.complete_current_task(estimated_output_tokens);
 
                         // Force scrolling to the bottom to show the new response
                         app.auto_scroll_to_bottom();
-
-                        // Ensure the UI redraws immediately to show the response
-                        terminal.draw(|f| ui(f, &mut app))?;
                     }
                     Err(e) => {
-                        // Remove the thinking message (both old and new formats)
+                        // Remove any thinking messages
                         if let Some(last) = app.messages.last() {
-                            if last == "Thinking..." || last.starts_with("[thinking]") {
+                            if last == "Thinking..."
+                                || last.starts_with("[thinking]")
+                                || last.starts_with("⚪ Processing")
+                            {
                                 app.messages.pop();
                             }
                         }
@@ -495,6 +567,9 @@ fn handle_enter_key(
                         app.auto_scroll_to_bottom();
                     }
                 }
+
+                // Final redraw to ensure everything is displayed
+                terminal.draw(|f| ui(f, &mut app))?;
 
                 // Make sure to redraw after getting a response
                 terminal.draw(|f| ui(f, &mut app))?;

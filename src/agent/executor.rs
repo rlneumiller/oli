@@ -199,16 +199,8 @@ impl AgentExecutor {
                 break;
             }
 
-            // Update progress with real-time status
-            if let Some(sender) = &self.progress_sender {
-                let _ = sender
-                    .send(format!(
-                        "⏺ Executing {} tool call{}...",
-                        calls.len(),
-                        if calls.len() == 1 { "" } else { "s" }
-                    ))
-                    .await;
-            }
+            // We don't need this summary since each tool call will have its own message
+            // This improves the async nature of the tool execution
 
             // Execute each tool call and collect results
             for (i, call) in calls.iter().enumerate() {
@@ -287,7 +279,8 @@ impl AgentExecutor {
                 // Send the formatted tool details to UI before execution
                 if let Some(sender) = &self.progress_sender {
                     let _ = sender
-                        .send(format!("\x1b[32m⏺\x1b[0m {}", formatted_tool_details))
+                        // Use orange color for tool execution in progress
+                        .send(format!("⏺ {}", formatted_tool_details))
                         .await;
                 }
 
@@ -454,7 +447,8 @@ impl AgentExecutor {
                             };
 
                             let _ = sender
-                                .send(format!("\x1b[32m⏺\x1b[0m {}", formatted_result))
+                                // Use green color for completed tool results
+                                .send(format!("⏺ [completed] {}", formatted_result))
                                 .await;
 
                             // Small delay to allow UI update
@@ -465,7 +459,7 @@ impl AgentExecutor {
                     Err(e) => {
                         let error_msg = format!("Tool execution failed: {}", e);
                         if let Some(sender) = &self.progress_sender {
-                            let _ = sender.send(format!("\x1b[31m⏺\x1b[0m {}", error_msg)).await;
+                            let _ = sender.send(format!("⏺ [error] {}", error_msg)).await;
                         }
 
                         // Return error message as tool result
@@ -481,16 +475,7 @@ impl AgentExecutor {
                 });
             }
 
-            // Update progress with real-time status
-            if let Some(sender) = &self.progress_sender {
-                let _ = sender
-                    .send(format!(
-                        "⏺ Processing {} tool result{} and generating response...",
-                        tool_results.len(),
-                        if tool_results.len() == 1 { "" } else { "s" }
-                    ))
-                    .await;
-            }
+            // Don't show "processing" message to reduce UI noise
 
             // For subsequent calls, add the tool results and use JSON schema to get more reliable output
             let next_options = if loop_count >= MAX_LOOPS - 1 {
