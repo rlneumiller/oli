@@ -12,6 +12,18 @@ use ratatui::{
 
 /// Main UI rendering function, dispatches to specific screen renderers
 pub fn ui(f: &mut Frame, app: &mut App) {
+    // Calculate time elapsed since last message for animation effects
+    // This is used to update app.last_message_time for continuous animation
+    let _animation_active =
+        app.last_message_time.elapsed() < std::time::Duration::from_millis(1000);
+
+    // Update last message time for continuous animation when tool execution is in progress
+    if app.tool_execution_in_progress || app.agent_progress_rx.is_some() {
+        // Only update the timestamp if we're actively processing
+        // This will keep the animation going for active tasks
+        app.last_message_time = std::time::Instant::now();
+    }
+
     match app.state {
         AppState::Setup => draw_setup(f, app),
         AppState::ApiKeyInput => draw_api_key_input(f, app),

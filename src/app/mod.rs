@@ -55,10 +55,8 @@ impl App {
             textarea,
             input: String::new(),
             messages: vec![],
-            download_progress: None,
             selected_model: 0,
             available_models: get_available_models(),
-            download_active: false,
             error_message: None,
             debug_messages: false, // Debug mode off by default
             scroll_position: 0,
@@ -414,7 +412,6 @@ impl ModelManager for App {
                 );
                 self.messages
                     .push("Try asking about files, editing code, or running commands.".into());
-                self.download_active = false;
                 self.state = AppState::Chat;
 
                 // If agent is successfully set up, we're done
@@ -433,7 +430,7 @@ impl ModelManager for App {
             .push("Please use cloud-based models like Claude or GPT instead.".into());
 
         // Set appropriate app state
-        self.download_active = false;
+
         self.state = AppState::Chat;
 
         Ok(())
@@ -506,7 +503,7 @@ impl ModelManager for App {
             .push("Please use cloud-based models like Claude or GPT instead.".into());
 
         // Set appropriate app state
-        self.download_active = false;
+
         self.state = AppState::Chat;
 
         tx.send("setup_complete".into())?;

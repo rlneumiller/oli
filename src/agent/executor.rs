@@ -32,6 +32,69 @@ impl AgentExecutor {
         }
     }
 
+    /// Analyze conversation to determine if code parsing might be needed
+    fn might_need_codebase_parsing(&self) -> bool {
+        // Get the latest user message
+        if let Some(last_user_msg) = self
+            .conversation
+            .iter()
+            .rev()
+            .find(|msg| msg.role == "user")
+        {
+            let content = &last_user_msg.content;
+
+            // Keywords that suggest codebase understanding might be needed
+            let code_related_keywords = [
+                "code",
+                "implement",
+                "function",
+                "class",
+                "method",
+                "refactor",
+                "improve",
+                "optimize",
+                "bug",
+                "fix",
+                "test",
+                "create",
+                "add",
+                "modify",
+                "update",
+                "change",
+                "remove",
+                "file",
+                "module",
+                "package",
+                "import",
+                "dependency",
+                "struct",
+                "enum",
+                "trait",
+                "impl",
+                "interface",
+                "build",
+                "compile",
+                "run",
+                "execute",
+                "install",
+                "architecture",
+                "design",
+                "pattern",
+            ];
+
+            // Check if multiple code-related keywords are present
+            let keyword_count = code_related_keywords
+                .iter()
+                .filter(|&&kw| content.to_lowercase().contains(kw))
+                .count();
+
+            // If the query contains multiple code-related keywords, suggest parsing
+            return keyword_count >= 2;
+        }
+
+        false
+    }
+
     pub fn with_progress_sender(mut self, sender: mpsc::Sender<String>) -> Self {
         self.progress_sender = Some(sender);
         self
@@ -56,11 +119,33 @@ impl AgentExecutor {
             json_schema: None,       // No structured format for initial response
         };
 
+        // Check if the query might need codebase parsing
+        // This initial check helps determine if we should suggest code parsing to the model
+        let needs_parsing = self.might_need_codebase_parsing();
+
         // Update progress if sender is configured with real-time status
         if let Some(sender) = &self.progress_sender {
             let _ = sender
-                .send("⚪ Sending request to AI assistant...".to_string())
+                .send("⏺ Sending request to AI assistant...".to_string())
                 .await;
+        }
+
+        // If this query potentially needs code parsing, suggest it to the model
+        // by adding a system hint for better context understanding
+        if needs_parsing {
+            if let Some(sender) = &self.progress_sender {
+                let _ = sender
+                    .send("⏺ Analyzing if codebase parsing is needed...".to_string())
+                    .await;
+            }
+
+            // Add a temporary system message suggesting code parsing
+            self.conversation.push(Message::system(
+                "The user's query appears to be related to code. Consider using the ParseCode tool \
+                to understand the codebase structure before responding, if you need to understand \
+                the code to provide a solution. The ParseCode tool will generate an AST \
+                (Abstract Syntax Tree) that helps you understand the code structure.".to_string()
+            ));
         }
 
         // Execute the first completion with tools
@@ -68,6 +153,15 @@ impl AgentExecutor {
             .api_client
             .complete_with_tools(self.conversation.clone(), options.clone(), None)
             .await?;
+
+        // Remove the temporary system message if it was added
+        if needs_parsing {
+            if let Some(last) = self.conversation.last() {
+                if last.role == "system" && last.content.contains("ParseCode tool") {
+                    self.conversation.pop();
+                }
+            }
+        }
 
         // If there are no tool calls, add the content to conversation and return
         if tool_calls.is_none() {
@@ -125,7 +219,7 @@ impl AgentExecutor {
             if let Some(sender) = &self.progress_sender {
                 let _ = sender
                     .send(format!(
-                        "[tool] 🔧 Executing {} tool call{}...",
+                        "⏺ Executing {} tool call{}...",
                         calls.len(),
                         if calls.len() == 1 { "" } else { "s" }
                     ))
@@ -373,6 +467,9 @@ impl AgentExecutor {
                             let _ = sender
                                 .send(format!("\x1b[32m⏺\x1b[0m {}", formatted_result))
                                 .await;
+
+                            // Small delay to allow UI update
+                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                         }
                         output
                     }
@@ -399,7 +496,7 @@ impl AgentExecutor {
             if let Some(sender) = &self.progress_sender {
                 let _ = sender
                     .send(format!(
-                        "⚪ Processing {} tool result{} and generating response...",
+                        "⏺ Processing {} tool result{} and generating response...",
                         tool_results.len(),
                         if tool_results.len() == 1 { "" } else { "s" }
                     ))

@@ -1,4 +1,3 @@
-use crate::app::models::ModelManager;
 use crate::app::permissions::PermissionHandler;
 use crate::app::state::{App, AppState};
 use crate::app::utils::Scrollable;
@@ -85,66 +84,39 @@ pub fn process_message(app: &mut App, msg: &str) -> Result<()> {
 
 // Helper functions for processing different message types
 fn process_progress_message(app: &mut App, msg: &str) {
-    // Make sure download_active is true whenever we receive progress
-    app.download_active = true;
-
-    let parts: Vec<&str> = msg.split(':').collect();
-    if parts.len() >= 3 {
-        if let (Ok(downloaded), Ok(total)) = (parts[1].parse::<u64>(), parts[2].parse::<u64>()) {
-            app.download_progress = Some((downloaded, total));
-            // Only log progress occasionally to avoid flooding logs
-            if downloaded % (5 * 1024 * 1024) < 100000 {
-                // Log roughly every 5MB
-                if app.debug_messages {
-                    app.messages.push(format!(
-                        "DEBUG: Download progress: {:.1}MB/{:.1}MB",
-                        downloaded as f64 / 1_000_000.0,
-                        total as f64 / 1_000_000.0
-                    ));
-                }
-            }
-        }
-    }
+    // Simplified progress message handler (no download functionality)
+    app.messages.push(format!("Progress: {}", msg));
 }
 
 fn process_status_message(app: &mut App, msg: &str) {
-    // Status updates for the download process
+    // Status updates for the model setup process
     let status = msg.replacen("status:", "", 1);
     app.messages.push(format!("Status: {}", status));
 }
 
 fn process_download_started_message(app: &mut App, msg: &str) {
-    app.download_active = true;
+    // Simplified notification without downloads
     let url = msg.replacen("download_started:", "", 1);
-    app.messages.push(format!("Starting download from {}", url));
+    app.messages.push(format!("Setup starting from {}", url));
 }
 
 fn process_download_complete_message(app: &mut App) -> Result<()> {
-    app.download_active = false;
     app.messages
-        .push("Download completed! Loading model...".into());
-    let model_path = app.model_path(&app.current_model().file_name)?;
-    match app.load_model(&model_path) {
-        Ok(()) => {
-            // Directly transition to Chat state and set welcome message
-            app.state = AppState::Chat;
+        .push("Setup completed! Loading model...".into());
 
-            // Add the welcome message and help info in a cleaner format
-            app.messages.clear(); // Clear setup messages for a clean chat window
-            app.messages.push("★ Welcome to OLI assistant! ★".into());
-            app.messages
-                .push("Ready to code! Type /help for available commands".into());
-            if let Some(cwd) = &app.current_working_dir {
-                app.messages.push(format!("cwd: {}", cwd));
-            }
-            app.messages.push("".into());
-        }
-        Err(e) => {
-            app.messages
-                .push(format!("ERROR: Failed to load model: {}", e));
-            app.state = AppState::Error(format!("Failed to load model: {}", e));
-        }
+    // Directly transition to Chat state
+    app.state = AppState::Chat;
+
+    // Add welcome message
+    app.messages.push("★ Welcome to OLI assistant! ★".into());
+    app.messages
+        .push("Ready to code! Type /help for available commands".into());
+
+    if let Some(cwd) = &app.current_working_dir {
+        app.messages.push(format!("cwd: {}", cwd));
     }
+    app.messages.push("".into());
+
     Ok(())
 }
 

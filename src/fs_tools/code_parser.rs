@@ -1202,6 +1202,13 @@ impl CodeParser {
         summary.push_str(&simplified_json);
         summary.push_str("\n```\n");
 
+        // Add full AST data in JSON format for more detailed analysis
+        summary.push_str("\n## Full AST Data (JSON):\n\n```json\n");
+        let full_json =
+            serde_json::to_string_pretty(&asts).context("Failed to serialize full AST to JSON")?;
+        summary.push_str(&full_json);
+        summary.push_str("\n```\n");
+
         Ok(summary)
     }
 

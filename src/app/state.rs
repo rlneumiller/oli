@@ -22,10 +22,8 @@ pub struct App {
     pub textarea: TextArea<'static>, // TextArea widget for improved multiline input
     pub input: String,               // Keep for backward compatibility during transition
     pub messages: Vec<String>,
-    pub download_progress: Option<(u64, u64)>,
     pub selected_model: usize,
     pub available_models: Vec<ModelConfig>,
-    pub download_active: bool,
     pub error_message: Option<String>,
     pub debug_messages: bool,
     pub scroll_position: usize,

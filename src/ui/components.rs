@@ -492,41 +492,9 @@ pub fn create_model_list(app: &App) -> List {
         .highlight_style(AppStyles::highlight())
 }
 
-/// Create a progress display for model downloads
-pub fn create_progress_display(app: &App) -> Paragraph {
-    let progress_text = if app.download_active {
-        app.download_progress.map_or_else(
-            || "Preparing download...".into(),
-            |(d, t)| {
-                let percent = if t > 0 {
-                    (d as f64 / t as f64) * 100.0
-                } else {
-                    0.0
-                };
-
-                // Create a visual progress bar
-                let bar_width = 50; // Number of characters for the progress bar
-                let filled = (percent / 100.0 * bar_width as f64) as usize;
-                let empty = bar_width - filled;
-                let progress_bar = format!(
-                    "[{}{}] {:.1}%",
-                    "=".repeat(filled),
-                    " ".repeat(empty),
-                    percent
-                );
-
-                format!(
-                    "{}\nDownloading {}: {:.2}MB of {:.2}MB",
-                    progress_bar,
-                    app.current_model().file_name,
-                    d as f64 / 1_000_000.0,
-                    t as f64 / 1_000_000.0
-                )
-            },
-        )
-    } else {
-        "Press Enter to begin setup".into()
-    };
+/// Create a progress display for model setup
+pub fn create_progress_display(_app: &App) -> Paragraph {
+    let progress_text: String = "Press Enter to begin setup".to_string();
 
     Paragraph::new(progress_text)
         .block(
@@ -644,6 +612,13 @@ fn format_message(
     // Check if this is the last message and should be highlighted
     let is_newest_msg = idx == total_messages - 1;
 
+    // Calculate blinking effect for active tasks
+    // For tool execution in progress (⏺), use blinking animation
+    // This is used indirectly via is_newest_msg and highlight_on variables
+    let _should_blink = is_newest_msg
+        && highlight_on
+        && (message.contains("⏺") || message.contains("[tool]") || message.contains("[thinking]"));
+
     // Handle ANSI colorized messages with tool indicators first
     if message.contains("\x1b[32m⏺\x1b[0m") || message.contains("\x1b[31m⏺\x1b[0m") {
         // Use appropriate formatter based on message type
@@ -727,7 +702,11 @@ fn format_message(
 
 // Helper functions for formatting various message types
 fn format_thinking_message(message: &str, is_newest_msg: bool, highlight_on: bool) -> Line {
-    let thinking_content = message.strip_prefix("[thinking] ").unwrap_or(message);
+    // Strip any thinking prefix if present
+    let thinking_content = message
+        .strip_prefix("[thinking] ")
+        .or_else(|| message.strip_prefix("Thinking..."))
+        .unwrap_or(message);
 
     // Add pulsing animation effect to make it more noticeable
     let style = if is_newest_msg {
@@ -750,11 +729,29 @@ fn format_thinking_message(message: &str, is_newest_msg: bool, highlight_on: boo
             .add_modifier(Modifier::ITALIC)
     };
 
-    if thinking_content.starts_with("⚪ ") {
-        // New format with white circle - already has the icon
-        Line::from(vec![Span::styled(message, style)])
+    // Handle various format styles while maintaining consistent appearance
+    if thinking_content.starts_with("⚪ ") || thinking_content.starts_with("⏺ ") {
+        // Already has a circle indicator - extract the actual content
+        let pure_content = thinking_content
+            .strip_prefix("⚪ ")
+            .or_else(|| thinking_content.strip_prefix("⏺ "))
+            .unwrap_or(thinking_content);
+
+        Line::from(vec![
+            Span::styled(
+                "⏺ ",
+                if is_newest_msg && highlight_on {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Yellow)
+                },
+            ),
+            Span::styled(pure_content, style),
+        ])
     } else {
-        // Legacy format without icon - add the circle
+        // No circle indicator yet - add one
         Line::from(vec![
             Span::styled(
                 "⏺ ",
@@ -771,7 +768,7 @@ fn format_thinking_message(message: &str, is_newest_msg: bool, highlight_on: boo
     }
 }
 
-fn format_tool_message(message: &str, _is_newest_msg: bool, _highlight_on: bool) -> Line {
+fn format_tool_message(message: &str, is_newest_msg: bool, highlight_on: bool) -> Line {
     // Handle ANSI colorized messages with proper spacing
     if message.contains("\x1b[32m⏺\x1b[0m") {
         // Find where the actual message content starts (right after the ANSI sequence)
@@ -780,9 +777,22 @@ fn format_tool_message(message: &str, _is_newest_msg: bool, _highlight_on: bool)
             let content_start = ansi_end_pos + 4; // 4 is length of "\x1b[0m"
             if content_start < message.len() {
                 let content = &message[content_start..];
+
+                // Apply blinking effect for active tasks in progress
+                let indicator_style =
+                    if is_newest_msg && highlight_on && !content.contains("Result:") {
+                        // Use blinking indicator for in-progress tools
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        // Use standard green for completed tools
+                        Style::default().fg(Color::Green)
+                    };
+
                 // Create a line with proper ratatui styling
                 return Line::from(vec![
-                    Span::styled("⏺ ", Style::default().fg(Color::Green)),
+                    Span::styled("⏺ ", indicator_style),
                     Span::styled(
                         content.trim_start(),
                         Style::default()

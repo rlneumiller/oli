@@ -37,8 +37,12 @@ pub fn run_app() -> Result<()> {
 
     // Main event loop
     while app.state != AppState::Error("quit".into()) {
-        // Always redraw if download is active, agent is processing, or we're waiting for permission
-        if app.download_active || app.agent_progress_rx.is_some() || app.permission_required {
+        // Always redraw if agent is processing, we're waiting for permission,
+        // or if there are active tasks in progress to maintain animations
+        if app.agent_progress_rx.is_some()
+            || app.permission_required
+            || app.tool_execution_in_progress
+        {
             terminal.draw(|f| ui(f, &mut app))?;
         }
 
@@ -399,7 +403,7 @@ fn handle_enter_key(
                 app.messages.push(format!("> {}", input));
 
                 // Show a "thinking" message - this will soon be replaced with real-time tool execution
-                app.messages.push("[thinking] ⚪ Analyzing query...".into());
+                app.messages.push("⏺ Analyzing query...".into());
                 // Force immediate redraw to show thinking state
                 app.auto_scroll_to_bottom();
                 terminal.draw(|f| ui(f, &mut app))?;
