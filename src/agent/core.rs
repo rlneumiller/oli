@@ -2,7 +2,9 @@ use crate::agent::executor::AgentExecutor;
 use crate::apis::anthropic::AnthropicClient;
 use crate::apis::api_client::{ApiClientEnum, DynApiClient};
 use crate::apis::openai::OpenAIClient;
+use crate::fs_tools::code_parser::CodeParser;
 use anyhow::{Context, Result};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -19,6 +21,7 @@ pub struct Agent {
     api_client: Option<DynApiClient>,
     system_prompt: Option<String>,
     progress_sender: Option<mpsc::Sender<String>>,
+    code_parser: Option<Arc<CodeParser>>,
 }
 
 impl Agent {
@@ -29,6 +32,7 @@ impl Agent {
             api_client: None,
             system_prompt: None,
             progress_sender: None,
+            code_parser: None,
         }
     }
 
@@ -70,6 +74,10 @@ impl Agent {
             }
         });
 
+        // Initialize the code parser
+        let parser = CodeParser::new()?;
+        self.code_parser = Some(Arc::new(parser));
+
         Ok(())
     }
 
@@ -86,7 +94,35 @@ impl Agent {
             }
         });
 
+        // Initialize the code parser
+        let parser = CodeParser::new()?;
+        self.code_parser = Some(Arc::new(parser));
+
         Ok(())
+    }
+
+    // New method to analyze codebase without using LLM
+    fn analyze_query_context(&self, query: &str) -> Result<Option<String>> {
+        // Only proceed if the code parser is initialized
+        if self.code_parser.is_some() {
+            // Send status update if progress sender is available
+            if let Some(sender) = &self.progress_sender {
+                let _ = sender
+                    .clone()
+                    .try_send("⚪ Analyzing codebase and generating AST...".to_string());
+            }
+
+            // Create a new mutable parser instance
+            let mut parser_instance = CodeParser::new()?;
+
+            // Find relevant files using code search tools
+            let root_dir = Path::new(".");
+            let ast_data = parser_instance.generate_llm_friendly_ast(root_dir, query)?;
+
+            return Ok(Some(ast_data));
+        }
+
+        Ok(None)
     }
 
     pub async fn execute(&self, query: &str) -> Result<String> {
@@ -94,6 +130,9 @@ impl Agent {
             .api_client
             .as_ref()
             .context("Agent not initialized. Call initialize() first.")?;
+
+        // First, analyze the codebase and generate AST without using LLM
+        let ast_data = self.analyze_query_context(query)?;
 
         // Create and configure executor
         let mut executor = AgentExecutor::new(api_client.clone());
@@ -111,8 +150,18 @@ impl Agent {
             executor.add_system_message(DEFAULT_SYSTEM_PROMPT.to_string());
         }
 
-        // Add user query
-        executor.add_user_message(query.to_string());
+        // Enhance the user query with AST data if available
+        let enhanced_query = if let Some(ast) = ast_data {
+            format!(
+                "User Query: {}\n\nCodebase Structure Analysis:\n{}\n\nPlease plan your approach to help with the user query based on this code analysis.",
+                query, ast
+            )
+        } else {
+            query.to_string()
+        };
+
+        // Add enhanced user query
+        executor.add_user_message(enhanced_query);
 
         // Execute and return result
         executor.execute().await
@@ -196,6 +245,12 @@ Always ensure your code and suggestions are:
 - Well-commented when appropriate
 - Optimized for readability and maintainability
 - Tested or verifiable when possible
+
+## CODEBASE UNDERSTANDING
+- You have been provided with an AST (Abstract Syntax Tree) of the codebase
+- Use this information to understand the structure and organization of the code
+- The AST provides insights into functions, classes, and their relationships
+- Make sure to refer to this understanding when explaining or modifying code
 
 Always prioritize being helpful, accurate, and providing working solutions that follow modern software development practices.
 "#;

@@ -1,4 +1,4 @@
-use crate::fs_tools::{file_ops::FileOps, search::SearchTools};
+use crate::fs_tools::{code_parser::CodeParser, file_ops::FileOps, search::SearchTools};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -13,6 +13,7 @@ pub enum ToolType {
     Edit,
     Replace,
     Bash,
+    ParseCode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +62,12 @@ pub struct BashParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParseCodeParams {
+    pub root_dir: String,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "tool", content = "params")]
 pub enum ToolCall {
     View(ViewParams),
@@ -70,6 +77,7 @@ pub enum ToolCall {
     Edit(EditParams),
     Replace(ReplaceParams),
     Bash(BashParams),
+    ParseCode(ParseCodeParams),
 }
 
 impl ToolCall {
@@ -171,6 +179,19 @@ impl ToolCall {
                 };
 
                 Ok(result)
+            }
+            ToolCall::ParseCode(params) => {
+                let mut parser = CodeParser::new()?;
+                let root_dir = PathBuf::from(&params.root_dir);
+
+                // Generate AST data optimized for LLM consumption
+                let ast_data = parser.generate_llm_friendly_ast(&root_dir, &params.query)?;
+
+                // Return the AST data as JSON
+                Ok(format!(
+                    "Code structure parsed successfully. AST data:\n\n{}",
+                    ast_data
+                ))
             }
         }
     }
@@ -317,6 +338,24 @@ pub fn get_tool_definitions() -> Vec<Value> {
                     }
                 },
                 "required": ["command"]
+            }
+        }),
+        serde_json::json!({
+            "name": "ParseCode",
+            "description": "Parses codebase and generates AST for LLM understanding",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "root_dir": {
+                        "type": "string",
+                        "description": "The root directory of the codebase to parse"
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "The user query to determine relevant files and context"
+                    }
+                },
+                "required": ["root_dir", "query"]
             }
         }),
     ]

@@ -2,7 +2,7 @@ mod agent;
 mod apis;
 pub mod app;
 mod errors;
-mod fs_tools;
+pub mod fs_tools;
 mod models;
 mod ui;
 

@@ -28,8 +28,30 @@ ratatui = "0.29.0"
 regex = "1.10.3"
 reqwest = { version = "0.12.14", features = ["json", "blocking"] }
 rand = "0.8.5"
+
+# Fast code search utilities
+grep = "0.3"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+ignore = "0.4"
+walkdir = "2.4.0"
+
+# Tree-sitter for AST parsing
+tree-sitter = "0.20.10"
+tree-sitter-loader = "0.21.0"
+tree-sitter-rust = "0.20.3"
+tree-sitter-javascript = "0.20.0"
+tree-sitter-python = "0.20.2"
+tree-sitter-c = "0.20.2"
+tree-sitter-cpp = "0.20.0"
+tree-sitter-go = "0.19.1"
+tree-sitter-java = "0.20.0"
+
+# Dynamic loading support
+libloading = "0.8"
+lazy_static = "1.4.0"
 tui-textarea = { version = "0.7.0", default-features = false, features = ["ratatui"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 tokio = { version = "1.44.1", features = ["full"] }
-walkdir = "2.4.0"
+tempfile = "3.9.0" # For temporary files in tests
