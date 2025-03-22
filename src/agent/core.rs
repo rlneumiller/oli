@@ -4,7 +4,6 @@ use crate::apis::api_client::{ApiClientEnum, DynApiClient};
 use crate::apis::openai::OpenAIClient;
 use crate::fs_tools::code_parser::CodeParser;
 use anyhow::{Context, Result};
-use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -101,38 +100,11 @@ impl Agent {
         Ok(())
     }
 
-    // New method to analyze codebase without using LLM
-    fn analyze_query_context(&self, query: &str) -> Result<Option<String>> {
-        // Only proceed if the code parser is initialized
-        if self.code_parser.is_some() {
-            // Send status update if progress sender is available
-            if let Some(sender) = &self.progress_sender {
-                let _ = sender
-                    .clone()
-                    .try_send("⚪ Analyzing codebase and generating AST...".to_string());
-            }
-
-            // Create a new mutable parser instance
-            let mut parser_instance = CodeParser::new()?;
-
-            // Find relevant files using code search tools
-            let root_dir = Path::new(".");
-            let ast_data = parser_instance.generate_llm_friendly_ast(root_dir, query)?;
-
-            return Ok(Some(ast_data));
-        }
-
-        Ok(None)
-    }
-
     pub async fn execute(&self, query: &str) -> Result<String> {
         let api_client = self
             .api_client
             .as_ref()
             .context("Agent not initialized. Call initialize() first.")?;
-
-        // First, analyze the codebase and generate AST without using LLM
-        let ast_data = self.analyze_query_context(query)?;
 
         // Create and configure executor
         let mut executor = AgentExecutor::new(api_client.clone());
@@ -150,18 +122,13 @@ impl Agent {
             executor.add_system_message(DEFAULT_SYSTEM_PROMPT.to_string());
         }
 
-        // Enhance the user query with AST data if available
-        let enhanced_query = if let Some(ast) = ast_data {
-            format!(
-                "User Query: {}\n\nCodebase Structure Analysis:\n{}\n\nPlease plan your approach to help with the user query based on this code analysis.",
-                query, ast
-            )
-        } else {
-            query.to_string()
-        };
+        // Add the original user query first
+        executor.add_user_message(query.to_string());
 
-        // Add enhanced user query
-        executor.add_user_message(enhanced_query);
+        // Let the executor determine if codebase parsing is needed
+        // It will use the updated might_need_codebase_parsing method that relies on the LLM
+        // This happens within executor.execute() and adds a suggestion to use ParseCode tool
+        // when appropriate, rather than automatically parsing everything
 
         // Execute and return result
         executor.execute().await

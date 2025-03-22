@@ -97,6 +97,22 @@ fn process_agent_messages(
     if let Some(ref agent_rx) = app.agent_progress_rx {
         // Process one message at a time for better visual effect
         if let Ok(msg) = agent_rx.try_recv() {
+            // First, check for special tool execution marker before any processing
+            if msg == "[TOOL_EXECUTED]" {
+                // Directly increment tool count here, before any message cleaning
+                app.add_tool_use();
+                // Refresh the timestamp for animations
+                app.last_message_time = std::time::Instant::now();
+                // Redraw to update animation state for the tool indicator
+                terminal.draw(|f| ui(f, &mut app))?;
+                // Skip further processing for this marker
+                return Ok(());
+            }
+
+            // Check for tool completion message
+            let is_tool_completion =
+                msg.contains("Result:") || (msg.contains("tool") && msg.contains("completed"));
+
             // Add debug message if debug is enabled
             if app.debug_messages {
                 app.messages
@@ -120,6 +136,12 @@ fn process_agent_messages(
 
             // Process the message and immediately draw to screen
             process_message(app, &processed_msg)?;
+
+            // If this is a tool completion message, refresh the animation timestamp
+            // to ensure proper color change from orange to green
+            if is_tool_completion {
+                app.last_message_time = std::time::Instant::now();
+            }
 
             // Force auto-scroll to keep focus on the latest message
             app.auto_scroll_to_bottom();
@@ -289,9 +311,23 @@ fn process_key_event(
                 handle_enter_key(app, tx, terminal)?;
             }
         }
-        KeyCode::Down => handle_down_key(app, terminal)?,
+        KeyCode::Down => {
+            if modifiers.contains(KeyModifiers::SHIFT) {
+                // Shift+Down scrolls task list down
+                handle_task_scroll_down(app, terminal)?
+            } else {
+                handle_down_key(app, terminal)?
+            }
+        }
         KeyCode::Tab => handle_tab_key(app, terminal)?,
-        KeyCode::Up => handle_up_key(app, terminal)?,
+        KeyCode::Up => {
+            if modifiers.contains(KeyModifiers::SHIFT) {
+                // Shift+Up scrolls task list up
+                handle_task_scroll_up(app, terminal)?
+            } else {
+                handle_up_key(app, terminal)?
+            }
+        }
         KeyCode::Left => handle_left_key(app, terminal)?,
         KeyCode::Right => handle_right_key(app, terminal)?,
         KeyCode::BackTab => handle_backtab_key(app, terminal)?,
@@ -399,12 +435,18 @@ fn handle_enter_key(
             if !input.is_empty() {
                 // No debug output needed here
 
+                // Create a new task for this query
+                let _task_id = app.create_task(&input);
+
+                // Estimate input tokens - a basic approximation is 4 characters per token
+                let estimated_input_tokens = (input.len() / 4) as u32;
+                app.add_input_tokens(estimated_input_tokens);
+
                 // Add user message with preserved newlines
                 app.messages.push(format!("> {}", input));
 
-                // Show a "thinking" message - this will soon be replaced with real-time tool execution
-                app.messages.push("⏺ Analyzing query...".into());
-                // Force immediate redraw to show thinking state
+                // No thinking message needed - async tasks will show their own progress
+                // Force immediate redraw to show the input has been received
                 app.auto_scroll_to_bottom();
                 terminal.draw(|f| ui(f, &mut app))?;
 
@@ -421,19 +463,16 @@ fn handle_enter_key(
                             }
                         }
 
-                        // Add a clear final answer marker that separates tool results from final response
-                        // Only add this marker if we haven't already shown tools during execution
-                        let has_tool_markers = app.messages.iter().any(|m| {
-                            m.contains("[tool]")
-                                || m.contains("⏺ Tool")
-                                || m.contains("Executing tool")
-                        });
-                        if !has_tool_markers {
-                            app.messages.push("Final response:".to_string());
-                        }
+                        // No need to add a final response marker - we want to maintain the async style
+                        // and render output directly without separators
 
                         // Process and format the response for better display
                         format_and_display_response(app, &response_string);
+
+                        // Complete the task with estimated output tokens (based on response length)
+                        // Input tokens are already tracked when the query is sent
+                        let estimated_output_tokens = (response_string.len() / 4) as u32;
+                        app.complete_current_task(estimated_output_tokens);
 
                         // Force scrolling to the bottom to show the new response
                         app.auto_scroll_to_bottom();
@@ -448,6 +487,10 @@ fn handle_enter_key(
                                 app.messages.pop();
                             }
                         }
+
+                        // Mark the task as failed
+                        app.fail_current_task(&e.to_string());
+
                         app.messages.push(format!("Error: {}", e));
                         app.auto_scroll_to_bottom();
                     }
@@ -773,6 +816,30 @@ fn handle_page_down_key(
 ) -> Result<()> {
     if let AppState::Chat = app.state {
         app.scroll_down(5); // Scroll down 5 lines
+        terminal.draw(|f| ui(f, &mut app))?;
+    }
+    Ok(())
+}
+
+/// Handle task list scrolling with Shift+Up
+fn handle_task_scroll_up(
+    mut app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+) -> Result<()> {
+    if let AppState::Chat = app.state {
+        app.scroll_tasks_up(1); // Scroll tasks up 1 line
+        terminal.draw(|f| ui(f, &mut app))?;
+    }
+    Ok(())
+}
+
+/// Handle task list scrolling with Shift+Down
+fn handle_task_scroll_down(
+    mut app: &mut App,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+) -> Result<()> {
+    if let AppState::Chat = app.state {
+        app.scroll_tasks_down(1); // Scroll tasks down 1 line
         terminal.draw(|f| ui(f, &mut app))?;
     }
     Ok(())
