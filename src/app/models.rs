@@ -16,20 +16,8 @@ pub trait ModelManager {
     fn verify_static(path: &Path) -> Result<()>;
     fn load_model(&mut self, model_path: &Path) -> Result<()>;
     fn setup_models(&mut self, tx: mpsc::Sender<String>) -> Result<()>;
-    fn download_model_with_path(
-        &mut self,
-        tx: mpsc::Sender<String>,
-        path: &Path,
-        primary_url: &str,
-        fallback_url: &str,
-    ) -> Result<()>;
-    fn download_file(
-        &mut self,
-        primary_url: &str,
-        fallback_url: &str,
-        path: &Path,
-        tx: mpsc::Sender<String>,
-    ) -> Result<()>;
+    fn download_model_with_path(&mut self, tx: mpsc::Sender<String>, path: &Path) -> Result<()>;
+    fn download_file(&mut self, path: &Path, tx: mpsc::Sender<String>) -> Result<()>;
     fn get_agent_model(&self) -> Option<String>;
     fn attempt_download(url: &str, path: &Path, tx: &mpsc::Sender<String>) -> Result<(), String>;
 }

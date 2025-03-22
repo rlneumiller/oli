@@ -240,7 +240,7 @@ impl CommandHandler for App {
                     self.messages
                         .push(format!("{} - {}", cmd.name, cmd.description));
                 }
-                self.messages.push("".into()); // Empty line for spacing
+                // Removed empty line spacing for cleaner UI
                 true
             }
             "/clear" => {
@@ -321,7 +321,7 @@ impl Scrollable for App {
 
         // Mark that we've auto-scrolled so UI knows to maintain this position
         // even if multiple messages come in rapid succession
-        self.messages.push("".to_string()); // Add empty line to ensure spacing
+        // Remove adding empty line to reduce spacing between messages
     }
 
     fn scroll_tasks_up(&mut self, amount: usize) {
@@ -567,13 +567,7 @@ impl ModelManager for App {
         }
     }
 
-    fn download_model_with_path(
-        &mut self,
-        tx: mpsc::Sender<String>,
-        _path: &Path,
-        _primary_url: &str,
-        _fallback_url: &str,
-    ) -> Result<()> {
+    fn download_model_with_path(&mut self, tx: mpsc::Sender<String>, _path: &Path) -> Result<()> {
         // Model downloading is removed - will be replaced with Ollama integration
         self.messages
             .push("Local model support has been temporarily removed.".into());
@@ -590,13 +584,7 @@ impl ModelManager for App {
         Ok(())
     }
 
-    fn download_file(
-        &mut self,
-        _primary_url: &str,
-        _fallback_url: &str,
-        _path: &Path,
-        tx: mpsc::Sender<String>,
-    ) -> Result<()> {
+    fn download_file(&mut self, _path: &Path, tx: mpsc::Sender<String>) -> Result<()> {
         // Model downloading is removed - will be replaced with Ollama integration
         tx.send("setup_complete".into())?;
         Ok(())
@@ -852,7 +840,7 @@ impl AgentManager for App {
         let (progress_tx, progress_rx) = mpsc::channel();
         self.agent_progress_rx = Some(progress_rx);
 
-        // Force immediate update of the UI
+        // Force immediate update of the UI without adding unnecessary spacing
         self.messages.push("_AUTO_SCROLL_".to_string());
 
         // Set tool execution flag

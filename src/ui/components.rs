@@ -85,7 +85,8 @@ pub fn create_message_list(app: &App, visible_area: Rect) -> Paragraph {
 
     // Process recent messages with a limit to prevent overloading the display
     // This ensures async behavior similar to the task pane
-    let max_display_count = visible_area.height as usize * 3; // Buffer of 3x visible lines
+    // Reduced buffer multiplier to reduce spacing
+    let max_display_count = visible_area.height as usize * 2; // Buffer of 2x visible lines
     let start_idx = if display_messages.len() > max_display_count {
         display_messages.len() - max_display_count
     } else {
@@ -478,10 +479,7 @@ pub fn create_model_list(app: &App) -> List {
         .iter()
         .enumerate()
         .map(|(i, model)| {
-            let content = format!(
-                "{} ({:.2}GB) - {}",
-                model.name, model.size_gb, model.description
-            );
+            let content = format!("{} - {}", model.name, model.description);
             if i == app.selected_model {
                 ListItem::new(format!("→ {}", content)).style(AppStyles::highlight())
             } else {
@@ -634,8 +632,20 @@ fn format_message(
         return format_tool_message(message, is_newest_msg, highlight_on);
     }
 
-    // Handle messages with the direct ⏺ indicator
+    // Handle tool messages with the direct ⏺ indicator
     if message.starts_with("⏺ ") {
+        // Check if the message has newlines - if so, handle it specially
+        if message.contains('\n') {
+            // This is a multiline tool message - split it into lines
+            let lines: Vec<&str> = message.split('\n').collect();
+
+            // Process the first line with format_tool_message
+            return format_tool_message(lines[0], is_newest_msg, highlight_on);
+
+            // Note: We only process the first line here - the rest will be processed
+            // in create_message_list where we'll add these as new messages
+        }
+
         return format_tool_message(message, is_newest_msg, highlight_on);
     }
 
@@ -979,9 +989,10 @@ fn format_error_message(message: &str) -> Line {
 }
 
 fn format_model_response(message: &str) -> Line {
-    // Simplified model response formatting
+    // Simplified model response formatting - avoid empty line rendering
     if message.trim().is_empty() {
-        Line::from("")
+        // Return a line with a single space instead of empty string to reduce vertical space
+        Line::from(" ")
     } else {
         // Display the message directly without special markers or prefixes
         // This maintains the clean, async architecture style
@@ -1123,8 +1134,10 @@ pub fn create_task_list(app: &App, visible_area: Rect) -> Paragraph {
             }
         }
 
-        // Empty line between tasks
-        all_lines.push(Line::from(""));
+        // Minimal spacing between tasks
+        if !app.tasks.is_empty() {
+            all_lines.push(Line::from(""));
+        }
     }
 
     // If no tasks, show a message

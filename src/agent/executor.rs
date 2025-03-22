@@ -361,20 +361,107 @@ impl AgentExecutor {
                                         format!("Tool result: {}", preview)
                                     }
                                 }
-                                "GlobTool" | "GrepTool" => {
+                                "GlobTool" => {
                                     let pattern = call
                                         .arguments
                                         .get("pattern")
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("unknown");
-                                    let name = if call.name.as_str() == "GlobTool" {
-                                        "Glob"
+
+                                    // Tool name for display
+                                    let name = "Glob";
+
+                                    // Get the file paths from the output, skipping the header
+                                    let file_paths: Vec<String> = output
+                                        .lines()
+                                        .filter(|line| line.contains(". "))
+                                        .map(|line| {
+                                            // Extract just the path part after the numbering
+                                            line.split_once(". ")
+                                                .map(|(_, path)| path.trim().to_string())
+                                                .unwrap_or_else(|| line.trim().to_string())
+                                        })
+                                        .collect();
+
+                                    let file_count = file_paths.len();
+
+                                    // Create a cleaner format that works better with TUI rendering
+                                    if file_count == 0 {
+                                        format!(
+                                            "{}(pattern: \"{}\") → No files found",
+                                            name, pattern
+                                        )
                                     } else {
-                                        "Grep"
+                                        let mut formatted = format!(
+                                            "{}(pattern: \"{}\") → Found {} files",
+                                            name, pattern, file_count
+                                        );
+
+                                        // Show first 3 files at most
+                                        for path in file_paths.iter().take(3) {
+                                            formatted.push_str(&format!("\n  ⎿ {}", path));
+                                        }
+
+                                        // Add count of remaining files if needed
+                                        if file_count > 3 {
+                                            formatted.push_str(&format!(
+                                                "\n  ... [+{} more files]",
+                                                file_count - 3
+                                            ));
+                                        }
+
+                                        formatted
+                                    }
+                                }
+                                "GrepTool" => {
+                                    let pattern = call
+                                        .arguments
+                                        .get("pattern")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unknown");
+
+                                    // First line contains count of matches
+                                    let first_line = output.lines().next().unwrap_or("");
+                                    let match_count = if first_line.starts_with("Found ") {
+                                        first_line
+                                            .split_whitespace()
+                                            .nth(1)
+                                            .and_then(|s| s.parse::<usize>().ok())
+                                            .unwrap_or(0)
+                                    } else {
+                                        output.lines().filter(|l| l.contains(":")).count()
                                     };
-                                    format!("{}(pattern: \"{}\") → Found {} files\n  ⎿ First results shown in output",
-                                        name, pattern,
-                                        output.lines().filter(|l| l.contains(".")).count())
+
+                                    // Format the grep matches for better display
+                                    if match_count == 0 {
+                                        format!("Grep(pattern: \"{}\") → No matches found", pattern)
+                                    } else {
+                                        let mut formatted = format!(
+                                            "Grep(pattern: \"{}\") → Found {} matches",
+                                            pattern, match_count
+                                        );
+
+                                        // Extract and format the grep matches (path:line:content)
+                                        let matches: Vec<&str> = output
+                                            .lines()
+                                            .filter(|line| line.contains(":"))
+                                            .take(3)
+                                            .collect();
+
+                                        for grep_match in matches {
+                                            formatted.push_str(&format!("\n  ⎿ {}", grep_match));
+                                        }
+
+                                        // Add count of remaining matches if needed
+                                        if match_count > 3 {
+                                            formatted.push_str(&format!(
+                                                "\n  ... [+{} more matches]",
+                                                match_count - 3
+                                            ));
+                                        }
+
+                                        formatted
+                                    }
                                 }
                                 "LS" => {
                                     if let Some(path) =
@@ -446,10 +533,26 @@ impl AgentExecutor {
                                 _ => format!("Tool result: {}", preview),
                             };
 
-                            let _ = sender
-                                // Use green color for completed tool results
-                                .send(format!("⏺ [completed] {}", formatted_result))
-                                .await;
+                            // Replace newlines with proper message breaks to ensure they display properly in TUI
+                            let formatted_lines: Vec<&str> = formatted_result.split('\n').collect();
+
+                            if formatted_lines.len() <= 1 {
+                                // Single line - just send it directly
+                                let _ = sender
+                                    .send(format!("⏺ [completed] {}", formatted_result))
+                                    .await;
+                            } else {
+                                // For multiline output, break into separate messages for better display
+                                // Send first line with the [completed] prefix
+                                let _ = sender
+                                    .send(format!("⏺ [completed] {}", formatted_lines[0]))
+                                    .await;
+
+                                // Send remaining lines with proper indentation
+                                for line in &formatted_lines[1..] {
+                                    let _ = sender.send(format!("  {}", line)).await;
+                                }
+                            }
 
                             // Small delay to allow UI update
                             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
