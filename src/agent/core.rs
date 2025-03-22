@@ -2,6 +2,7 @@ use crate::agent::executor::AgentExecutor;
 use crate::apis::anthropic::AnthropicClient;
 use crate::apis::api_client::{ApiClientEnum, DynApiClient};
 use crate::apis::openai::OpenAIClient;
+use crate::fs_tools::code_parser::CodeParser;
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -19,6 +20,7 @@ pub struct Agent {
     api_client: Option<DynApiClient>,
     system_prompt: Option<String>,
     progress_sender: Option<mpsc::Sender<String>>,
+    code_parser: Option<Arc<CodeParser>>,
 }
 
 impl Agent {
@@ -29,6 +31,7 @@ impl Agent {
             api_client: None,
             system_prompt: None,
             progress_sender: None,
+            code_parser: None,
         }
     }
 
@@ -70,6 +73,10 @@ impl Agent {
             }
         });
 
+        // Initialize the code parser
+        let parser = CodeParser::new()?;
+        self.code_parser = Some(Arc::new(parser));
+
         Ok(())
     }
 
@@ -85,6 +92,10 @@ impl Agent {
                 ApiClientEnum::OpenAi(Arc::new(client))
             }
         });
+
+        // Initialize the code parser
+        let parser = CodeParser::new()?;
+        self.code_parser = Some(Arc::new(parser));
 
         Ok(())
     }
@@ -111,8 +122,13 @@ impl Agent {
             executor.add_system_message(DEFAULT_SYSTEM_PROMPT.to_string());
         }
 
-        // Add user query
+        // Add the original user query first
         executor.add_user_message(query.to_string());
+
+        // Let the executor determine if codebase parsing is needed
+        // It will use the updated might_need_codebase_parsing method that relies on the LLM
+        // This happens within executor.execute() and adds a suggestion to use ParseCode tool
+        // when appropriate, rather than automatically parsing everything
 
         // Execute and return result
         executor.execute().await
@@ -196,6 +212,12 @@ Always ensure your code and suggestions are:
 - Well-commented when appropriate
 - Optimized for readability and maintainability
 - Tested or verifiable when possible
+
+## CODEBASE UNDERSTANDING
+- You have been provided with an AST (Abstract Syntax Tree) of the codebase
+- Use this information to understand the structure and organization of the code
+- The AST provides insights into functions, classes, and their relationships
+- Make sure to refer to this understanding when explaining or modifying code
 
 Always prioritize being helpful, accurate, and providing working solutions that follow modern software development practices.
 "#;

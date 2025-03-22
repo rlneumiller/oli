@@ -6,6 +6,9 @@ use anyhow::{Context, Result};
 use serde_json::{self, Value};
 use tokio::sync::mpsc;
 
+// We'll implement token usage tracking directly in the app without
+// a separate structure for now
+
 pub struct AgentExecutor {
     api_client: DynApiClient,
     conversation: Vec<Message>,
@@ -29,6 +32,62 @@ impl AgentExecutor {
             conversation: Vec::new(),
             tool_definitions: tool_defs,
             progress_sender: None,
+        }
+    }
+
+    /// Analyze conversation to determine if code parsing might be needed
+    /// Uses the LLM directly to make this determination rather than keyword matching
+    async fn might_need_codebase_parsing(&self) -> Result<bool> {
+        // Get the latest user message
+        if let Some(last_user_msg) = self
+            .conversation
+            .iter()
+            .rev()
+            .find(|msg| msg.role == "user")
+        {
+            let content = &last_user_msg.content;
+
+            // Create a system message explaining the task
+            let system_message = Message::system(
+                "You are an assistant that analyzes user queries to determine if they require \
+                code structure understanding. Respond with only 'yes' or 'no'. Answer 'yes' if \
+                the query involves understanding, modifying, or implementing code structures like \
+                functions, classes, modules, etc. Answer 'no' for general information queries, tool \
+                usage questions, or non-code tasks.".to_string()
+            );
+
+            // Create a user message with the query
+            let query_message = Message::user(format!(
+                "Based solely on this query, would understanding the code structure be helpful? \
+                Query: '{}'",
+                content
+            ));
+
+            // Create a mini-conversation for this specific task
+            let mini_conversation = vec![system_message, query_message];
+
+            // Create LLM options with minimal settings
+            let options = CompletionOptions {
+                temperature: Some(0.1), // Low temperature for deterministic response
+                top_p: Some(0.95),
+                max_tokens: Some(10), // Very small response needed
+                tools: None,          // No tools needed
+                require_tool_use: false,
+                json_schema: None,
+            };
+
+            // Call the API to get the determination
+            let (response, _) = self
+                .api_client
+                .complete_with_tools(mini_conversation, options, None)
+                .await?;
+
+            // Check the response - looking for a "yes" answer
+            let response_lower = response.to_lowercase();
+            Ok(response_lower.contains("yes") || response_lower.contains("true"))
+        } else {
+            // No user message found
+            Ok(false)
         }
     }
 
@@ -56,11 +115,21 @@ impl AgentExecutor {
             json_schema: None,       // No structured format for initial response
         };
 
-        // Update progress if sender is configured with real-time status
-        if let Some(sender) = &self.progress_sender {
-            let _ = sender
-                .send("⚪ Sending request to AI assistant...".to_string())
-                .await;
+        // Check if the query might need codebase parsing using the LLM
+        // This initial check helps determine if we should suggest code parsing to the model
+
+        let needs_parsing = self.might_need_codebase_parsing().await?;
+
+        // If this query potentially needs code parsing, suggest it to the model
+        // by adding a system hint for better context understanding
+        if needs_parsing {
+            // Add a temporary system message suggesting code parsing
+            self.conversation.push(Message::system(
+                "The user's query appears to be related to code. Consider using the ParseCode tool \
+                to understand the codebase structure before responding, if you need to understand \
+                the code to provide a solution. The ParseCode tool will generate an AST \
+                (Abstract Syntax Tree) that helps you understand the code structure.".to_string()
+            ));
         }
 
         // Execute the first completion with tools
@@ -68,6 +137,15 @@ impl AgentExecutor {
             .api_client
             .complete_with_tools(self.conversation.clone(), options.clone(), None)
             .await?;
+
+        // Remove the temporary system message if it was added
+        if needs_parsing {
+            if let Some(last) = self.conversation.last() {
+                if last.role == "system" && last.content.contains("ParseCode tool") {
+                    self.conversation.pop();
+                }
+            }
+        }
 
         // If there are no tool calls, add the content to conversation and return
         if tool_calls.is_none() {
@@ -121,16 +199,8 @@ impl AgentExecutor {
                 break;
             }
 
-            // Update progress with real-time status
-            if let Some(sender) = &self.progress_sender {
-                let _ = sender
-                    .send(format!(
-                        "[tool] 🔧 Executing {} tool call{}...",
-                        calls.len(),
-                        if calls.len() == 1 { "" } else { "s" }
-                    ))
-                    .await;
-            }
+            // We don't need this summary since each tool call will have its own message
+            // This improves the async nature of the tool execution
 
             // Execute each tool call and collect results
             for (i, call) in calls.iter().enumerate() {
@@ -209,7 +279,8 @@ impl AgentExecutor {
                 // Send the formatted tool details to UI before execution
                 if let Some(sender) = &self.progress_sender {
                     let _ = sender
-                        .send(format!("\x1b[32m⏺\x1b[0m {}", formatted_tool_details))
+                        // Use orange color for tool execution in progress
+                        .send(format!("⏺ {}", formatted_tool_details))
                         .await;
                 }
 
@@ -240,6 +311,11 @@ impl AgentExecutor {
                 // Execute the tool
                 let result = match tool_call.execute() {
                     Ok(output) => {
+                        // Send a special marker for tool counting that's easy to detect
+                        if let Some(sender) = &self.progress_sender {
+                            let _ = sender.send("[TOOL_EXECUTED]".to_string()).await;
+                        }
+
                         // Format successful tool result with detailed output
                         if let Some(sender) = &self.progress_sender {
                             // Create a preview of the output
@@ -371,15 +447,19 @@ impl AgentExecutor {
                             };
 
                             let _ = sender
-                                .send(format!("\x1b[32m⏺\x1b[0m {}", formatted_result))
+                                // Use green color for completed tool results
+                                .send(format!("⏺ [completed] {}", formatted_result))
                                 .await;
+
+                            // Small delay to allow UI update
+                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                         }
                         output
                     }
                     Err(e) => {
                         let error_msg = format!("Tool execution failed: {}", e);
                         if let Some(sender) = &self.progress_sender {
-                            let _ = sender.send(format!("\x1b[31m⏺\x1b[0m {}", error_msg)).await;
+                            let _ = sender.send(format!("⏺ [error] {}", error_msg)).await;
                         }
 
                         // Return error message as tool result
@@ -395,16 +475,7 @@ impl AgentExecutor {
                 });
             }
 
-            // Update progress with real-time status
-            if let Some(sender) = &self.progress_sender {
-                let _ = sender
-                    .send(format!(
-                        "⚪ Processing {} tool result{} and generating response...",
-                        tool_results.len(),
-                        if tool_results.len() == 1 { "" } else { "s" }
-                    ))
-                    .await;
-            }
+            // Don't show "processing" message to reduce UI noise
 
             // For subsequent calls, add the tool results and use JSON schema to get more reliable output
             let next_options = if loop_count >= MAX_LOOPS - 1 {
@@ -543,3 +614,7 @@ fn parse_tool_call(name: &str, args: &Value) -> Result<ToolCall> {
         _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),
     }
 }
+
+// Note: For future improvements, we could extract actual token usage from the API responses
+// rather than estimating them based on string length. This would involve parsing the
+// response JSON to extract token counts from both Anthropic and OpenAI formats.

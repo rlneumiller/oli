@@ -12,6 +12,18 @@ use ratatui::{
 
 /// Main UI rendering function, dispatches to specific screen renderers
 pub fn ui(f: &mut Frame, app: &mut App) {
+    // Calculate time elapsed since last message for animation effects
+    // This is used to update app.last_message_time for continuous animation
+    let _animation_active =
+        app.last_message_time.elapsed() < std::time::Duration::from_millis(1000);
+
+    // Update last message time for continuous animation when tool execution is in progress
+    if app.tool_execution_in_progress || app.agent_progress_rx.is_some() {
+        // Only update the timestamp if we're actively processing
+        // This will keep the animation going for active tasks
+        app.last_message_time = std::time::Instant::now();
+    }
+
     match app.state {
         AppState::Setup => draw_setup(f, app),
         AppState::ApiKeyInput => draw_api_key_input(f, app),
@@ -101,14 +113,30 @@ pub fn draw_api_key_input(f: &mut Frame, app: &mut App) {
 
 /// Draw chat screen with message history and input
 pub fn draw_chat(f: &mut Frame, app: &mut App) {
-    // Use three chunks - header, message history, and input (with command menu if active)
+    // Split the screen into two horizontal panes: left (task list) and right (chat)
+    let horizontal_split = Layout::default()
+        .direction(Direction::Horizontal)
+        .margin(1)
+        .constraints([
+            Constraint::Percentage(25), // Task list - 25% of the screen
+            Constraint::Percentage(75), // Chat area - 75% of the screen
+        ])
+        .split(f.area());
+
+    // Left pane: Task list
+    let tasks_area = horizontal_split[0];
+    let task_list = create_task_list(app, tasks_area);
+    f.render_widget(task_list, tasks_area);
+
+    // Right pane: Chat area
+    let chat_area = horizontal_split[1];
 
     // Count lines in textarea to determine input box height
     let line_count = app.textarea.lines().len();
 
     // Calculate how many wrapped lines we might need based on the terminal width
     // This helps with large pastes that would otherwise overflow horizontally
-    let terminal_width = f.area().width.saturating_sub(4); // Account for borders and padding
+    let terminal_width = chat_area.width.saturating_sub(4); // Account for borders and padding
     let wrapped_line_count = app
         .textarea
         .lines()
@@ -128,15 +156,15 @@ pub fn draw_chat(f: &mut Frame, app: &mut App) {
         .sum::<u16>() as usize;
 
     // Use the larger of actual lines or wrapped lines to determine height
-    let effective_line_count = line_count.max(wrapped_line_count);
+    let _effective_line_count = line_count.max(wrapped_line_count);
 
     // Calculate base input height (min 3, grows with lines but caps at half the available height)
     // First, estimate the total available height (area height minus margins and other UI elements)
-    let estimated_available_height = f.area().height.saturating_sub(4); // Subtract margins and status bar
-    let max_input_height = estimated_available_height / 2; // Allow up to half the available height
+    let estimated_available_height = chat_area.height.saturating_sub(4); // Subtract margins and status bar
 
-    // Base height starts at 3 lines and grows with content, up to half the screen height
-    let base_input_height = (3 + effective_line_count).min(max_input_height as usize);
+    // Fixed input height at 20% of the chat area
+    let max_input_height = estimated_available_height / 5; // 20% of available height
+    let base_input_height = 3.max(max_input_height as usize);
 
     let input_height = if app.show_command_menu {
         // Increase the input area height to make room for the command menu
@@ -160,16 +188,16 @@ pub fn draw_chat(f: &mut Frame, app: &mut App) {
         0 // No height when anything is typed in the input
     };
 
+    // Split the chat area vertically into status bar, message history, and input
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .margin(2)
         .constraints([
             Constraint::Length(1),                   // Status bar
             Constraint::Min(5),                      // Chat history (expandable)
             Constraint::Length(input_height as u16), // Input area (with variable height for command menu)
             Constraint::Length(shortcuts_height),    // Shortcuts area (variable height)
         ])
-        .split(f.area());
+        .split(chat_area);
 
     // Status bar showing model info and scroll position
     let status_bar = create_status_bar(app);

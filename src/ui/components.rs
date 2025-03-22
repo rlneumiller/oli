@@ -1,6 +1,6 @@
 use crate::app::commands::CommandHandler;
 use crate::app::models::ModelManager;
-use crate::app::state::App;
+use crate::app::state::{App, TaskStatus};
 use crate::ui::styles::AppStyles;
 use ratatui::{
     layout::{Alignment, Rect},
@@ -83,7 +83,17 @@ pub fn create_message_list(app: &App, visible_area: Rect) -> Paragraph {
     let mut all_lines: Vec<Line> = Vec::new();
     let total_messages = display_messages.len();
 
-    for (idx, &message) in display_messages.iter().enumerate() {
+    // Process recent messages with a limit to prevent overloading the display
+    // This ensures async behavior similar to the task pane
+    let max_display_count = visible_area.height as usize * 3; // Buffer of 3x visible lines
+    let start_idx = if display_messages.len() > max_display_count {
+        display_messages.len() - max_display_count
+    } else {
+        0
+    };
+
+    // Only process messages that will be visible or just out of view for scrolling
+    for (idx, &message) in display_messages.iter().enumerate().skip(start_idx) {
         if let Some(stripped) = message.strip_prefix("> ") {
             // Special handling for user messages with newlines
             if stripped.contains('\n') {
@@ -152,7 +162,7 @@ pub fn create_message_list(app: &App, visible_area: Rect) -> Paragraph {
     };
 
     // Create a scrollable paragraph for the messages
-    let has_more_above = app.scroll_position > 0;
+    let has_more_above = app.scroll_position > 0 || start_idx > 0;
     let has_more_below =
         app.scroll_position + (visible_area.height as usize) < display_messages.len(); // Use original message count for scroll indication
 
@@ -492,41 +502,9 @@ pub fn create_model_list(app: &App) -> List {
         .highlight_style(AppStyles::highlight())
 }
 
-/// Create a progress display for model downloads
-pub fn create_progress_display(app: &App) -> Paragraph {
-    let progress_text = if app.download_active {
-        app.download_progress.map_or_else(
-            || "Preparing download...".into(),
-            |(d, t)| {
-                let percent = if t > 0 {
-                    (d as f64 / t as f64) * 100.0
-                } else {
-                    0.0
-                };
-
-                // Create a visual progress bar
-                let bar_width = 50; // Number of characters for the progress bar
-                let filled = (percent / 100.0 * bar_width as f64) as usize;
-                let empty = bar_width - filled;
-                let progress_bar = format!(
-                    "[{}{}] {:.1}%",
-                    "=".repeat(filled),
-                    " ".repeat(empty),
-                    percent
-                );
-
-                format!(
-                    "{}\nDownloading {}: {:.2}MB of {:.2}MB",
-                    progress_bar,
-                    app.current_model().file_name,
-                    d as f64 / 1_000_000.0,
-                    t as f64 / 1_000_000.0
-                )
-            },
-        )
-    } else {
-        "Press Enter to begin setup".into()
-    };
+/// Create a progress display for model setup
+pub fn create_progress_display(_app: &App) -> Paragraph {
+    let progress_text: String = "Press Enter to begin setup".to_string();
 
     Paragraph::new(progress_text)
         .block(
@@ -644,24 +622,21 @@ fn format_message(
     // Check if this is the last message and should be highlighted
     let is_newest_msg = idx == total_messages - 1;
 
+    // Calculate blinking effect for active tasks
+    // For tool execution in progress (⏺), use blinking animation
+    // This is used indirectly via is_newest_msg and highlight_on variables
+    let _should_blink = is_newest_msg
+        && highlight_on
+        && (message.contains("⏺") || message.contains("[tool]") || message.contains("[thinking]"));
+
     // Handle ANSI colorized messages with tool indicators first
     if message.contains("\x1b[32m⏺\x1b[0m") || message.contains("\x1b[31m⏺\x1b[0m") {
-        // Use appropriate formatter based on message type
-        if message.contains("All tools executed successfully") {
-            return format_success_message(message);
-        } else {
-            return format_tool_message(message, is_newest_msg, highlight_on);
-        }
+        return format_tool_message(message, is_newest_msg, highlight_on);
     }
 
     // Handle messages with the direct ⏺ indicator
     if message.starts_with("⏺ ") {
-        // Use appropriate formatter based on message type/context
-        if message.contains("All tools executed successfully") {
-            return format_success_message(message);
-        } else {
-            return format_tool_message(message, is_newest_msg, highlight_on);
-        }
+        return format_tool_message(message, is_newest_msg, highlight_on);
     }
 
     // Process other message types
@@ -727,7 +702,11 @@ fn format_message(
 
 // Helper functions for formatting various message types
 fn format_thinking_message(message: &str, is_newest_msg: bool, highlight_on: bool) -> Line {
-    let thinking_content = message.strip_prefix("[thinking] ").unwrap_or(message);
+    // Strip any thinking prefix if present
+    let thinking_content = message
+        .strip_prefix("[thinking] ")
+        .or_else(|| message.strip_prefix("Thinking..."))
+        .unwrap_or(message);
 
     // Add pulsing animation effect to make it more noticeable
     let style = if is_newest_msg {
@@ -750,11 +729,14 @@ fn format_thinking_message(message: &str, is_newest_msg: bool, highlight_on: boo
             .add_modifier(Modifier::ITALIC)
     };
 
-    if thinking_content.starts_with("⚪ ") {
-        // New format with white circle - already has the icon
-        Line::from(vec![Span::styled(message, style)])
-    } else {
-        // Legacy format without icon - add the circle
+    // Handle various format styles while maintaining consistent appearance
+    if thinking_content.starts_with("⚪ ") || thinking_content.starts_with("⏺ ") {
+        // Already has a circle indicator - extract the actual content
+        let pure_content = thinking_content
+            .strip_prefix("⚪ ")
+            .or_else(|| thinking_content.strip_prefix("⏺ "))
+            .unwrap_or(thinking_content);
+
         Line::from(vec![
             Span::styled(
                 "⏺ ",
@@ -762,6 +744,23 @@ fn format_thinking_message(message: &str, is_newest_msg: bool, highlight_on: boo
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD)
+                        .add_modifier(Modifier::SLOW_BLINK)
+                } else {
+                    Style::default().fg(Color::Yellow)
+                },
+            ),
+            Span::styled(pure_content, style),
+        ])
+    } else {
+        // No circle indicator yet - add one
+        Line::from(vec![
+            Span::styled(
+                "⏺ ",
+                if is_newest_msg && highlight_on {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                        .add_modifier(Modifier::SLOW_BLINK)
                 } else {
                     Style::default().fg(Color::Yellow)
                 },
@@ -771,7 +770,7 @@ fn format_thinking_message(message: &str, is_newest_msg: bool, highlight_on: boo
     }
 }
 
-fn format_tool_message(message: &str, _is_newest_msg: bool, _highlight_on: bool) -> Line {
+fn format_tool_message(message: &str, is_newest_msg: bool, highlight_on: bool) -> Line {
     // Handle ANSI colorized messages with proper spacing
     if message.contains("\x1b[32m⏺\x1b[0m") {
         // Find where the actual message content starts (right after the ANSI sequence)
@@ -780,9 +779,43 @@ fn format_tool_message(message: &str, _is_newest_msg: bool, _highlight_on: bool)
             let content_start = ansi_end_pos + 4; // 4 is length of "\x1b[0m"
             if content_start < message.len() {
                 let content = &message[content_start..];
+
+                // Apply blinking effect for active tasks in progress
+                let indicator_style = if is_newest_msg
+                    && highlight_on
+                    && !content.contains("Result:")
+                {
+                    // Check if this is a result or completed message
+                    let content_lower = content.to_lowercase();
+                    if content_lower.contains("result:") || content_lower.contains("completed") {
+                        // Use green for completed tools
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        // Use blinking orange indicator for in-progress tools
+                        Style::default()
+                            .fg(Color::Rgb(255, 165, 0)) // Orange for executing
+                            .add_modifier(Modifier::BOLD)
+                            .add_modifier(Modifier::SLOW_BLINK)
+                    }
+                } else {
+                    // Check if this is a result or completed message for non-animated state
+                    let content_lower = content.to_lowercase();
+                    if content_lower.contains("result:") || content_lower.contains("completed") {
+                        // Use green for completed tools
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        // Use non-blinking orange for in-progress tools
+                        Style::default().fg(Color::Rgb(255, 165, 0)) // Orange for executing
+                    }
+                };
+
                 // Create a line with proper ratatui styling
                 return Line::from(vec![
-                    Span::styled("⏺ ", Style::default().fg(Color::Green)),
+                    Span::styled("⏺ ", indicator_style),
                     Span::styled(
                         content.trim_start(),
                         Style::default()
@@ -808,14 +841,55 @@ fn format_tool_message(message: &str, _is_newest_msg: bool, _highlight_on: bool)
             .strip_prefix("⏺ ")
             .unwrap_or(tool_content)
             .trim_start();
+
+        // Determine if this is an in-progress tool or completed tool
+        let is_completed = pure_content.contains("Result:") || pure_content.contains("completed");
+
+        // Apply appropriate style based on status
+        let indicator_style = if is_completed {
+            // Completed tools are always green (non-blinking)
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
+        } else if is_newest_msg && highlight_on {
+            // In-progress tools blink orange
+            Style::default()
+                .fg(Color::Rgb(255, 165, 0)) // Orange for executing
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::SLOW_BLINK)
+        } else {
+            // Default state for in-progress tools (non-blinking)
+            Style::default().fg(Color::Rgb(255, 165, 0)) // Orange for executing
+        };
+
         Line::from(vec![
-            Span::styled("⏺ ", Style::default().fg(Color::Green)),
+            Span::styled("⏺ ", indicator_style),
             Span::styled(pure_content, style),
         ])
     } else {
-        // Default format with green indicator
+        // Default format for messages without circle indicator
+        // Determine if this is an in-progress tool or completed tool
+        let is_completed = tool_content.contains("Result:") || tool_content.contains("completed");
+
+        // Apply appropriate style based on status
+        let indicator_style = if is_completed {
+            // Completed tools are always green (non-blinking)
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
+        } else if is_newest_msg && highlight_on {
+            // In-progress tools blink orange
+            Style::default()
+                .fg(Color::Rgb(255, 165, 0)) // Orange for executing
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::SLOW_BLINK)
+        } else {
+            // Default state for in-progress tools (non-blinking)
+            Style::default().fg(Color::Rgb(255, 165, 0)) // Orange for executing
+        };
+
         Line::from(vec![
-            Span::styled("⏺ ", Style::default().fg(Color::Green)),
+            Span::styled("⏺ ", indicator_style),
             Span::styled(tool_content, style),
         ])
     }
@@ -905,24 +979,198 @@ fn format_error_message(message: &str) -> Line {
 }
 
 fn format_model_response(message: &str) -> Line {
-    // Check various special cases for model responses
-    if message == "Final response:" {
-        // Special formatting for the final response marker
-        Line::from(vec![
-            Span::styled("✨ ", Style::default().fg(Color::Green)),
-            Span::styled(
-                "Final Response:",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ])
-    } else if message.trim().is_empty() {
+    // Simplified model response formatting
+    if message.trim().is_empty() {
         Line::from("")
     } else {
-        // Default case - assume this is a model response
-        // Just display the message directly without adding "Final answer:" prefix
+        // Display the message directly without special markers or prefixes
+        // This maintains the clean, async architecture style
         Line::from(vec![Span::raw(message)])
+    }
+}
+
+/// Create a task list with animated status indicators
+pub fn create_task_list(app: &App, visible_area: Rect) -> Paragraph {
+    // Calculate if we should show animation effects (blinking) for in-progress tasks
+    let animation_active = app.last_message_time.elapsed() < Duration::from_millis(1000);
+    // Blink rate - make it blink about twice per second for in-progress tasks
+    let highlight_on =
+        animation_active && (std::time::Instant::now().elapsed().as_millis() % 500) < 300; // blink pattern
+
+    // Process tasks, handling both completed and ongoing tasks
+    let mut all_lines: Vec<Line> = Vec::new();
+    let _total_tasks = app.tasks.len();
+
+    // Title
+    all_lines.push(Line::from(vec![Span::styled(
+        "Tasks",
+        Style::default()
+            .fg(AppStyles::primary_color())
+            .add_modifier(Modifier::BOLD),
+    )]));
+
+    // Empty line after title
+    all_lines.push(Line::from(""));
+
+    // Relevant tasks (most recent ones visible)
+    let visible_tasks = app.tasks.iter().rev().take(10).collect::<Vec<_>>();
+
+    for task in visible_tasks {
+        // Format the task status indicator
+        let (indicator, style) = match &task.status {
+            TaskStatus::InProgress => {
+                if highlight_on {
+                    (
+                        "⏺",
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD)
+                            .add_modifier(Modifier::SLOW_BLINK),
+                    )
+                } else {
+                    ("⏺", Style::default().fg(Color::White))
+                }
+            }
+            TaskStatus::Completed {
+                duration,
+                tool_uses: _,
+                input_tokens: _,
+                output_tokens: _,
+            } => {
+                let _duration_secs = duration.as_secs_f32();
+                (
+                    "⏺",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                )
+            }
+            TaskStatus::Failed(_) => (
+                "⏺",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+        };
+
+        // Main task line with description
+        all_lines.push(Line::from(vec![
+            Span::styled(indicator, style),
+            Span::raw(" "),
+            Span::styled(
+                truncate_with_ellipsis(
+                    &task.description,
+                    visible_area.width.saturating_sub(10) as usize,
+                ),
+                Style::default().fg(Color::LightCyan),
+            ),
+        ]));
+
+        // Add task details line indented with the result
+        match &task.status {
+            TaskStatus::InProgress => {
+                // For in-progress tasks, show number of tools used so far
+                all_lines.push(Line::from(vec![
+                    Span::raw("  ⎿ "),
+                    Span::styled(
+                        format!(
+                            "In progress ({} tool use{})",
+                            task.tool_count,
+                            if task.tool_count == 1 { "" } else { "s" }
+                        ),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+            }
+            TaskStatus::Completed {
+                duration,
+                tool_uses,
+                input_tokens,
+                output_tokens,
+            } => {
+                // Format duration as seconds with one decimal place
+                let duration_secs = duration.as_secs_f32();
+                let total_tokens = input_tokens + output_tokens;
+                all_lines.push(Line::from(vec![
+                    Span::raw("  ⎿ "),
+                    Span::styled(
+                        format!(
+                            "Done ({} tool use{} · {:.1}k tokens [{:.1}k in/{:.1}k out] · {:.1}s)",
+                            tool_uses,
+                            if *tool_uses == 1 { "" } else { "s" },
+                            total_tokens as f32 / 1000.0,
+                            *input_tokens as f32 / 1000.0,
+                            *output_tokens as f32 / 1000.0,
+                            duration_secs
+                        ),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+            }
+            TaskStatus::Failed(error) => {
+                // Show error message
+                all_lines.push(Line::from(vec![
+                    Span::raw("  ⎿ "),
+                    Span::styled(
+                        format!(
+                            "Failed: {}",
+                            truncate_with_ellipsis(
+                                error,
+                                visible_area.width.saturating_sub(15) as usize
+                            )
+                        ),
+                        Style::default().fg(Color::Red),
+                    ),
+                ]));
+            }
+        }
+
+        // Empty line between tasks
+        all_lines.push(Line::from(""));
+    }
+
+    // If no tasks, show a message
+    if app.tasks.is_empty() {
+        all_lines.push(Line::from(vec![Span::styled(
+            "No tasks yet. Type a query to get started.",
+            Style::default().fg(Color::DarkGray),
+        )]));
+    }
+
+    // Apply scrolling
+    let visible_lines = if all_lines.len() <= visible_area.height as usize {
+        // All lines fit, show them all
+        all_lines
+    } else {
+        // Apply scrolling with bounds checking
+        let max_scroll = all_lines.len().saturating_sub(visible_area.height as usize);
+        let effective_scroll = app.task_scroll_position.min(max_scroll);
+
+        all_lines
+            .into_iter()
+            .skip(effective_scroll)
+            .take(visible_area.height as usize)
+            .collect()
+    };
+
+    // Create a task list block with border
+    let task_block = Block::default()
+        .borders(Borders::ALL)
+        .title("Tasks")
+        .title_alignment(Alignment::Left)
+        .border_style(AppStyles::border())
+        .padding(Padding::new(1, 1, 0, 0));
+
+    // Create paragraph with the styled tasks
+    Paragraph::new(Text::from(visible_lines))
+        .block(task_block)
+        .wrap(Wrap { trim: false })
+}
+
+/// Helper function to truncate a string if it's too long
+fn truncate_with_ellipsis(s: &str, max_length: usize) -> String {
+    if s.len() <= max_length {
+        s.to_string()
+    } else {
+        format!("{}...", &s[0..max_length.saturating_sub(3)])
     }
 }
 

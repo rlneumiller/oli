@@ -55,10 +55,8 @@ impl App {
             textarea,
             input: String::new(),
             messages: vec![],
-            download_progress: None,
             selected_model: 0,
             available_models: get_available_models(),
-            download_active: false,
             error_message: None,
             debug_messages: false, // Debug mode off by default
             scroll_position: 0,
@@ -85,6 +83,10 @@ impl App {
             show_detailed_shortcuts: false, // Default to not showing detailed shortcuts
             // Initialize cursor position
             cursor_position: 0, // Start at the beginning of the input
+            // Initialize task tracking
+            tasks: Vec::new(),
+            current_task_id: None,
+            task_scroll_position: 0,
         }
     }
 }
@@ -321,6 +323,82 @@ impl Scrollable for App {
         // even if multiple messages come in rapid succession
         self.messages.push("".to_string()); // Add empty line to ensure spacing
     }
+
+    fn scroll_tasks_up(&mut self, amount: usize) {
+        if self.task_scroll_position > 0 {
+            self.task_scroll_position = self.task_scroll_position.saturating_sub(amount);
+        }
+    }
+
+    fn scroll_tasks_down(&mut self, amount: usize) {
+        let max_scroll = self.tasks.len().saturating_sub(5);
+        if self.task_scroll_position < max_scroll {
+            self.task_scroll_position = (self.task_scroll_position + amount).min(max_scroll);
+        }
+    }
+}
+
+// Task management methods
+impl App {
+    /// Create a new task and set it as current
+    pub fn create_task(&mut self, description: &str) -> String {
+        let task = crate::app::state::Task::new(description);
+        let task_id = task.id.clone();
+        self.tasks.push(task);
+        self.current_task_id = Some(task_id.clone());
+        task_id
+    }
+
+    /// Get the current task if any
+    pub fn current_task(&self) -> Option<&crate::app::state::Task> {
+        if let Some(id) = &self.current_task_id {
+            self.tasks.iter().find(|t| &t.id == id)
+        } else {
+            None
+        }
+    }
+
+    /// Get the current task as mutable if any
+    pub fn current_task_mut(&mut self) -> Option<&mut crate::app::state::Task> {
+        if let Some(id) = &self.current_task_id {
+            let id_clone = id.clone();
+            self.tasks.iter_mut().find(|t| t.id == id_clone)
+        } else {
+            None
+        }
+    }
+
+    /// Add a tool use to the current task
+    pub fn add_tool_use(&mut self) {
+        if let Some(task) = self.current_task_mut() {
+            task.add_tool_use();
+        }
+    }
+
+    /// Add input tokens to the current task
+    pub fn add_input_tokens(&mut self, tokens: u32) {
+        if let Some(task) = self.current_task_mut() {
+            task.add_input_tokens(tokens);
+        }
+    }
+
+    /// Complete the current task
+    pub fn complete_current_task(&mut self, tokens: u32) {
+        if let Some(task) = self.current_task_mut() {
+            // We don't need to pass tool_count as parameter anymore,
+            // the Task now uses its internal counter
+            task.complete(0, tokens); // Value 0 is not used, task will use its internal tool_count
+        }
+        self.current_task_id = None;
+    }
+
+    /// Mark the current task as failed
+    pub fn fail_current_task(&mut self, error: &str) {
+        if let Some(task) = self.current_task_mut() {
+            task.fail(error);
+        }
+        self.current_task_id = None;
+    }
 }
 
 impl ErrorHandler for App {
@@ -414,7 +492,6 @@ impl ModelManager for App {
                 );
                 self.messages
                     .push("Try asking about files, editing code, or running commands.".into());
-                self.download_active = false;
                 self.state = AppState::Chat;
 
                 // If agent is successfully set up, we're done
@@ -433,7 +510,7 @@ impl ModelManager for App {
             .push("Please use cloud-based models like Claude or GPT instead.".into());
 
         // Set appropriate app state
-        self.download_active = false;
+
         self.state = AppState::Chat;
 
         Ok(())
@@ -506,7 +583,7 @@ impl ModelManager for App {
             .push("Please use cloud-based models like Claude or GPT instead.".into());
 
         // Set appropriate app state
-        self.download_active = false;
+
         self.state = AppState::Chat;
 
         tx.send("setup_complete".into())?;
@@ -706,10 +783,7 @@ impl AgentManager for App {
                 if let Err(e) = result {
                     tx.send(format!("Failed to initialize agent: {}", e))
                         .unwrap();
-                    return;
                 }
-                tx.send("Agent initialized successfully".to_string())
-                    .unwrap();
             });
 
             self.agent = Some(agent);
@@ -778,10 +852,7 @@ impl AgentManager for App {
         let (progress_tx, progress_rx) = mpsc::channel();
         self.agent_progress_rx = Some(progress_rx);
 
-        // Add a message about starting to process the query
-        self.messages
-            .push("[thinking] Analyzing your query and preparing to use tools if needed...".into());
-        // Force immediate update to show thinking message
+        // Force immediate update of the UI
         self.messages.push("_AUTO_SCROLL_".to_string());
 
         // Set tool execution flag
@@ -888,11 +959,7 @@ impl AgentManager for App {
             // Wait for the final response
             match final_response_rx.await {
                 Ok(Ok(response)) => {
-                    // Signal that we're finalizing the response
-                    let _ = progress_tx.send("[wait] ⚪ Finalizing response...".to_string());
-                    // Signal that the tool executions are complete
-                    let _ = progress_tx
-                        .send("\x1b[32m⏺\x1b[0m All tools executed successfully".to_string());
+                    // No need for finalizing messages - maintain clean async style
                     // Send the final response
                     let _ = response_tx.send(Ok(response));
                 }
@@ -920,6 +987,10 @@ impl AgentManager for App {
         self.tool_execution_in_progress = false;
         self.permission_required = false;
         self.pending_tool = None;
+
+        // For now, we extract tokens in the UI layer based on response length
+        // In the future, we could update this to use actual token counts from the API
+        // The token usage will be recorded when completing the task in ui/events.rs
 
         result
     }
