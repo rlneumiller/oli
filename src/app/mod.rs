@@ -5,10 +5,10 @@ pub mod permissions;
 pub mod state;
 pub mod utils;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use dotenv::dotenv;
 // IO operations are handled elsewhere in specific modules
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
 use tokio::runtime::Runtime;
@@ -425,35 +425,6 @@ impl ModelManager for App {
         };
     }
 
-    fn models_dir() -> Result<PathBuf> {
-        let models_dir = dirs::home_dir()
-            .context("Failed to find home directory")?
-            .join(".oli")
-            .join("models");
-
-        // Create the models directory if it doesn't exist
-        if !models_dir.exists() {
-            std::fs::create_dir_all(&models_dir).context("Failed to create models directory")?;
-        }
-
-        Ok(models_dir)
-    }
-
-    fn model_path(&self, model_name: &str) -> Result<PathBuf> {
-        let models_dir = Self::models_dir()?;
-        Ok(models_dir.join(model_name))
-    }
-
-    fn verify_model(&self, _path: &Path) -> Result<()> {
-        // Local model verification removed - will be replaced with Ollama integration
-        anyhow::bail!("Local model support has been temporarily removed")
-    }
-
-    fn verify_static(_path: &Path) -> Result<()> {
-        // Local model verification removed - will be replaced with Ollama integration
-        anyhow::bail!("Local model support has been temporarily removed")
-    }
-
     fn get_agent_model(&self) -> Option<String> {
         // Return the appropriate model ID based on the current selected model
         let model_name = self.current_model().name.as_str();
@@ -500,17 +471,7 @@ impl ModelManager for App {
                 }
             }
         }
-
-        // Show message that local models are not supported yet
-        self.messages
-            .push("Local model support has been temporarily removed.".into());
-        self.messages
-            .push("Ollama integration will be added in a future update.".into());
-        self.messages
-            .push("Please use cloud-based models like Claude or GPT instead.".into());
-
         // Set appropriate app state
-
         self.state = AppState::Chat;
 
         Ok(())
@@ -565,38 +526,6 @@ impl ModelManager for App {
             tx.send("setup_failed".into())?;
             Ok(())
         }
-    }
-
-    fn download_model_with_path(&mut self, tx: mpsc::Sender<String>, _path: &Path) -> Result<()> {
-        // Model downloading is removed - will be replaced with Ollama integration
-        self.messages
-            .push("Local model support has been temporarily removed.".into());
-        self.messages
-            .push("Ollama integration will be added in a future update.".into());
-        self.messages
-            .push("Please use cloud-based models like Claude or GPT instead.".into());
-
-        // Set appropriate app state
-
-        self.state = AppState::Chat;
-
-        tx.send("setup_complete".into())?;
-        Ok(())
-    }
-
-    fn download_file(&mut self, _path: &Path, tx: mpsc::Sender<String>) -> Result<()> {
-        // Model downloading is removed - will be replaced with Ollama integration
-        tx.send("setup_complete".into())?;
-        Ok(())
-    }
-
-    fn attempt_download(
-        _url: &str,
-        _path: &Path,
-        _tx: &mpsc::Sender<String>,
-    ) -> Result<(), String> {
-        // Model downloading is removed - will be replaced with Ollama integration
-        Ok(())
     }
 }
 
