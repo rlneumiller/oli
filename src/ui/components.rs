@@ -1,6 +1,7 @@
 use crate::app::commands::CommandHandler;
 use crate::app::models::ModelManager;
-use crate::app::state::{App, TaskStatus};
+use crate::app::state::App;
+use crate::ui::helpers;
 use crate::ui::styles::AppStyles;
 use ratatui::{
     layout::{Alignment, Rect},
@@ -8,25 +9,24 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, Padding, Paragraph, Wrap},
 };
-use std::time::Duration;
 
 /// Create a status bar for the chat view
-pub fn create_status_bar(app: &App) -> Line {
+pub fn create_status_bar(app: &App) -> Line<'static> {
     let model_name = app.current_model().name.clone();
     let version = env!("CARGO_PKG_VERSION");
     let scroll_info = format!(
-        "Scroll: {}/{} (PageUp/PageDown to scroll)",
+        "Scroll: {}/{}",
         app.scroll_position,
         app.messages.len().saturating_sub(10)
     );
 
-    // Add agent indicator if agent is available
+    // Add agent indicator based on agent availability
     let agent_indicator = if app.use_agent && app.agent.is_some() {
         Span::styled(
             " 🤖 Agent ",
             Style::default()
                 .fg(Color::Black)
-                .bg(Color::Rgb(142, 192, 124)) // Soft green background
+                .bg(Color::Rgb(142, 192, 124))
                 .add_modifier(Modifier::BOLD),
         )
     } else {
@@ -34,7 +34,7 @@ pub fn create_status_bar(app: &App) -> Line {
             " 🖥️ Local ",
             Style::default()
                 .fg(Color::Black)
-                .bg(Color::Rgb(240, 180, 100)), // Soft amber background
+                .bg(Color::Rgb(240, 180, 100)),
         )
     };
 
@@ -63,370 +63,67 @@ pub fn create_status_bar(app: &App) -> Line {
 }
 
 /// Create a chat history view with proper message formatting
-pub fn create_message_list(app: &mut App, visible_area: Rect) -> Paragraph<'_> {
-    // Filter and style messages
-    // First, clean up any invisible markers
+pub fn create_message_list(app: &mut App, visible_area: Rect) -> Paragraph<'static> {
+    // Filter invisible markers
     let display_messages: Vec<&String> = app
         .messages
         .iter()
         .filter(|msg| *msg != "_AUTO_SCROLL_")
         .collect();
 
-    // Calculate if we should show animation effects (blinking) for new messages
-    // Messages added in the last second get a highlight effect
-    let animation_active = app.last_message_time.elapsed() < Duration::from_millis(1000);
-    // Blink rate - make it blink about twice per second for newly added messages
-    let highlight_on =
-        animation_active && (std::time::Instant::now().elapsed().as_millis() % 500) < 300; // blink pattern
+    // Animation state for blinking effects
+    let animation_state = helpers::get_animation_state(app);
 
-    // Process messages, handling multi-line messages
-    let mut all_lines: Vec<Line> = Vec::new();
-    let total_messages = display_messages.len();
+    // Process messages into styled lines
+    let all_lines =
+        helpers::process_messages(&display_messages, animation_state, app.debug_messages);
 
-    // Process recent messages with a limit to prevent overloading the display
-    // This ensures async behavior similar to the task pane
-    // Reduced buffer multiplier to reduce spacing
-    let max_display_count = visible_area.height as usize * 2; // Buffer of 2x visible lines
-    let start_idx = if display_messages.len() > max_display_count {
-        display_messages.len() - max_display_count
-    } else {
-        0
-    };
-
-    // Only process messages that will be visible or just out of view for scrolling
-    for (idx, &message) in display_messages.iter().enumerate().skip(start_idx) {
-        if let Some(stripped) = message.strip_prefix("> ") {
-            // Special handling for user messages with newlines
-            if stripped.contains('\n') {
-                // Split the message by newlines
-                let lines: Vec<&str> = stripped.split('\n').collect();
-
-                // Process the first line with the "YOU: " prefix
-                all_lines.push(Line::from(vec![
-                    Span::styled(
-                        "YOU: ",
-                        Style::default()
-                            .fg(AppStyles::accent_color())
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(lines[0], AppStyles::user_input()),
-                ]));
-
-                // Process additional lines with indentation
-                for line in &lines[1..] {
-                    all_lines.push(Line::from(vec![
-                        Span::styled(
-                            "     ", // 5 spaces to align with "YOU: "
-                            Style::default()
-                                .fg(AppStyles::accent_color())
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(*line, AppStyles::user_input()),
-                    ]));
-                }
-            } else {
-                // Single-line user message
-                all_lines.push(format_message(
-                    message,
-                    idx,
-                    total_messages,
-                    highlight_on,
-                    app.debug_messages,
-                ));
-            }
-        } else {
-            // Regular message formatting for non-user messages
-            all_lines.push(format_message(
-                message,
-                idx,
-                total_messages,
-                highlight_on,
-                app.debug_messages,
-            ));
-        }
-    }
-
-    // Update the app's scroll state with current dimensions
-    // This ensures proper scrolling boundary checks and auto-follow
+    // Update scroll state and apply scrolling
     app.message_scroll
         .update_dimensions(all_lines.len(), visible_area.height as usize);
-
-    // Update legacy scroll position for compatibility
     app.scroll_position = app.message_scroll.position;
 
-    // Calculate total lines for later use
-    let total_lines = all_lines.len();
+    let (visible_messages, has_more_above, has_more_below) = helpers::apply_scrolling(
+        &all_lines,
+        app.message_scroll.position,
+        visible_area.height as usize,
+    );
 
-    // Apply scrolling to show only messages that fit in the visible area
-    let visible_messages = if total_lines <= visible_area.height as usize {
-        // If all lines fit, show them all
-        all_lines
-    } else {
-        // Use the app's scroll state for position tracking
-        // Take the appropriate slice of messages to display
-        all_lines
-            .into_iter()
-            .skip(app.message_scroll.position)
-            .take(visible_area.height as usize)
-            .collect()
-    };
-
-    // Create a scrollable paragraph for the messages
-    // Show "more above" indicator if we're scrolled down from the top
-    let has_more_above = app.message_scroll.position > 0 || start_idx > 0;
-
-    // Show "more below" indicator if there are more messages beyond what's visible
-    let has_more_below = (app.message_scroll.position + visible_area.height as usize) < total_lines;
-
-    // Create title with scroll indicators
-    let title = if has_more_above && has_more_below {
-        Line::from(vec![
-            Span::styled("OLI Assistant ", AppStyles::section_header()),
-            Span::styled("▲ more above ", AppStyles::hint()),
-            Span::styled("▼ more below", AppStyles::hint()),
-        ])
-    } else if has_more_above {
-        Line::from(vec![
-            Span::styled("OLI Assistant ", AppStyles::section_header()),
-            Span::styled("▲ more above", AppStyles::hint()),
-        ])
-    } else if has_more_below {
-        Line::from(vec![
-            Span::styled("OLI Assistant ", AppStyles::section_header()),
-            Span::styled("▼ more below", AppStyles::hint()),
-        ])
-    } else {
-        Line::from(Span::styled("OLI Assistant", AppStyles::section_header()))
-    };
-
-    let message_block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .title_alignment(Alignment::Left)
-        .border_style(AppStyles::border())
-        .padding(Padding::new(1, 1, 0, 0));
+    // Create block with scroll indicators
+    let message_block = helpers::create_scrollable_block(
+        "OLI Assistant",
+        has_more_above,
+        has_more_below,
+        AppStyles::section_header(),
+    );
 
     // Create paragraph with the styled messages
     Paragraph::new(Text::from(visible_messages))
         .block(message_block)
-        .wrap(Wrap { trim: false }) // Set trim to false to preserve message formatting
-        .scroll((0, 0)) // Explicit scrolling control to prevent auto-scrolling issues
+        .wrap(Wrap { trim: false })
+        .scroll((0, 0)) // Prevent auto-scrolling issues
 }
 
 /// Create an input box for chat or API key input
 #[allow(dead_code)]
-pub fn create_input_box(app: &App, is_api_key: bool) -> Paragraph {
-    // Determine placeholder text based on input context
-    let placeholder = if is_api_key {
-        match app.current_model().name.as_str() {
-            "GPT-4o" => "Enter your OpenAI API key and press Enter...",
-            _ => "Enter your Anthropic API key and press Enter...",
-        }
-    } else {
-        "" // Empty placeholder for regular input
-    };
-
-    // Create appropriate input content based on mode
-    let input_content = if app.input.is_empty() {
-        // For empty input, show the prompt, placeholder, and cursor
-        Text::from(vec![Line::from(vec![
-            Span::raw("> "),
-            // Only show the placeholder if there's something defined
-            if !placeholder.is_empty() {
-                Span::styled(placeholder, AppStyles::hint())
-            } else {
-                Span::raw("")
-            },
-            // Always show the block cursor
-            Span::styled("█", AppStyles::cursor()),
-        ])])
-    } else if is_api_key {
-        // Mask the API key with asterisks for privacy and add cursor
-        let (before_cursor, after_cursor) = if app.cursor_position < app.input.len() {
-            (app.cursor_position, app.input.len() - app.cursor_position)
-        } else {
-            (app.input.len(), 0)
-        };
-
-        let mut spans = vec![Span::raw("> ")];
-        if before_cursor > 0 {
-            spans.push(Span::raw("*".repeat(before_cursor)));
-        }
-        spans.push(Span::styled("█", AppStyles::cursor()));
-        if after_cursor > 0 {
-            spans.push(Span::raw("*".repeat(after_cursor)));
-        }
-
-        Text::from(vec![Line::from(spans)])
-    } else if !app.input.contains('\n') {
-        // Single line input - add cursor indicator at cursor position
-        let (before_cursor, after_cursor) = app.input.split_at(app.cursor_position);
-
-        // Text style for normal content
-        let text_style = Style::default()
-            .fg(Color::LightCyan)
-            .add_modifier(Modifier::BOLD);
-
-        // Use our consistent cursor style from AppStyles
-        let cursor_style = AppStyles::cursor();
-
-        // Create spans with cursor indicator
-        let mut spans = vec![Span::raw("> ")];
-
-        // Add text before cursor
-        if !before_cursor.is_empty() {
-            spans.push(Span::styled(before_cursor, text_style));
-        }
-
-        // Handle cursor and text after cursor differently based on position
-        if app.cursor_position < app.input.len() {
-            // We're at a position with a character
-            // Get the character at cursor position
-            let cursor_char = after_cursor.chars().next().unwrap();
-
-            // Split after_cursor into first character and rest
-            let first_char = cursor_char.to_string();
-            let rest_of_text = if after_cursor.len() > cursor_char.len_utf8() {
-                &after_cursor[cursor_char.len_utf8()..]
-            } else {
-                ""
-            };
-
-            // Add the character at cursor position with inverted colors
-            // to make it highly visible
-            spans.push(Span::styled(first_char, cursor_style));
-
-            // Add the rest of the text with normal style
-            if !rest_of_text.is_empty() {
-                spans.push(Span::styled(rest_of_text, text_style));
-            }
-        } else {
-            // We're at the end of text, show a block cursor
-            spans.push(Span::styled("█", cursor_style));
-        }
-
-        Text::from(vec![Line::from(spans)])
-    } else {
-        // Multiline input - more complex cursor positioning
-        // Define consistent styles for normal text and cursor
-        let text_style = Style::default()
-            .fg(Color::LightCyan)
-            .add_modifier(Modifier::BOLD);
-
-        // Use our consistent cursor style from AppStyles
-        let cursor_style = AppStyles::cursor();
-
-        // Split input into lines and process each one
-        let input_str = app.input.as_str(); // Get a reference to the string
-        let lines: Vec<&str> = input_str.split('\n').collect();
-        let trailing_newline = input_str.ends_with('\n');
-
-        // Convert to styled Lines
-        let mut styled_lines = Vec::new();
-
-        // Track position within the overall string
-        let mut char_pos = 0;
-        let cursor_pos = app.cursor_position.min(input_str.len()); // Ensure cursor is within bounds
-
-        // Process each line
-        for (idx, &line) in lines.iter().enumerate() {
-            let line_start_pos = char_pos;
-            let line_end_pos = line_start_pos + line.len();
-
-            // Check if cursor is on this line
-            let cursor_on_this_line = cursor_pos >= line_start_pos
-                && (cursor_pos <= line_end_pos
-                    || (idx == lines.len() - 1
-                        && trailing_newline
-                        && cursor_pos == line_end_pos + 1));
-
-            let line_prefix = if idx == 0 { "> " } else { "  " };
-
-            if cursor_on_this_line {
-                // Line with cursor - split at cursor position
-                let cursor_offset = cursor_pos - line_start_pos;
-
-                if cursor_offset <= line.len() {
-                    // Regular cursor position within the line
-                    let (before_cursor, after_cursor) = line.split_at(cursor_offset);
-
-                    let mut spans = vec![Span::raw(line_prefix)];
-
-                    // Add text before cursor
-                    if !before_cursor.is_empty() {
-                        spans.push(Span::styled(before_cursor, text_style));
-                    }
-
-                    // Handle cursor rendering in multiline input
-                    if !after_cursor.is_empty() {
-                        // We're at a position with a character
-                        // Get the character at cursor position
-                        let cursor_char = after_cursor.chars().next().unwrap();
-
-                        // Split after_cursor into first character and rest
-                        let first_char = cursor_char.to_string();
-                        let rest_of_text = if after_cursor.len() > cursor_char.len_utf8() {
-                            &after_cursor[cursor_char.len_utf8()..]
-                        } else {
-                            ""
-                        };
-
-                        // Add the character at cursor position with the cursor style
-                        spans.push(Span::styled(first_char, cursor_style));
-
-                        // Add the rest of the text with normal style
-                        if !rest_of_text.is_empty() {
-                            spans.push(Span::styled(rest_of_text, text_style));
-                        }
-                    } else {
-                        // At the end of text, just add the block cursor
-                        spans.push(Span::styled("█", cursor_style));
-                    }
-
-                    styled_lines.push(Line::from(spans));
-                } else {
-                    // This should only happen at the end of a line with trailing newline
-                    styled_lines.push(Line::from(vec![
-                        Span::raw(line_prefix),
-                        Span::styled(line, text_style),
-                        Span::styled("█", cursor_style),
-                    ]));
-                }
-            } else {
-                // Regular line without cursor
-                styled_lines.push(Line::from(vec![
-                    Span::raw(line_prefix),
-                    Span::styled(line, text_style),
-                ]));
-            }
-
-            // Update position counters (add 1 for the newline character)
-            char_pos = line_end_pos + 1;
-        }
-
-        // If the input ends with a newline and cursor is at the end, add a cursor on a new line
-        if trailing_newline && cursor_pos == input_str.len() {
-            styled_lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled("█", cursor_style),
-            ]));
-        }
-        // If the input ends with a newline but cursor is not at the end, add an empty line
-        else if trailing_newline {
-            styled_lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled("", text_style),
-            ]));
-        }
-
-        Text::from(styled_lines)
-    };
-
-    // Create the title based on context
+pub fn create_input_box(app: &App, is_api_key: bool) -> Paragraph<'static> {
+    // Determine input mode context
     let title = if is_api_key {
         "API Key"
     } else {
         "Input (Type / for commands)"
+    };
+    let placeholder = helpers::get_input_placeholder(app, is_api_key);
+
+    // Generate appropriate content based on input state
+    let input_content = if app.input.is_empty() {
+        helpers::create_empty_input_content(placeholder)
+    } else if is_api_key {
+        helpers::create_masked_input_content(app)
+    } else if !app.input.contains('\n') {
+        helpers::create_single_line_input_content(app)
+    } else {
+        helpers::create_multiline_input_content(app)
     };
 
     Paragraph::new(input_content)
@@ -437,12 +134,13 @@ pub fn create_input_box(app: &App, is_api_key: bool) -> Paragraph {
                 .title_alignment(Alignment::Left)
                 .border_style(AppStyles::border()),
         )
-        .wrap(Wrap { trim: false }) // Don't trim to preserve proper newline formatting
+        .wrap(Wrap { trim: false })
 }
 
 /// Create a command menu list for selection
-pub fn create_command_menu(app: &App) -> List {
+pub fn create_command_menu(app: &App) -> List<'static> {
     let filtered_commands = app.filtered_commands();
+
     // Ensure selected command is in bounds
     let valid_selected = if filtered_commands.is_empty() {
         0
@@ -450,7 +148,7 @@ pub fn create_command_menu(app: &App) -> List {
         app.selected_command.min(filtered_commands.len() - 1)
     };
 
-    // Calculate maximum command name length for proper alignment
+    // Calculate maximum command name length for alignment
     let max_cmd_length = filtered_commands
         .iter()
         .map(|cmd| cmd.name.len())
@@ -461,30 +159,26 @@ pub fn create_command_menu(app: &App) -> List {
         .iter()
         .enumerate()
         .map(|(i, cmd)| {
-            // Calculate padding needed for alignment
             let padding = " ".repeat(max_cmd_length.saturating_sub(cmd.name.len()) + 4);
 
             if i == valid_selected {
-                // Highlight the selected command with an arrow indicator and blue text
                 ListItem::new(format!("▶ {}{}{}", cmd.name, padding, cmd.description))
                     .style(AppStyles::command_highlight())
             } else {
-                // Non-selected commands with proper spacing
                 ListItem::new(format!("  {}{}{}", cmd.name, padding, cmd.description))
                     .style(Style::default().fg(Color::DarkGray))
             }
         })
         .collect();
 
-    // Create the list with a subtle style
     List::new(command_items)
         .block(Block::default().borders(Borders::NONE))
-        .style(Style::default().fg(Color::DarkGray)) // Default text color
-        .highlight_style(AppStyles::command_highlight()) // Use the same style for consistency
+        .style(Style::default().fg(Color::DarkGray))
+        .highlight_style(AppStyles::command_highlight())
 }
 
 /// Create a list of models for selection in setup mode
-pub fn create_model_list(app: &App) -> List {
+pub fn create_model_list(app: &App) -> List<'static> {
     let models: Vec<ListItem> = app
         .available_models
         .iter()
@@ -512,7 +206,7 @@ pub fn create_model_list(app: &App) -> List {
 }
 
 /// Create a progress display for model setup
-pub fn create_progress_display(_app: &App) -> Paragraph {
+pub fn create_progress_display(_app: &App) -> Paragraph<'static> {
     let progress_text: String = "Press Enter to begin setup".to_string();
 
     Paragraph::new(progress_text)
@@ -528,7 +222,7 @@ pub fn create_progress_display(_app: &App) -> Paragraph {
 }
 
 /// Create an information display for API key setup
-pub fn create_api_key_info(app: &App) -> List {
+pub fn create_api_key_info(app: &App) -> List<'static> {
     // Determine message items based on selected model
     let message_items = match app.current_model().name.as_str() {
         "GPT-4o" => vec![
@@ -568,7 +262,7 @@ pub fn create_api_key_info(app: &App) -> List {
 }
 
 /// Create a permission dialog
-pub fn create_permission_dialog(_app: &App, _area: Rect) -> Block {
+pub fn create_permission_dialog(_app: &App, _area: Rect) -> Block<'static> {
     Block::default()
         .title(" Permission Required ")
         .title_alignment(Alignment::Center)
@@ -578,8 +272,9 @@ pub fn create_permission_dialog(_app: &App, _area: Rect) -> Block {
 }
 
 /// Create permission dialog content
-pub fn create_permission_content(app: &App) -> Paragraph {
+pub fn create_permission_content(app: &App) -> Paragraph<'static> {
     let tool = app.pending_tool.as_ref().unwrap();
+    let tool_name = tool.tool_name.clone();
     let description = tool.description.to_string();
 
     let info_text = Text::from(vec![
@@ -595,10 +290,7 @@ pub fn create_permission_content(app: &App) -> Paragraph {
         Line::from(""),
         Line::from(vec![
             Span::raw("Tool: "),
-            Span::styled(
-                &tool.tool_name,
-                Style::default().fg(AppStyles::primary_color()),
-            ),
+            Span::styled(tool_name, Style::default().fg(AppStyles::primary_color())),
         ]),
         Line::from(vec![
             Span::raw("Action: "),
@@ -619,411 +311,15 @@ pub fn create_permission_content(app: &App) -> Paragraph {
         .wrap(Wrap { trim: true })
 }
 
-/// Format a message based on its type and content
-/// Returns the styled line for the message
-fn format_message(
-    message: &str,
-    idx: usize,
-    total_messages: usize,
-    highlight_on: bool,
-    debug_enabled: bool,
-) -> Line {
-    // Check if this is the last message and should be highlighted
-    let is_newest_msg = idx == total_messages - 1;
-
-    // Calculate blinking effect for active tasks
-    // For tool execution in progress (⏺), use blinking animation
-    // This is used indirectly via is_newest_msg and highlight_on variables
-    let _should_blink = is_newest_msg
-        && highlight_on
-        && (message.contains("⏺") || message.contains("[tool]") || message.contains("[thinking]"));
-
-    // Handle ANSI colorized messages with tool indicators first
-    if message.contains("\x1b[32m⏺\x1b[0m") || message.contains("\x1b[31m⏺\x1b[0m") {
-        return format_tool_message(message, is_newest_msg, highlight_on);
-    }
-
-    // Handle tool messages with the direct ⏺ indicator
-    if message.starts_with("⏺ ") {
-        // Check if the message has newlines - if so, handle it specially
-        if message.contains('\n') {
-            // This is a multiline tool message - split it into lines
-            let lines: Vec<&str> = message.split('\n').collect();
-
-            // Process the first line with format_tool_message
-            return format_tool_message(lines[0], is_newest_msg, highlight_on);
-
-            // Note: We only process the first line here - the rest will be processed
-            // in create_message_list where we'll add these as new messages
-        }
-
-        return format_tool_message(message, is_newest_msg, highlight_on);
-    }
-
-    // Process other message types
-    if message.starts_with("DEBUG:") {
-        // Only show debug messages in debug mode
-        if debug_enabled {
-            Line::from(vec![Span::styled(
-                message,
-                Style::default().fg(Color::Yellow),
-            )])
-        } else {
-            Line::from("")
-        }
-    } else if let Some(stripped) = message.strip_prefix("> ") {
-        // User messages - cyan
-        Line::from(vec![
-            Span::styled(
-                "YOU: ",
-                Style::default()
-                    .fg(Color::LightBlue)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(stripped, AppStyles::user_input()),
-        ])
-    } else if message.starts_with("Error:") || message.starts_with("ERROR:") {
-        // Error messages - red
-        Line::from(vec![Span::styled(message, AppStyles::error())])
-    } else if message.starts_with("Status:") {
-        // Status messages - blue
-        Line::from(vec![Span::styled(
-            message,
-            Style::default().fg(Color::Blue),
-        )])
-    } else if message.starts_with("★") {
-        // Title/welcome messages - light cyan with bold
-        Line::from(vec![Span::styled(message, AppStyles::title())])
-    } else if message == "Thinking..." {
-        // Legacy thinking message
-        Line::from(vec![
-            Span::styled("⏺ ", Style::default().fg(Color::Yellow)),
-            Span::styled("Thinking...", AppStyles::thinking()),
-        ])
-    } else if message.starts_with("[thinking]") {
-        // AI Thinking/reasoning message
-        format_thinking_message(message, is_newest_msg, highlight_on)
-    } else if message.starts_with("[tool] ") {
-        // Tool execution message
-        format_tool_message(message, is_newest_msg, highlight_on)
-    } else if message.starts_with("[success] ") {
-        // Success/completion message
-        format_success_message(message)
-    } else if message.starts_with("[wait]") {
-        // Progress/wait message with white circle
-        format_wait_message(message)
-    } else if message.starts_with("[error] ") {
-        // Error/failure message
-        format_error_message(message)
-    } else {
-        // Model responses or other text
-        format_model_response(message)
-    }
-}
-
-// Helper functions for formatting various message types
-fn format_thinking_message(message: &str, is_newest_msg: bool, highlight_on: bool) -> Line {
-    // Strip any thinking prefix if present
-    let thinking_content = message
-        .strip_prefix("[thinking] ")
-        .or_else(|| message.strip_prefix("Thinking..."))
-        .unwrap_or(message);
-
-    // Add pulsing animation effect to make it more noticeable
-    let style = if is_newest_msg {
-        // Always highlight thinking messages when they're new
-        // This creates a pulsing effect by alternating between normal and bright
-        if highlight_on {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::ITALIC)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-                .fg(Color::LightYellow)
-                .add_modifier(Modifier::ITALIC)
-        }
-    } else {
-        // Normal style for older messages
-        Style::default()
-            .fg(Color::LightYellow)
-            .add_modifier(Modifier::ITALIC)
-    };
-
-    // Handle various format styles while maintaining consistent appearance
-    if thinking_content.starts_with("⚪ ") || thinking_content.starts_with("⏺ ") {
-        // Already has a circle indicator - extract the actual content
-        let pure_content = thinking_content
-            .strip_prefix("⚪ ")
-            .or_else(|| thinking_content.strip_prefix("⏺ "))
-            .unwrap_or(thinking_content);
-
-        Line::from(vec![
-            Span::styled(
-                "⏺ ",
-                if is_newest_msg && highlight_on {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                        .add_modifier(Modifier::SLOW_BLINK)
-                } else {
-                    Style::default().fg(Color::Yellow)
-                },
-            ),
-            Span::styled(pure_content, style),
-        ])
-    } else {
-        // No circle indicator yet - add one
-        Line::from(vec![
-            Span::styled(
-                "⏺ ",
-                if is_newest_msg && highlight_on {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                        .add_modifier(Modifier::SLOW_BLINK)
-                } else {
-                    Style::default().fg(Color::Yellow)
-                },
-            ),
-            Span::styled(thinking_content, style),
-        ])
-    }
-}
-
-fn format_tool_message(message: &str, is_newest_msg: bool, highlight_on: bool) -> Line {
-    // Handle ANSI colorized messages with proper spacing
-    if message.contains("\x1b[32m⏺\x1b[0m") {
-        // Find where the actual message content starts (right after the ANSI sequence)
-        if let Some(ansi_end_pos) = message.find("\x1b[0m") {
-            // Find where the content starts (after the ANSI sequences and a space)
-            let content_start = ansi_end_pos + 4; // 4 is length of "\x1b[0m"
-            if content_start < message.len() {
-                let content = &message[content_start..];
-
-                // Apply blinking effect for active tasks in progress
-                let indicator_style = if is_newest_msg
-                    && highlight_on
-                    && !content.contains("Result:")
-                {
-                    // Check if this is a result or completed message
-                    let content_lower = content.to_lowercase();
-                    if content_lower.contains("result:") || content_lower.contains("completed") {
-                        // Use green for completed tools
-                        Style::default()
-                            .fg(Color::Green)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        // Use blinking orange indicator for in-progress tools
-                        Style::default()
-                            .fg(Color::Rgb(255, 165, 0)) // Orange for executing
-                            .add_modifier(Modifier::BOLD)
-                            .add_modifier(Modifier::SLOW_BLINK)
-                    }
-                } else {
-                    // Check if this is a result or completed message for non-animated state
-                    let content_lower = content.to_lowercase();
-                    if content_lower.contains("result:") || content_lower.contains("completed") {
-                        // Use green for completed tools
-                        Style::default()
-                            .fg(Color::Green)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        // Use non-blinking orange for in-progress tools
-                        Style::default().fg(Color::Rgb(255, 165, 0)) // Orange for executing
-                    }
-                };
-
-                // Create a line with proper ratatui styling
-                return Line::from(vec![
-                    Span::styled("⏺ ", indicator_style),
-                    Span::styled(
-                        content.trim_start(),
-                        Style::default()
-                            .fg(Color::LightBlue)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]);
-            }
-        }
-    }
-
-    // Handle normal tool messages
-    let tool_content = message.strip_prefix("[tool] ").unwrap_or(message);
-
-    // Apply standard tool styling
-    let style = Style::default()
-        .fg(Color::LightBlue)
-        .add_modifier(Modifier::BOLD);
-
-    if tool_content.starts_with("⏺ ") {
-        // Has a circle already - extract content and add proper space
-        let pure_content = tool_content
-            .strip_prefix("⏺ ")
-            .unwrap_or(tool_content)
-            .trim_start();
-
-        // Determine if this is an in-progress tool or completed tool
-        let is_completed = pure_content.contains("Result:") || pure_content.contains("completed");
-
-        // Apply appropriate style based on status
-        let indicator_style = if is_completed {
-            // Completed tools are always green (non-blinking)
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD)
-        } else if is_newest_msg && highlight_on {
-            // In-progress tools blink orange
-            Style::default()
-                .fg(Color::Rgb(255, 165, 0)) // Orange for executing
-                .add_modifier(Modifier::BOLD)
-                .add_modifier(Modifier::SLOW_BLINK)
-        } else {
-            // Default state for in-progress tools (non-blinking)
-            Style::default().fg(Color::Rgb(255, 165, 0)) // Orange for executing
-        };
-
-        Line::from(vec![
-            Span::styled("⏺ ", indicator_style),
-            Span::styled(pure_content, style),
-        ])
-    } else {
-        // Default format for messages without circle indicator
-        // Determine if this is an in-progress tool or completed tool
-        let is_completed = tool_content.contains("Result:") || tool_content.contains("completed");
-
-        // Apply appropriate style based on status
-        let indicator_style = if is_completed {
-            // Completed tools are always green (non-blinking)
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD)
-        } else if is_newest_msg && highlight_on {
-            // In-progress tools blink orange
-            Style::default()
-                .fg(Color::Rgb(255, 165, 0)) // Orange for executing
-                .add_modifier(Modifier::BOLD)
-                .add_modifier(Modifier::SLOW_BLINK)
-        } else {
-            // Default state for in-progress tools (non-blinking)
-            Style::default().fg(Color::Rgb(255, 165, 0)) // Orange for executing
-        };
-
-        Line::from(vec![
-            Span::styled("⏺ ", indicator_style),
-            Span::styled(tool_content, style),
-        ])
-    }
-}
-
-fn format_success_message(message: &str) -> Line {
-    // Handle ANSI colorized messages with proper spacing
-    if message.contains("\x1b[32m⏺\x1b[0m") {
-        // Find where the actual message content starts (right after the ANSI sequence)
-        if let Some(ansi_end_pos) = message.find("\x1b[0m") {
-            // Find where the content starts (after the ANSI sequences and a space)
-            let content_start = ansi_end_pos + 4; // 4 is length of "\x1b[0m"
-            if content_start < message.len() {
-                let content = &message[content_start..];
-                // Create a line with proper ratatui styling
-                return Line::from(vec![
-                    Span::styled("⏺ ", Style::default().fg(Color::Green)),
-                    Span::styled(content.trim_start(), Style::default().fg(Color::Green)),
-                ]);
-            }
-        }
-    }
-
-    let content = message.strip_prefix("[success] ").unwrap_or(message);
-
-    // Handle direct messages with tool circle already (like "⏺ All tools executed successfully")
-    if content.starts_with("⏺ ") {
-        let pure_content = content.strip_prefix("⏺ ").unwrap_or(content).trim_start();
-        return Line::from(vec![
-            Span::styled("⏺ ", Style::default().fg(Color::Green)),
-            Span::styled(pure_content, Style::default().fg(Color::Green)),
-        ]);
-    }
-
-    // Default success message format
-    Line::from(vec![
-        Span::styled("⏺ ", Style::default().fg(Color::Green)),
-        Span::styled(content, Style::default().fg(Color::Green)),
-    ])
-}
-
-fn format_wait_message(message: &str) -> Line {
-    let wait_content = message.strip_prefix("[wait] ").unwrap_or(message);
-
-    if wait_content.starts_with("⚪ ") {
-        // New format with white circle emoji
-        // Extract content and format consistently
-        let content = wait_content.strip_prefix("⚪ ").unwrap_or(wait_content);
-        Line::from(vec![
-            Span::styled("⚪ ", Style::default().fg(Color::LightYellow)),
-            Span::styled(content, Style::default().fg(Color::Yellow)),
-        ])
-    } else {
-        // Legacy format needs an icon
-        Line::from(vec![
-            Span::styled("⚪ ", Style::default().fg(Color::LightYellow)),
-            Span::styled(wait_content, Style::default().fg(Color::Yellow)),
-        ])
-    }
-}
-
-fn format_error_message(message: &str) -> Line {
-    // Handle ANSI colorized messages (red circle)
-    if message.contains("\x1b[31m⏺\x1b[0m") {
-        // Find where the actual message content starts (right after the ANSI sequence)
-        if let Some(ansi_end_pos) = message.find("\x1b[0m") {
-            // Find where the content starts (after the ANSI sequences and a space)
-            let content_start = ansi_end_pos + 4; // 4 is length of "\x1b[0m"
-            if content_start < message.len() {
-                let content = &message[content_start..];
-                // Create a line with properly styled red circle
-                return Line::from(vec![
-                    Span::styled("⏺ ", AppStyles::error()),
-                    Span::styled(content.trim_start(), AppStyles::error()),
-                ]);
-            }
-        }
-    }
-
-    let error_content = message.strip_prefix("[error] ").unwrap_or(message);
-
-    // Standard error formatting with red indicator
-    Line::from(vec![
-        Span::styled("⏺ ", AppStyles::error()),
-        Span::styled(error_content, AppStyles::error()),
-    ])
-}
-
-fn format_model_response(message: &str) -> Line {
-    // Simplified model response formatting - avoid empty line rendering
-    if message.trim().is_empty() {
-        // Return a line with a single space instead of empty string to reduce vertical space
-        Line::from(" ")
-    } else {
-        // Display the message directly without special markers or prefixes
-        // This maintains the clean, async architecture style
-        Line::from(vec![Span::raw(message)])
-    }
-}
-
 /// Create a task list with animated status indicators
-pub fn create_task_list(app: &mut App, visible_area: Rect) -> Paragraph<'_> {
-    // Calculate if we should show animation effects (blinking) for in-progress tasks
-    let animation_active = app.last_message_time.elapsed() < Duration::from_millis(1000);
-    // Blink rate - make it blink about twice per second for in-progress tasks
-    let highlight_on =
-        animation_active && (std::time::Instant::now().elapsed().as_millis() % 500) < 300; // blink pattern
+pub fn create_task_list(app: &mut App, visible_area: Rect) -> Paragraph<'static> {
+    // Get animation state for blinking effects
+    let animation_state = helpers::get_animation_state(app);
 
-    // Process tasks, handling both completed and ongoing tasks
-    let mut all_lines: Vec<Line> = Vec::new();
-    let _total_tasks = app.tasks.len();
+    // Process tasks into styled lines
+    let mut all_lines = Vec::new();
 
-    // Title
+    // Add title
     all_lines.push(Line::from(vec![Span::styled(
         "Tasks",
         Style::default()
@@ -1031,150 +327,32 @@ pub fn create_task_list(app: &mut App, visible_area: Rect) -> Paragraph<'_> {
             .add_modifier(Modifier::BOLD),
     )]));
 
-    // Empty line after title
+    // Add an empty line after title
     all_lines.push(Line::from(""));
 
-    // Relevant tasks (most recent ones visible)
+    // Process visible tasks (most recent ones)
     let visible_tasks = app.tasks.iter().rev().take(10).collect::<Vec<_>>();
 
-    for task in visible_tasks {
-        // Format the task status indicator
-        let (indicator, style) = match &task.status {
-            TaskStatus::InProgress => {
-                if highlight_on {
-                    (
-                        "⏺",
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD)
-                            .add_modifier(Modifier::SLOW_BLINK),
-                    )
-                } else {
-                    ("⏺", Style::default().fg(Color::White))
-                }
-            }
-            TaskStatus::Completed {
-                duration,
-                tool_uses: _,
-                input_tokens: _,
-                output_tokens: _,
-            } => {
-                let _duration_secs = duration.as_secs_f32();
-                (
-                    "⏺",
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                )
-            }
-            TaskStatus::Failed(_) => (
-                "⏺",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            ),
-        };
-
-        // Main task line with description
-        all_lines.push(Line::from(vec![
-            Span::styled(indicator, style),
-            Span::raw(" "),
-            Span::styled(
-                truncate_with_ellipsis(
-                    &task.description,
-                    visible_area.width.saturating_sub(10) as usize,
-                ),
-                Style::default().fg(Color::LightCyan),
-            ),
-        ]));
-
-        // Add task details line indented with the result
-        match &task.status {
-            TaskStatus::InProgress => {
-                // For in-progress tasks, show number of tools used so far
-                all_lines.push(Line::from(vec![
-                    Span::raw("  ⎿ "),
-                    Span::styled(
-                        format!(
-                            "In progress ({} tool use{})",
-                            task.tool_count,
-                            if task.tool_count == 1 { "" } else { "s" }
-                        ),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]));
-            }
-            TaskStatus::Completed {
-                duration,
-                tool_uses,
-                input_tokens,
-                output_tokens,
-            } => {
-                // Format duration as seconds with one decimal place
-                let duration_secs = duration.as_secs_f32();
-                let total_tokens = input_tokens + output_tokens;
-                all_lines.push(Line::from(vec![
-                    Span::raw("  ⎿ "),
-                    Span::styled(
-                        format!(
-                            "Done ({} tool use{} · {:.1}k tokens [{:.1}k in/{:.1}k out] · {:.1}s)",
-                            tool_uses,
-                            if *tool_uses == 1 { "" } else { "s" },
-                            total_tokens as f32 / 1000.0,
-                            *input_tokens as f32 / 1000.0,
-                            *output_tokens as f32 / 1000.0,
-                            duration_secs
-                        ),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]));
-            }
-            TaskStatus::Failed(error) => {
-                // Show error message
-                all_lines.push(Line::from(vec![
-                    Span::raw("  ⎿ "),
-                    Span::styled(
-                        format!(
-                            "Failed: {}",
-                            truncate_with_ellipsis(
-                                error,
-                                visible_area.width.saturating_sub(15) as usize
-                            )
-                        ),
-                        Style::default().fg(Color::Red),
-                    ),
-                ]));
-            }
-        }
-
-        // Minimal spacing between tasks
-        if !app.tasks.is_empty() {
-            all_lines.push(Line::from(""));
-        }
-    }
-
-    // If no tasks, show a message
-    if app.tasks.is_empty() {
+    if visible_tasks.is_empty() {
         all_lines.push(Line::from(vec![Span::styled(
             "No tasks yet. Type a query to get started.",
             Style::default().fg(Color::DarkGray),
         )]));
+    } else {
+        for task in visible_tasks {
+            helpers::add_task_lines(&mut all_lines, task, animation_state, visible_area.width);
+        }
     }
 
-    // Update the app's task scroll state with current dimensions
+    // Update scroll state
     app.task_scroll
         .update_dimensions(all_lines.len(), visible_area.height as usize);
-
-    // Update legacy task scroll position for compatibility
     app.task_scroll_position = app.task_scroll.position;
 
-    // Calculate total lines count for later use
-    let total_lines = all_lines.len();
-
     // Apply scrolling
-    let visible_lines = if total_lines <= visible_area.height as usize {
-        // All lines fit, show them all
+    let visible_lines = if all_lines.len() <= visible_area.height as usize {
         all_lines
     } else {
-        // Use the app's task scroll state for position tracking
         all_lines
             .into_iter()
             .skip(app.task_scroll.position)
@@ -1182,89 +360,38 @@ pub fn create_task_list(app: &mut App, visible_area: Rect) -> Paragraph<'_> {
             .collect()
     };
 
-    // Create a task list block with border
-    let task_block = Block::default()
-        .borders(Borders::ALL)
-        .title("Tasks")
-        .title_alignment(Alignment::Left)
-        .border_style(AppStyles::border())
-        .padding(Padding::new(1, 1, 0, 0));
-
-    // Create paragraph with the styled tasks
+    // Create a styled task list
     Paragraph::new(Text::from(visible_lines))
-        .block(task_block)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Tasks")
+                .title_alignment(Alignment::Left)
+                .border_style(AppStyles::border())
+                .padding(Padding::new(1, 1, 0, 0)),
+        )
         .wrap(Wrap { trim: false })
 }
 
-/// Helper function to truncate a string if it's too long
-fn truncate_with_ellipsis(s: &str, max_length: usize) -> String {
-    if s.len() <= max_length {
-        s.to_string()
-    } else {
-        format!("{}...", &s[0..max_length.saturating_sub(3)])
-    }
-}
-
 /// Create a shortcuts panel for display below the input box
-pub fn create_shortcuts_panel(app: &App) -> Paragraph {
-    // Only show shortcuts when the input is empty
-    if app.input.is_empty() {
-        if app.show_detailed_shortcuts {
-            // Show detailed shortcuts when ? has been pressed and input is empty
-            // Define shortcuts and their descriptions
-            let shortcuts = [
-                ("/ ", "Show commands menu"),
-                ("Ctrl+j", "Add newline in input"),
-            ];
+pub fn create_shortcuts_panel(app: &App) -> Paragraph<'static> {
+    if !app.input.is_empty() {
+        return Paragraph::new("");
+    }
 
-            // Calculate max shortcut length for vertical alignment
-            let max_shortcut_length = shortcuts.iter().map(|(s, _)| s.len()).max().unwrap_or(0);
-
-            // Create the title and shortcut lines
-            let mut lines = vec![Line::from(vec![Span::styled(
-                "Keyboard Shortcuts",
+    if app.show_detailed_shortcuts {
+        helpers::create_detailed_shortcuts()
+    } else if app.show_shortcuts_hint {
+        Paragraph::new(Text::from(vec![Line::from(vec![
+            Span::styled(
+                "? ",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(Color::Gray)
                     .add_modifier(Modifier::BOLD),
-            )])];
-
-            // Add each shortcut with proper alignment
-            for (shortcut, description) in shortcuts.iter() {
-                let padding = " ".repeat(max_shortcut_length.saturating_sub(shortcut.len()) + 2);
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        *shortcut,
-                        Style::default()
-                            .fg(Color::Gray)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(padding, Style::default()),
-                    Span::styled(*description, Style::default().fg(Color::DarkGray)),
-                ]));
-            }
-
-            let shortcuts_text = Text::from(lines);
-
-            Paragraph::new(shortcuts_text)
-        } else if app.show_shortcuts_hint {
-            // Show the basic hint only when input is empty
-            let shortcuts_text = Text::from(vec![Line::from(vec![
-                Span::styled(
-                    "? ",
-                    Style::default()
-                        .fg(Color::Gray)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("for shortcuts", Style::default().fg(Color::DarkGray)),
-            ])]);
-
-            Paragraph::new(shortcuts_text)
-        } else {
-            // Empty placeholder
-            Paragraph::new("")
-        }
+            ),
+            Span::styled("for shortcuts", Style::default().fg(Color::DarkGray)),
+        ])]))
     } else {
-        // Hide shortcuts when anything is typed in the input
         Paragraph::new("")
     }
 }

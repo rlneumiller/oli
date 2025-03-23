@@ -2,6 +2,7 @@ mod components;
 mod draw;
 mod events;
 mod guards;
+mod helpers;
 mod messages;
 mod styles;
 // Re-export the run_app function as the main entry point

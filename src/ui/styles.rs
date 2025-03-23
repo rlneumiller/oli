@@ -38,6 +38,13 @@ impl AppStyles {
             .bg(Self::selection_bg())
     }
 
+    /// Style for prompt symbol
+    pub fn prompt_symbol() -> Style {
+        Style::default()
+            .fg(Color::Blue)
+            .add_modifier(Modifier::BOLD)
+    }
+
     /// Style for command highlight
     pub fn command_highlight() -> Style {
         Style::default()
@@ -66,6 +73,7 @@ impl AppStyles {
     }
 
     /// Style for thinking/processing state
+    #[allow(dead_code)]
     pub fn thinking() -> Style {
         Style::default()
             .fg(Color::Rgb(240, 180, 100)) // Soft amber

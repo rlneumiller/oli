@@ -6,9 +6,31 @@ use crate::ui::styles::AppStyles;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph},
     Frame,
 };
+
+/// Add a prompt symbol in front of the textarea
+fn add_prompt(f: &mut Frame, area: Rect, prompt_text: &str) {
+    // Create a prompt character in blue
+    let prompt = Span::styled(prompt_text, AppStyles::prompt_symbol());
+
+    // Create a paragraph with just the prompt
+    let prompt_para = Paragraph::new(Line::from(vec![prompt]));
+
+    // Calculate the actual text area inside the block borders
+    // Add 1 for the border and 1 for inner padding
+    let prompt_area = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: prompt_text.len() as u16,
+        height: 1,
+    };
+
+    // Render the prompt over the textarea
+    f.render_widget(prompt_para, prompt_area);
+}
 
 /// Main UI rendering function, dispatches to specific screen renderers
 pub fn ui(f: &mut Frame, app: &mut App) {
@@ -107,8 +129,22 @@ pub fn draw_api_key_input(f: &mut Frame, app: &mut App) {
     app.textarea.set_block(input_block);
     app.textarea.set_mask_char('*'); // Mask input with asterisks
 
+    // Create custom block with padding for prompt
+    let input_block_with_padding = Block::default()
+        .borders(Borders::ALL)
+        .title(" API Key ")
+        .title_alignment(Alignment::Left)
+        .border_style(AppStyles::border())
+        .padding(Padding::new(3, 1, 0, 0)); // Extra left padding for prompt
+
+    // Set the block with padding for textarea
+    app.textarea.set_block(input_block_with_padding);
+
     // Render the masked textarea
     f.render_widget(&app.textarea, chunks[2]);
+
+    // Add a blue prompt in front of the input
+    add_prompt(f, chunks[2], ">");
 }
 
 /// Draw chat screen with message history and input
@@ -219,12 +255,13 @@ pub fn draw_chat(f: &mut Frame, app: &mut App) {
             ])
             .split(chunks[2]);
 
-        // Create input block with title
+        // Create input block with title and padding for prompt
         let input_block = Block::default()
             .borders(Borders::ALL)
             .title(" Input (Type / for commands) ")
             .title_alignment(Alignment::Left)
-            .border_style(AppStyles::border());
+            .border_style(AppStyles::border())
+            .padding(Padding::new(3, 1, 0, 0)); // Extra left padding for prompt
 
         // Set the block for the textarea
         app.textarea.set_block(input_block);
@@ -232,22 +269,29 @@ pub fn draw_chat(f: &mut Frame, app: &mut App) {
         // Render the textarea
         f.render_widget(&app.textarea, input_chunks[0]);
 
+        // Add a blue prompt in front of the input
+        add_prompt(f, input_chunks[0], ">");
+
         // Commands menu as a list
         let commands_list = create_command_menu(app);
         f.render_widget(commands_list, input_chunks[1]);
     } else {
-        // Create input block with title
+        // Create input block with title and padding for prompt
         let input_block = Block::default()
             .borders(Borders::ALL)
             .title(" Input (Type / for commands) ")
             .title_alignment(Alignment::Left)
-            .border_style(AppStyles::border());
+            .border_style(AppStyles::border())
+            .padding(Padding::new(2, 1, 0, 0)); // Extra left padding for prompt
 
         // Set the block for the textarea
         app.textarea.set_block(input_block);
 
         // Render the textarea with its block
         f.render_widget(&app.textarea, chunks[2]);
+
+        // Add a blue prompt in front of the input
+        add_prompt(f, chunks[2], ">");
     }
 
     // Render shortcuts panel if needed

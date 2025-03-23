@@ -53,6 +53,8 @@ impl App {
         // Configure TextArea to match the app's style
         textarea.set_placeholder_text("Type your message here or type / for commands");
         textarea.set_cursor_line_style(ratatui::style::Style::default());
+        // Set a custom style for the first line's text (this will be combined with our prompt symbol)
+        textarea.set_style(ratatui::style::Style::default().fg(ratatui::style::Color::LightCyan));
 
         Self {
             state: AppState::Setup,
