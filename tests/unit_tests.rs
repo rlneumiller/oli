@@ -1,6 +1,87 @@
 use oli_tui::fs_tools::code_parser::{CodeAST, CodeParser};
 use std::path::Path;
 
+// Add extra imports for history tests
+#[cfg(test)]
+mod history_tests {
+    use oli_tui::app::history::ConversationSummary;
+    use oli_tui::app::history::HistoryManager;
+    use oli_tui::app::state::{App, AppState};
+
+    #[test]
+    fn test_conversation_char_count() {
+        let mut app = App::new();
+        app.state = AppState::Chat;
+
+        // Empty conversation should have 0 chars
+        assert_eq!(app.conversation_char_count(), 0);
+
+        // Add some messages
+        app.messages.push("Hello".to_string());
+        app.messages.push("World".to_string());
+
+        // Should count "Hello" (5) + "World" (5) = 10
+        assert_eq!(app.conversation_char_count(), 10);
+    }
+
+    #[test]
+    fn test_should_summarize() {
+        let mut app = App::new();
+        app.state = AppState::Chat;
+
+        // Empty conversation should not need summarization
+        assert!(!app.should_summarize());
+
+        // Add enough messages to trigger summarization by count
+        for i in 0..40 {
+            app.messages.push(format!("Message {}", i));
+        }
+
+        // Should now need summarization
+        assert!(app.should_summarize());
+
+        // Reset and try with character count
+        app.messages.clear();
+
+        // Add a single large message
+        app.messages.push("A".repeat(6000));
+
+        // Should need summarization due to character count
+        assert!(app.should_summarize());
+    }
+
+    #[test]
+    fn test_summary_count() {
+        let app = App::new();
+
+        // Should start with 0 summaries
+        assert_eq!(app.summary_count(), 0);
+    }
+
+    #[test]
+    fn test_clear_history() {
+        let mut app = App::new();
+
+        // Add some messages and summaries
+        app.messages.push("Test message".to_string());
+
+        // Add a fake summary
+        app.conversation_summaries.push(ConversationSummary::new(
+            "Test summary".to_string(),
+            5,
+            100,
+        ));
+
+        // Clear history
+        app.clear_history();
+
+        // Both messages and summaries should be empty
+        assert!(app.messages.is_empty());
+        assert!(app.conversation_summaries.is_empty());
+        assert_eq!(app.scroll_position, 0);
+    }
+}
+
 #[test]
 fn test_detect_language() {
     let parser = CodeParser::new().unwrap();

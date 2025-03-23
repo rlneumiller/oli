@@ -63,7 +63,7 @@ pub fn create_status_bar(app: &App) -> Line {
 }
 
 /// Create a chat history view with proper message formatting
-pub fn create_message_list(app: &App, visible_area: Rect) -> Paragraph {
+pub fn create_message_list(app: &mut App, visible_area: Rect) -> Paragraph<'_> {
     // Filter and style messages
     // First, clean up any invisible markers
     let display_messages: Vec<&String> = app
@@ -146,26 +146,37 @@ pub fn create_message_list(app: &App, visible_area: Rect) -> Paragraph {
         }
     }
 
+    // Update the app's scroll state with current dimensions
+    // This ensures proper scrolling boundary checks and auto-follow
+    app.message_scroll
+        .update_dimensions(all_lines.len(), visible_area.height as usize);
+
+    // Update legacy scroll position for compatibility
+    app.scroll_position = app.message_scroll.position;
+
+    // Calculate total lines for later use
+    let total_lines = all_lines.len();
+
     // Apply scrolling to show only messages that fit in the visible area
-    let visible_messages = if all_lines.len() <= visible_area.height as usize {
+    let visible_messages = if total_lines <= visible_area.height as usize {
         // If all lines fit, show them all
         all_lines
     } else {
-        // Apply scrolling with bounds checking
-        let max_scroll = all_lines.len().saturating_sub(visible_area.height as usize);
-        let effective_scroll = app.scroll_position.min(max_scroll);
-
+        // Use the app's scroll state for position tracking
+        // Take the appropriate slice of messages to display
         all_lines
             .into_iter()
-            .skip(effective_scroll)
+            .skip(app.message_scroll.position)
             .take(visible_area.height as usize)
             .collect()
     };
 
     // Create a scrollable paragraph for the messages
-    let has_more_above = app.scroll_position > 0 || start_idx > 0;
-    let has_more_below =
-        app.scroll_position + (visible_area.height as usize) < display_messages.len(); // Use original message count for scroll indication
+    // Show "more above" indicator if we're scrolled down from the top
+    let has_more_above = app.message_scroll.position > 0 || start_idx > 0;
+
+    // Show "more below" indicator if there are more messages beyond what's visible
+    let has_more_below = (app.message_scroll.position + visible_area.height as usize) < total_lines;
 
     // Create title with scroll indicators
     let title = if has_more_above && has_more_below {
@@ -1001,7 +1012,7 @@ fn format_model_response(message: &str) -> Line {
 }
 
 /// Create a task list with animated status indicators
-pub fn create_task_list(app: &App, visible_area: Rect) -> Paragraph {
+pub fn create_task_list(app: &mut App, visible_area: Rect) -> Paragraph<'_> {
     // Calculate if we should show animation effects (blinking) for in-progress tasks
     let animation_active = app.last_message_time.elapsed() < Duration::from_millis(1000);
     // Blink rate - make it blink about twice per second for in-progress tasks
@@ -1148,18 +1159,25 @@ pub fn create_task_list(app: &App, visible_area: Rect) -> Paragraph {
         )]));
     }
 
+    // Update the app's task scroll state with current dimensions
+    app.task_scroll
+        .update_dimensions(all_lines.len(), visible_area.height as usize);
+
+    // Update legacy task scroll position for compatibility
+    app.task_scroll_position = app.task_scroll.position;
+
+    // Calculate total lines count for later use
+    let total_lines = all_lines.len();
+
     // Apply scrolling
-    let visible_lines = if all_lines.len() <= visible_area.height as usize {
+    let visible_lines = if total_lines <= visible_area.height as usize {
         // All lines fit, show them all
         all_lines
     } else {
-        // Apply scrolling with bounds checking
-        let max_scroll = all_lines.len().saturating_sub(visible_area.height as usize);
-        let effective_scroll = app.task_scroll_position.min(max_scroll);
-
+        // Use the app's task scroll state for position tracking
         all_lines
             .into_iter()
-            .skip(effective_scroll)
+            .skip(app.task_scroll.position)
             .take(visible_area.height as usize)
             .collect()
     };

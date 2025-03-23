@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod commands;
+pub mod history;
 pub mod models;
 pub mod permissions;
 pub mod state;
@@ -14,9 +15,12 @@ use std::time::Duration;
 use tokio::runtime::Runtime;
 use tui_textarea::TextArea;
 
+use crate::app::utils::ScrollState;
+
 // Re-exports
 pub use agent::{determine_agent_model, determine_provider, AgentManager};
 pub use commands::{get_available_commands, CommandHandler, SpecialCommand};
+pub use history::HistoryManager;
 pub use models::ModelManager;
 pub use permissions::{PendingToolExecution, PermissionHandler, ToolPermissionStatus};
 pub use state::{App, AppState};
@@ -59,7 +63,8 @@ impl App {
             available_models: get_available_models(),
             error_message: None,
             debug_messages: false, // Debug mode off by default
-            scroll_position: 0,
+            message_scroll: ScrollState::new(),
+            scroll_position: 0, // Legacy field kept for compatibility
             last_query_time: std::time::Instant::now(),
             last_message_time: std::time::Instant::now(), // For animation effects
             use_agent: false,
@@ -86,7 +91,10 @@ impl App {
             // Initialize task tracking
             tasks: Vec::new(),
             current_task_id: None,
-            task_scroll_position: 0,
+            task_scroll: ScrollState::new(),
+            task_scroll_position: 0, // Legacy field kept for compatibility
+            // Initialize conversation history tracking
+            conversation_summaries: Vec::new(),
         }
     }
 }
@@ -244,9 +252,8 @@ impl CommandHandler for App {
                 true
             }
             "/clear" => {
-                self.messages.clear();
+                self.clear_history();
                 self.messages.push("Conversation history cleared.".into());
-                self.scroll_position = 0;
                 true
             }
             "/debug" => {
@@ -285,6 +292,14 @@ impl CommandHandler for App {
                 }
                 true
             }
+            "/summarize" => {
+                // Attempt to summarize conversation history
+                if let Err(e) = self.summarize_history() {
+                    self.messages
+                        .push(format!("Error summarizing history: {}", e));
+                }
+                true
+            }
             "/exit" => {
                 self.state = AppState::Error("quit".into());
                 true
@@ -295,46 +310,52 @@ impl CommandHandler for App {
 }
 
 impl Scrollable for App {
+    fn message_scroll_state(&mut self) -> &mut ScrollState {
+        &mut self.message_scroll
+    }
+
+    fn task_scroll_state(&mut self) -> &mut ScrollState {
+        &mut self.task_scroll
+    }
+
     fn scroll_up(&mut self, amount: usize) {
-        if self.scroll_position > 0 {
-            self.scroll_position = self.scroll_position.saturating_sub(amount);
-        }
+        // Use new scroll state
+        self.message_scroll.scroll_up(amount);
+
+        // Update legacy scroll position for compatibility
+        self.scroll_position = self.message_scroll.position;
     }
 
     fn scroll_down(&mut self, amount: usize) {
-        let max_scroll = self.messages.len().saturating_sub(10);
-        if self.scroll_position < max_scroll {
-            self.scroll_position = (self.scroll_position + amount).min(max_scroll);
-        }
+        // Use new scroll state
+        self.message_scroll.scroll_down(amount);
+
+        // Update legacy scroll position for compatibility
+        self.scroll_position = self.message_scroll.position;
     }
 
     fn auto_scroll_to_bottom(&mut self) {
-        // Calculate a better scroll position that ensures the latest messages are visible
-        // We need to consider the actual height of the terminal window, but since that's
-        // not directly available here, we use a conservative estimate to ensure we're
-        // always showing the latest content
+        // Use new scroll state
+        self.message_scroll.scroll_to_bottom();
 
-        // Aim to put the scroll position about 15-20 lines from the end
-        // This is more reliable than the previous approach
-        let max_scroll = self.messages.len().saturating_sub(5);
-        self.scroll_position = max_scroll;
-
-        // Mark that we've auto-scrolled so UI knows to maintain this position
-        // even if multiple messages come in rapid succession
-        // Remove adding empty line to reduce spacing between messages
+        // Update legacy scroll position for compatibility
+        self.scroll_position = self.message_scroll.position;
     }
 
     fn scroll_tasks_up(&mut self, amount: usize) {
-        if self.task_scroll_position > 0 {
-            self.task_scroll_position = self.task_scroll_position.saturating_sub(amount);
-        }
+        // Use new scroll state
+        self.task_scroll.scroll_up(amount);
+
+        // Update legacy scroll position for compatibility
+        self.task_scroll_position = self.task_scroll.position;
     }
 
     fn scroll_tasks_down(&mut self, amount: usize) {
-        let max_scroll = self.tasks.len().saturating_sub(5);
-        if self.task_scroll_position < max_scroll {
-            self.task_scroll_position = (self.task_scroll_position + amount).min(max_scroll);
-        }
+        // Use new scroll state
+        self.task_scroll.scroll_down(amount);
+
+        // Update legacy scroll position for compatibility
+        self.task_scroll_position = self.task_scroll.position;
     }
 }
 
@@ -736,6 +757,22 @@ impl AgentManager for App {
                     prompt.to_string()
                 }
             ));
+        }
+
+        // Check if the conversation needs to be summarized
+        if self.should_summarize() {
+            if self.debug_messages {
+                self.messages
+                    .push("DEBUG: Auto-summarizing conversation before query".into());
+            }
+
+            // Try to summarize, but continue even if it fails
+            if let Err(e) = self.summarize_history() {
+                if self.debug_messages {
+                    self.messages
+                        .push(format!("DEBUG: Failed to summarize: {}", e));
+                }
+            }
         }
 
         // Try using agent if enabled

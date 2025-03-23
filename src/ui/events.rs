@@ -35,22 +35,29 @@ pub fn run_app() -> Result<()> {
     // Initial UI draw
     terminal.draw(|f| ui(f, &mut app))?;
 
+    // Track when we last redrew the screen to control framerate
+    let mut last_redraw = std::time::Instant::now();
+    let min_redraw_interval = std::time::Duration::from_millis(100);
+
     // Main event loop
     while app.state != AppState::Error("quit".into()) {
-        // Process messages from various sources - this is the key part for async tool display
-        // These functions need to run on every loop iteration for real-time updates
+        // Process messages without forcing screen redraws
         process_channel_messages(&mut app, &rx, &mut terminal)?;
         process_agent_messages(&mut app, &mut terminal)?;
         process_auto_scroll(&mut app, &mut terminal)?;
 
-        // Always redraw if agent is processing, we're waiting for permission,
-        // or if there are active tasks in progress to maintain animations
-        // This ensures tool messages are shown in real-time
-        if app.agent_progress_rx.is_some()
+        // Determine if we need to redraw based on application state
+        let need_animation = app.agent_progress_rx.is_some()
             || app.permission_required
-            || app.tool_execution_in_progress
-        {
+            || app.tool_execution_in_progress;
+
+        // Throttle redraws to prevent flickering and allow scrolling to work
+        let should_redraw = need_animation && last_redraw.elapsed() >= min_redraw_interval;
+
+        // Only redraw at controlled intervals when animations are needed
+        if should_redraw {
             terminal.draw(|f| ui(f, &mut app))?;
+            last_redraw = std::time::Instant::now();
         }
 
         // Check for command mode before handling events
@@ -76,27 +83,37 @@ pub fn run_app() -> Result<()> {
     Ok(())
 }
 
-/// Process messages from the message channel
+/// Process messages from the message channel without forcing redraws
 fn process_channel_messages(
-    mut app: &mut App,
+    app: &mut App,
     rx: &mpsc::Receiver<String>,
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    _terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
+    let mut received_message = false;
+
     while let Ok(msg) = rx.try_recv() {
+        received_message = true;
+
         if app.debug_messages {
             app.messages
                 .push(format!("DEBUG: Received message: {}", msg));
         }
         process_message(app, &msg)?;
-        terminal.draw(|f| ui(f, &mut app))?;
+        // Don't redraw here - let the main loop control the redraw timing
     }
+
+    // If we received any messages, add auto-scroll marker
+    if received_message {
+        app.messages.push("_AUTO_SCROLL_".into());
+    }
+
     Ok(())
 }
 
-/// Process messages from the agent progress channel
+/// Process messages from the agent progress channel without forcing redraws
 fn process_agent_messages(
-    mut app: &mut App,
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    _terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     // Collect messages first to avoid borrow checker issues
     let mut messages_to_process = Vec::new();
@@ -160,32 +177,34 @@ fn process_agent_messages(
         app.last_message_time = std::time::Instant::now();
     }
 
-    // Force auto-scroll if we processed any messages
+    // Add auto-scroll marker if we processed any messages, but don't force redraw
     if has_messages || any_tool_executed {
-        app.auto_scroll_to_bottom();
-        terminal.draw(|f| ui(f, &mut app))?;
+        app.messages.push("_AUTO_SCROLL_".into());
+        // Don't force redraw - let the main loop handle it based on timing
     }
 
     Ok(())
 }
 
-/// Process auto-scroll markers in messages
+/// Process auto-scroll markers in messages without forcing redraws
 fn process_auto_scroll(
-    mut app: &mut App,
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    _terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     // Check if we need to auto-scroll after processing messages
     let needs_scroll = app.messages.iter().any(|m| m == "_AUTO_SCROLL_");
-    if needs_scroll {
-        // Remove the auto-scroll markers
-        app.messages.retain(|m| m != "_AUTO_SCROLL_");
 
-        // Actually scroll to bottom
+    // Always remove any auto-scroll markers first
+    app.messages.retain(|m| m != "_AUTO_SCROLL_");
+
+    if needs_scroll {
+        // Only auto-scroll when explicitly requested via auto-scroll marker
         app.auto_scroll_to_bottom();
 
-        // Redraw with the new scroll position - show updates immediately
-        terminal.draw(|f| ui(f, &mut app))?;
+        // Don't force a redraw here - let the main loop handle it when appropriate
+        // This prevents unnecessary screen updates that block scrolling
     }
+
     Ok(())
 }
 
@@ -878,7 +897,16 @@ fn handle_page_up_key(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     if let AppState::Chat = app.state {
-        app.scroll_up(5); // Scroll up 5 lines
+        // Turn off auto-follow when manually scrolling up
+        app.message_scroll.follow_bottom = false;
+
+        // Use page_up method for better scrolling behavior based on viewport size
+        app.message_scroll.page_up();
+
+        // Update legacy scroll position to match ScrollState
+        app.scroll_position = app.message_scroll.position;
+
+        // Immediately redraw to show new scroll position
         terminal.draw(|f| ui(f, &mut app))?;
     }
     Ok(())
@@ -890,7 +918,18 @@ fn handle_page_down_key(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     if let AppState::Chat = app.state {
-        app.scroll_down(5); // Scroll down 5 lines
+        // Use page_down method for better scrolling behavior based on viewport size
+        app.message_scroll.page_down();
+
+        // Update legacy scroll position to match ScrollState
+        app.scroll_position = app.message_scroll.position;
+
+        // Enable auto-follow if we've reached the bottom
+        if app.message_scroll.position >= app.message_scroll.max_scroll() {
+            app.message_scroll.follow_bottom = true;
+        }
+
+        // Immediately redraw to show new scroll position
         terminal.draw(|f| ui(f, &mut app))?;
     }
     Ok(())
@@ -902,7 +941,12 @@ fn handle_task_scroll_up(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     if let AppState::Chat = app.state {
-        app.scroll_tasks_up(1); // Scroll tasks up 1 line
+        // Use the task scroll state
+        app.task_scroll.scroll_up(1);
+
+        // Update legacy scroll position to match ScrollState
+        app.task_scroll_position = app.task_scroll.position;
+
         terminal.draw(|f| ui(f, &mut app))?;
     }
     Ok(())
@@ -914,7 +958,12 @@ fn handle_task_scroll_down(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     if let AppState::Chat = app.state {
-        app.scroll_tasks_down(1); // Scroll tasks down 1 line
+        // Use the task scroll state
+        app.task_scroll.scroll_down(1);
+
+        // Update legacy scroll position to match ScrollState
+        app.task_scroll_position = app.task_scroll.position;
+
         terminal.draw(|f| ui(f, &mut app))?;
     }
     Ok(())
@@ -929,7 +978,15 @@ fn handle_home_key(
         AppState::Chat => {
             if app.textarea.is_empty() {
                 // If no input, use Home to scroll the message window to top
-                app.scroll_position = 0; // Scroll to top
+                // Turn off auto-follow when manually scrolling to top
+                app.message_scroll.follow_bottom = false;
+                app.message_scroll.scroll_to_top();
+
+                // Update legacy scroll position to match ScrollState
+                app.scroll_position = app.message_scroll.position;
+
+                // Immediately redraw to show scroll position change
+                terminal.draw(|f| ui(f, &mut app))?;
             } else {
                 // Move to start of line
                 app.textarea.input(Input {
@@ -943,8 +1000,10 @@ fn handle_home_key(
                 app.input = app.textarea.lines().join("\n");
                 let (x, _y) = app.textarea.cursor();
                 app.cursor_position = x;
+
+                // Redraw to update cursor position
+                terminal.draw(|f| ui(f, &mut app))?;
             }
-            terminal.draw(|f| ui(f, &mut app))?;
         }
         AppState::ApiKeyInput => {
             // Move cursor to start of input
@@ -971,7 +1030,15 @@ fn handle_end_key(
         AppState::Chat => {
             if app.textarea.is_empty() {
                 // If no input, use End to scroll the message window to bottom
-                app.auto_scroll_to_bottom(); // Scroll to bottom
+                // Enable auto-follow when scrolling to bottom
+                app.message_scroll.follow_bottom = true;
+                app.message_scroll.scroll_to_bottom();
+
+                // Update legacy scroll position to match ScrollState
+                app.scroll_position = app.message_scroll.position;
+
+                // Immediately redraw to show scroll position change
+                terminal.draw(|f| ui(f, &mut app))?;
             } else {
                 // Move to end of line
                 app.textarea.input(Input {
@@ -984,8 +1051,10 @@ fn handle_end_key(
                 // Update legacy cursor position for compatibility
                 app.input = app.textarea.lines().join("\n");
                 app.cursor_position = app.input.len();
+
+                // Redraw to update cursor position
+                terminal.draw(|f| ui(f, &mut app))?;
             }
-            terminal.draw(|f| ui(f, &mut app))?;
         }
         AppState::ApiKeyInput => {
             // Move cursor to end of input

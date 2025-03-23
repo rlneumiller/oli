@@ -1,7 +1,9 @@
 use crate::agent::core::Agent;
 use crate::app::commands::SpecialCommand;
+use crate::app::history::ConversationSummary;
 use crate::app::models::ToolPermissionStatus;
 use crate::app::permissions::PendingToolExecution;
+use crate::app::utils::ScrollState;
 use crate::models::ModelConfig;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -114,7 +116,8 @@ pub struct App {
     pub available_models: Vec<ModelConfig>,
     pub error_message: Option<String>,
     pub debug_messages: bool,
-    pub scroll_position: usize,
+    pub message_scroll: ScrollState, // Improved scrolling for messages
+    pub scroll_position: usize,      // Legacy scroll position (kept for compatibility)
     pub last_query_time: Instant,
     pub last_message_time: Instant, // Timestamp for message animations
     pub use_agent: bool,
@@ -141,5 +144,8 @@ pub struct App {
     // Task tracking
     pub tasks: Vec<Task>,
     pub current_task_id: Option<String>,
-    pub task_scroll_position: usize, // For scrolling the task list
+    pub task_scroll: ScrollState,    // Improved scrolling for task list
+    pub task_scroll_position: usize, // Legacy scroll position (kept for compatibility)
+    // Conversation history management
+    pub conversation_summaries: Vec<ConversationSummary>, // History of conversation summaries
 }

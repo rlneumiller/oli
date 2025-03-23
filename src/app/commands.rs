@@ -22,6 +22,7 @@ pub fn get_available_commands() -> Vec<SpecialCommand> {
         SpecialCommand::new("/clear", "Clear conversation history and free up context"),
         SpecialCommand::new("/debug", "Toggle debug messages visibility"),
         SpecialCommand::new("/steps", "Toggle showing intermediate tool steps"),
+        SpecialCommand::new("/summarize", "Manually summarize conversation history"),
         SpecialCommand::new("/exit", "Exit the TUI"),
     ]
 }
