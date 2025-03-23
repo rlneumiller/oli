@@ -65,7 +65,7 @@ cargo run
 
 2. Select a model:
    - Cloud models (Claude 3 Sonnet, GPT-4o) for full agent capabilities
-   - Local models for offline use
+   - Local models via vllm or ollama (coming soon!)
 
 3. Make your coding query in the chat interface:
    - Ask for file searches
