@@ -16,11 +16,20 @@ OLI is an open-source alternative to Claude Code, built in Rust to provide power
 
 ## Installation
 
-### Prerequisites
+### Using Cargo
 
-- Rust toolchain (install via [rustup](https://rustup.rs/))
-- For local models: At least 8GB RAM (16GB+ recommended for larger models)
-- For cloud features: API keys for Anthropic or OpenAI
+```bash
+cargo install oli-tui
+```
+
+### Using Homebrew (macOS)
+
+```bash
+brew tap amrit110/oli
+brew install oli
+```
+
+### From Source
 
 ```bash
 # Clone the repository

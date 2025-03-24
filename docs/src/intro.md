@@ -1,3 +1,9 @@
+[![Crates.io](https://img.shields.io/crates/v/oli-tui?style=flat-square)](https://crates.io/crates/oli-tui)
+[![Docs.rs](https://img.shields.io/badge/docs.rs-latest-blue?style=flat-square)](https://docs.rs/oli-tui)
+[![License](https://img.shields.io/badge/license-Apache_2.0-blue?style=flat-square)](https://opensource.org/license/apache-2-0)
+[![Codecov](https://img.shields.io/codecov/c/github/amrit110/oli?style=flat-square)](https://codecov.io/github/amrit110/oli)
+[![Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg?logo=rust&style=flat-square)](https://www.rust-lang.org)
+
 # OLI - Open Local Intelligent assistant
 
 OLI is an open-source alternative to Claude Code, built in Rust to provide powerful agentic capabilities for coding assistance. It features:
@@ -10,11 +16,20 @@ OLI is an open-source alternative to Claude Code, built in Rust to provide power
 
 ## Installation
 
-### Prerequisites
+### Using Cargo
 
-- Rust toolchain (install via [rustup](https://rustup.rs/))
-- For local models: At least 8GB RAM (16GB+ recommended for larger models)
-- For cloud features: API keys for Anthropic or OpenAI
+```bash
+cargo install oli-tui
+```
+
+### Using Homebrew (macOS)
+
+```bash
+brew tap amrit110/oli
+brew install oli
+```
+
+### From Source
 
 ```bash
 # Clone the repository
@@ -59,7 +74,7 @@ cargo run
 
 2. Select a model:
    - Cloud models (Claude 3 Sonnet, GPT-4o) for full agent capabilities
-   - Local models (via vllm or ollama coming soon!)
+   - Local models via vllm or ollama (coming soon!)
 
 3. Make your coding query in the chat interface:
    - Ask for file searches
