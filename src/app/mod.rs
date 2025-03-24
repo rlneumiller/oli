@@ -20,14 +20,16 @@ use crate::app::utils::ScrollState;
 // Re-exports
 pub use agent::{determine_agent_model, determine_provider, AgentManager};
 pub use commands::{get_available_commands, CommandHandler, SpecialCommand};
-pub use history::HistoryManager;
+pub use history::ContextCompressor;
 pub use models::ModelManager;
 pub use permissions::{PendingToolExecution, PermissionHandler, ToolPermissionStatus};
 pub use state::{App, AppState};
 pub use utils::{ErrorHandler, Scrollable};
 
 use crate::agent::core::{Agent, LLMProvider};
+use crate::apis::api_client::SessionManager;
 use crate::models::{get_available_models, ModelConfig};
+use crate::prompts::DEFAULT_SESSION_PROMPT;
 
 impl Default for App {
     fn default() -> Self {
@@ -55,6 +57,10 @@ impl App {
         textarea.set_cursor_line_style(ratatui::style::Style::default());
         // Set a custom style for the first line's text (this will be combined with our prompt symbol)
         textarea.set_style(ratatui::style::Style::default().fg(ratatui::style::Color::LightCyan));
+
+        // Initialize the session manager with default settings
+        let session_manager =
+            Some(SessionManager::new(100).with_system_message(DEFAULT_SESSION_PROMPT.to_string()));
 
         Self {
             state: AppState::Setup,
@@ -97,6 +103,8 @@ impl App {
             task_scroll_position: 0, // Legacy field kept for compatibility
             // Initialize conversation history tracking
             conversation_summaries: Vec::new(),
+            // Initialize session manager
+            session_manager,
         }
     }
 }
@@ -296,7 +304,7 @@ impl CommandHandler for App {
             }
             "/summarize" => {
                 // Attempt to summarize conversation history
-                if let Err(e) = self.summarize_history() {
+                if let Err(e) = self.compress_context() {
                     self.messages
                         .push(format!("Error summarizing history: {}", e));
                 }
@@ -762,14 +770,14 @@ impl AgentManager for App {
         }
 
         // Check if the conversation needs to be summarized
-        if self.should_summarize() {
+        if self.should_compress() {
             if self.debug_messages {
                 self.messages
                     .push("DEBUG: Auto-summarizing conversation before query".into());
             }
 
             // Try to summarize, but continue even if it fails
-            if let Err(e) = self.summarize_history() {
+            if let Err(e) = self.compress_context() {
                 if self.debug_messages {
                     self.messages
                         .push(format!("DEBUG: Failed to summarize: {}", e));
@@ -799,10 +807,25 @@ impl AgentManager for App {
         };
 
         // Make sure we have an agent
-        let agent = match &self.agent {
+        let agent = match &mut self.agent {
             Some(agent) => agent,
             None => return Err(anyhow::anyhow!("Agent not initialized")),
         };
+
+        // If we have a session manager, get conversation history and update the agent
+        if let Some(session) = &mut self.session_manager {
+            // Add the current user query to the session
+            session.add_user_message(prompt.to_string());
+
+            // Get the full conversation history from the session manager
+            let session_messages = session.get_messages_for_api();
+
+            // Update the agent's conversation history with all messages
+            agent.clear_history();
+            for msg in session_messages {
+                agent.add_message(msg);
+            }
+        }
 
         // Create a progress channel
         let (progress_tx, progress_rx) = mpsc::channel();
@@ -947,6 +970,13 @@ impl AgentManager for App {
         // For now, we extract tokens in the UI layer based on response length
         // In the future, we could update this to use actual token counts from the API
         // The token usage will be recorded when completing the task in ui/events.rs
+
+        // If successful, store the response in the session manager
+        if let Ok(response) = &result {
+            if let Some(session) = &mut self.session_manager {
+                session.add_assistant_message(response.clone());
+            }
+        }
 
         result
     }

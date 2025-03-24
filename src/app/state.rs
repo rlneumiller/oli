@@ -1,4 +1,5 @@
 use crate::agent::core::Agent;
+use crate::apis::api_client::SessionManager;
 use crate::app::commands::SpecialCommand;
 use crate::app::history::ConversationSummary;
 use crate::app::models::ToolPermissionStatus;
@@ -148,4 +149,6 @@ pub struct App {
     pub task_scroll_position: usize, // Legacy scroll position (kept for compatibility)
     // Conversation history management
     pub conversation_summaries: Vec<ConversationSummary>, // History of conversation summaries
+    // Session management for API conversation
+    pub session_manager: Option<SessionManager>, // Manages the API conversation session
 }

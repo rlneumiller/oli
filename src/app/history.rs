@@ -1,6 +1,8 @@
 use crate::agent::core::Agent;
+use crate::apis::api_client::Message;
 use crate::app::state::{App, AppState};
 use crate::app::utils::Scrollable;
+use crate::prompts::CONVERSATION_SUMMARY_PROMPT;
 use anyhow::Result;
 use std::time::Instant;
 
@@ -34,13 +36,13 @@ impl ConversationSummary {
     }
 }
 
-/// History management trait for the application
-pub trait HistoryManager {
+/// Context compression management trait for the application
+pub trait ContextCompressor {
     /// Generate a summary of the conversation history
-    fn summarize_history(&mut self) -> Result<()>;
+    fn compress_context(&mut self) -> Result<()>;
 
     /// Check if conversation should be summarized based on thresholds
-    fn should_summarize(&self) -> bool;
+    fn should_compress(&self) -> bool;
 
     /// Get the total character count of conversation history
     fn conversation_char_count(&self) -> usize;
@@ -50,10 +52,16 @@ pub trait HistoryManager {
 
     /// Clear all summaries and history
     fn clear_history(&mut self);
+
+    /// Convert display messages to session messages
+    fn display_to_session_messages(&self, display_messages: &[String]) -> Vec<Message>;
+
+    /// Convert session messages to display messages
+    fn session_to_display_messages(&self, session_messages: &[Message]) -> Vec<String>;
 }
 
-impl HistoryManager for App {
-    fn summarize_history(&mut self) -> Result<()> {
+impl ContextCompressor for App {
+    fn compress_context(&mut self) -> Result<()> {
         // Don't summarize if no messages
         if self.messages.is_empty() {
             return Ok(());
@@ -101,6 +109,24 @@ impl HistoryManager for App {
             format!("💬 [CONVERSATION SUMMARY]\n{}\n[END SUMMARY]", summary),
         );
 
+        // Update the session manager if it exists
+        // First collect the messages to convert
+        let messages_to_keep = self.messages[to_summarize..].to_vec();
+
+        // Convert display messages to API messages format
+        let session_messages = self.display_to_session_messages(&messages_to_keep);
+
+        // Update the session manager if it exists
+        if let Some(session) = &mut self.session_manager {
+            // Replace the session with the summary and recent messages
+            session.replace_with_summary(summary.clone());
+
+            // Add the recent messages that weren't summarized
+            for msg in session_messages {
+                session.add_message(msg.clone());
+            }
+        }
+
         // Add a notification
         self.messages.push(format!(
             "[success] ⏺ Summarized {} messages ({} chars)",
@@ -113,7 +139,7 @@ impl HistoryManager for App {
         Ok(())
     }
 
-    fn should_summarize(&self) -> bool {
+    fn should_compress(&self) -> bool {
         // Don't summarize in non-chat state
         if self.state != AppState::Chat {
             return false;
@@ -123,8 +149,15 @@ impl HistoryManager for App {
         let message_count = self.messages.len();
         let char_count = self.conversation_char_count();
 
+        // Also check the session manager if available
+        let session_count = self
+            .session_manager
+            .as_ref()
+            .map_or(0, |s| s.message_count());
+
         message_count > DEFAULT_SUMMARIZATION_COUNT_THRESHOLD
             || char_count > DEFAULT_SUMMARIZATION_CHAR_THRESHOLD
+            || session_count > DEFAULT_SUMMARIZATION_COUNT_THRESHOLD
     }
 
     fn conversation_char_count(&self) -> usize {
@@ -147,6 +180,70 @@ impl HistoryManager for App {
         if let Some(agent) = &mut self.agent {
             agent.clear_history();
         }
+
+        // Clear session manager if it exists
+        if let Some(session) = &mut self.session_manager {
+            session.clear();
+        }
+    }
+
+    fn display_to_session_messages(&self, display_messages: &[String]) -> Vec<Message> {
+        let mut session_messages = Vec::new();
+        let mut current_role = "user";
+
+        for msg in display_messages {
+            // Try to determine the role based on common message patterns
+            if msg.starts_with("[user]") || msg.starts_with("User:") {
+                current_role = "user";
+                let content = msg
+                    .replace("[user]", "")
+                    .replace("User:", "")
+                    .trim()
+                    .to_string();
+                session_messages.push(Message::user(content));
+            } else if msg.starts_with("[assistant]") || msg.starts_with("Assistant:") {
+                current_role = "assistant";
+                let content = msg
+                    .replace("[assistant]", "")
+                    .replace("Assistant:", "")
+                    .trim()
+                    .to_string();
+                session_messages.push(Message::assistant(content));
+            } else if msg.starts_with("[system]") || msg.starts_with("System:") {
+                current_role = "system";
+                let content = msg
+                    .replace("[system]", "")
+                    .replace("System:", "")
+                    .trim()
+                    .to_string();
+                session_messages.push(Message::system(content));
+            } else if !msg.starts_with("[wait]")
+                && !msg.starts_with("[success]")
+                && !msg.starts_with("[info]")
+            {
+                // For unmarked messages, use the current role context
+                match current_role {
+                    "user" => session_messages.push(Message::user(msg.clone())),
+                    "assistant" => session_messages.push(Message::assistant(msg.clone())),
+                    "system" => session_messages.push(Message::system(msg.clone())),
+                    _ => session_messages.push(Message::user(msg.clone())),
+                }
+            }
+        }
+
+        session_messages
+    }
+
+    fn session_to_display_messages(&self, session_messages: &[Message]) -> Vec<String> {
+        session_messages
+            .iter()
+            .map(|msg| match msg.role.as_str() {
+                "user" => format!("[user] {}", msg.content),
+                "assistant" => format!("[assistant] {}", msg.content),
+                "system" => format!("[system] {}", msg.content),
+                _ => msg.content.clone(),
+            })
+            .collect()
     }
 }
 
@@ -166,17 +263,7 @@ impl App {
         let content_to_summarize = content.to_string();
 
         // Define the summarization prompt
-        let prompt = format!(
-            "You're assisting with summarizing the conversation history. Please create a CONCISE summary of the following conversation, focusing on:\n\
-            - Key questions and tasks the user asked about\n\
-            - Important code changes, file edits, or information discovered\n\
-            - Main concepts discussed and solutions provided\n\
-            \n\
-            The summary should maintain coherence for future context while being as brief as possible. Focus on capturing essential context needed for continuing the conversation.\n\
-            \n\
-            CONVERSATION TO SUMMARIZE:\n{}", 
-            content_to_summarize
-        );
+        let prompt = format!("{}{}", CONVERSATION_SUMMARY_PROMPT, content_to_summarize);
 
         // Execute the summarization
         let result = runtime.block_on(async { agent_clone.execute(&prompt).await })?;

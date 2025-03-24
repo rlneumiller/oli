@@ -31,6 +31,102 @@ impl Message {
     }
 }
 
+/// Manages the conversation session with history of messages
+#[derive(Debug, Clone)]
+pub struct SessionManager {
+    /// History of messages for the current session
+    pub messages: Vec<Message>,
+    /// Maximum number of messages to keep in the session
+    pub max_messages: usize,
+    /// System message to prepend to all conversations
+    pub system_message: Option<Message>,
+}
+
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self {
+            messages: Vec::new(),
+            max_messages: 100,
+            system_message: None,
+        }
+    }
+}
+
+impl SessionManager {
+    /// Create a new session manager with a specific message capacity
+    pub fn new(max_messages: usize) -> Self {
+        Self {
+            messages: Vec::new(),
+            max_messages,
+            system_message: None,
+        }
+    }
+
+    /// Add a system message that will be prepended to the conversation
+    pub fn with_system_message(mut self, content: String) -> Self {
+        self.system_message = Some(Message::system(content));
+        self
+    }
+
+    /// Add a user message to the conversation
+    pub fn add_user_message(&mut self, content: String) {
+        self.add_message(Message::user(content));
+    }
+
+    /// Add an assistant message to the conversation
+    pub fn add_assistant_message(&mut self, content: String) {
+        self.add_message(Message::assistant(content));
+    }
+
+    /// Add a message to the conversation
+    pub fn add_message(&mut self, message: Message) {
+        self.messages.push(message);
+        self.trim_if_needed();
+    }
+
+    /// Replace all messages with a single summary message
+    pub fn replace_with_summary(&mut self, summary: String) {
+        self.messages.clear();
+        self.add_message(Message::system(format!(
+            "Previous conversation summary: {}",
+            summary
+        )));
+    }
+
+    /// Get all messages for the API call, including the system message if present
+    pub fn get_messages_for_api(&self) -> Vec<Message> {
+        let mut api_messages = Vec::new();
+
+        // Add system message if present
+        if let Some(sys_message) = &self.system_message {
+            api_messages.push(sys_message.clone());
+        }
+
+        // Add conversation messages
+        api_messages.extend(self.messages.clone());
+
+        api_messages
+    }
+
+    /// Clear all messages in the session
+    pub fn clear(&mut self) {
+        self.messages.clear();
+    }
+
+    /// Get the current number of messages
+    pub fn message_count(&self) -> usize {
+        self.messages.len()
+    }
+
+    /// Trim messages if the count exceeds max_messages
+    fn trim_if_needed(&mut self) {
+        if self.messages.len() > self.max_messages {
+            let to_remove = self.messages.len() - self.max_messages;
+            self.messages.drain(0..to_remove);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
     pub name: String,

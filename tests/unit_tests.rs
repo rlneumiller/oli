@@ -5,8 +5,8 @@ use std::path::Path;
 #[cfg(test)]
 mod history_tests {
     use oli_tui::app::history::ConversationSummary;
-    use oli_tui::app::history::HistoryManager;
     use oli_tui::app::state::{App, AppState};
+    use oli_tui::app::ContextCompressor;
 
     #[test]
     fn test_conversation_char_count() {
@@ -25,29 +25,29 @@ mod history_tests {
     }
 
     #[test]
-    fn test_should_summarize() {
+    fn test_should_compress() {
         let mut app = App::new();
         app.state = AppState::Chat;
 
         // Empty conversation should not need summarization
-        assert!(!app.should_summarize());
+        assert!(!app.should_compress());
 
-        // Add enough messages to trigger summarization by count
-        for i in 0..40 {
+        // Add enough messages to trigger summarization by count (1000 is the threshold in history.rs)
+        for i in 0..1001 {
             app.messages.push(format!("Message {}", i));
         }
 
         // Should now need summarization
-        assert!(app.should_summarize());
+        assert!(app.should_compress());
 
         // Reset and try with character count
         app.messages.clear();
 
-        // Add a single large message
-        app.messages.push("A".repeat(6000));
+        // Add a single large message (1,000,000 chars is the threshold in history.rs)
+        app.messages.push("A".repeat(1000001));
 
         // Should need summarization due to character count
-        assert!(app.should_summarize());
+        assert!(app.should_compress());
     }
 
     #[test]
