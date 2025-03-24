@@ -4,9 +4,9 @@
 [![Codecov](https://img.shields.io/codecov/c/github/amrit110/oli?style=flat-square)](https://codecov.io/github/amrit110/oli)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg?logo=rust&style=flat-square)](https://www.rust-lang.org)
 
-# OLI - Open Local Intelligent assistant
+# oli - Open Local Intelligent assistant
 
-OLI is an open-source alternative to Claude Code, built in Rust to provide powerful agentic capabilities for coding assistance. It features:
+oli is an open-source alternative to Claude Code, built in Rust to provide powerful agentic capabilities for coding assistance. It features:
 
 - A flexible TUI interface for working with code
 - Support for both cloud APIs (Anthropic Claude Sonnet 3.7 and OpenAI GPT4o) and local LLMs (via Ollama)
@@ -70,7 +70,7 @@ This implementation includes:
 
 ### Using Ollama Models
 
-Oli supports local models through Ollama:
+oli supports local models through Ollama:
 
 1. Install [Ollama](https://ollama.com/) if you haven't already
 2. Start the Ollama server:
@@ -84,7 +84,7 @@ Oli supports local models through Ollama:
    ollama pull qwen2.5-coder:3b
    ollama pull llama3:8b  
    ```
-4. Start Oli and select the Ollama model from the model selection menu
+4. Start oli and select the Ollama model from the model selection menu
 
 Note: For best results with tool use and agent capabilities, use models like Qwen 2.5 Coder which support function calling.
 
