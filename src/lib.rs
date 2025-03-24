@@ -1,5 +1,5 @@
 mod agent;
-mod apis;
+pub mod apis;
 pub mod app;
 mod errors;
 pub mod fs_tools;

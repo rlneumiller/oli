@@ -1,6 +1,13 @@
 use oli_tui::fs_tools::code_parser::{CodeAST, CodeParser};
 use std::path::Path;
 
+// Import for API client tests
+#[path = "api_client_tests.rs"]
+mod api_client_tests;
+
+#[path = "api_client_enum_tests.rs"]
+mod api_client_enum_tests;
+
 // Add extra imports for history tests
 #[cfg(test)]
 mod history_tests {
