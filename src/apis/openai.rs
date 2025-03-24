@@ -1,4 +1,6 @@
-use crate::apis::api_client::{ApiClient, CompletionOptions, Message, ToolCall, ToolResult};
+use crate::apis::api_client::{
+    ApiClient, CompletionOptions, Message, ToolCall, ToolDefinition, ToolResult,
+};
 use crate::errors::AppError;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -21,12 +23,6 @@ struct OpenAITool {
     #[serde(rename = "type")]
     tool_type: String,
     function: OpenAIFunction,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct OpenAIToolChoice {
-    #[serde(rename = "type")]
-    choice_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,49 +125,7 @@ impl OpenAIClient {
         messages
             .into_iter()
             .map(|msg| {
-                // Parse content for tool calls if it's an assistant message
-                // This handles stored tool calls in message history
-                if msg.role == "assistant" && msg.content.contains("\"tool_calls\":") {
-                    // Try to parse JSON with tool calls
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg.content) {
-                        if let Some(tool_calls) = parsed.get("tool_calls") {
-                            if let Some(tool_calls_array) = tool_calls.as_array() {
-                                // Convert to OpenAIToolCall format
-                                let openai_tool_calls = tool_calls_array
-                                    .iter()
-                                    .filter_map(|call| {
-                                        let id = call.get("id")?.as_str()?.to_string();
-                                        let name = call.get("name")?.as_str()?.to_string();
-                                        let arguments = call.get("arguments")?.to_string();
-
-                                        Some(OpenAIToolCall {
-                                            id,
-                                            tool_type: "function".to_string(),
-                                            function: OpenAIFunctionCall { name, arguments },
-                                        })
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                if !openai_tool_calls.is_empty() {
-                                    return OpenAIMessage {
-                                        role: msg.role,
-                                        content: Some(
-                                            parsed
-                                                .get("content")
-                                                .and_then(|c| c.as_str())
-                                                .unwrap_or_default()
-                                                .to_string(),
-                                        ),
-                                        tool_calls: Some(openai_tool_calls),
-                                        tool_call_id: None,
-                                    };
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Default case for normal messages
+                // Convert standard messages
                 OpenAIMessage {
                     role: msg.role,
                     content: Some(msg.content),
@@ -182,10 +136,7 @@ impl OpenAIClient {
             .collect()
     }
 
-    fn convert_tool_definitions(
-        &self,
-        tools: Vec<crate::apis::api_client::ToolDefinition>,
-    ) -> Vec<OpenAITool> {
+    fn convert_tool_definitions(&self, tools: Vec<ToolDefinition>) -> Vec<OpenAITool> {
         tools
             .into_iter()
             .map(|tool| OpenAITool {
@@ -221,27 +172,6 @@ impl ApiClient for OpenAIClient {
             request.response_format = Some(json!({
                 "type": "json_object"
             }));
-
-            // Ensure at least one message contains the word "json" when using json_object response format
-            let has_json_keyword = request.messages.iter().any(|msg| {
-                msg.content
-                    .as_ref()
-                    .is_some_and(|content| content.to_lowercase().contains("json"))
-            });
-
-            if !has_json_keyword && !request.messages.is_empty() {
-                // Add "json" to the user's last message if it doesn't already contain it
-                if let Some(last_user_msg) = request
-                    .messages
-                    .iter_mut()
-                    .rev()
-                    .find(|msg| msg.role == "user")
-                {
-                    if let Some(content) = &mut last_user_msg.content {
-                        *content = format!("{} (Please provide the response as JSON)", content);
-                    }
-                }
-            }
         }
 
         let response = self
@@ -295,56 +225,68 @@ impl ApiClient for OpenAIClient {
         // Convert messages to OpenAI format
         let mut openai_messages = self.convert_messages(messages);
 
-        // Add assistant message with tool calls first, then add tool results
-        // For OpenAI, we need to include the assistant's message with tool calls before the tool results
-        // Find the last assistant message with tool_calls and make sure it exists
-        let mut last_assistant_msg_with_tools = false;
-        let mut found_tool_ids = Vec::new(); // Track found tool IDs
+        // Track tool calls that need responses
+        let mut pending_tool_calls = Vec::new();
 
-        // Scan for assistant messages with tool_calls and collect their IDs
+        // First pass: identify all tool calls that need responses
         for msg in &openai_messages {
             if msg.role == "assistant" && msg.tool_calls.is_some() {
-                let tool_calls = msg.tool_calls.as_ref().unwrap();
-                if !tool_calls.is_empty() {
-                    last_assistant_msg_with_tools = true;
-                    // Collect all tool call IDs from this message
+                if let Some(tool_calls) = &msg.tool_calls {
                     for call in tool_calls {
-                        found_tool_ids.push(call.id.clone());
+                        pending_tool_calls.push(call.id.clone());
                     }
                 }
             }
         }
 
-        // Add tool results only if there's an assistant message with tool calls
-        if let Some(results) = tool_results {
-            if last_assistant_msg_with_tools {
-                // OpenAI requires responses for ALL tool calls in an assistant message
-                let result_map: std::collections::HashMap<String, String> = results
-                    .iter()
-                    .map(|r| (r.tool_call_id.clone(), r.output.clone()))
-                    .collect();
+        // Second pass: remove tool call IDs that already have responses
+        for msg in &openai_messages {
+            if msg.role == "tool" && msg.tool_call_id.is_some() {
+                if let Some(tool_call_id) = &msg.tool_call_id {
+                    pending_tool_calls.retain(|id| id != tool_call_id);
+                }
+            }
+        }
 
-                // Ensure every tool call has a corresponding tool response
-                for tool_id in &found_tool_ids {
-                    let output = result_map.get(tool_id).cloned().unwrap_or_else(|| {
-                        // Provide a generic result for tool calls that don't have responses
-                        "Tool execution completed without detailed results.".to_string()
-                    });
+        // Add tool results for any pending tool calls
+        if let Some(results) = &tool_results {
+            let result_map: std::collections::HashMap<String, String> = results
+                .iter()
+                .map(|r| (r.tool_call_id.clone(), r.output.clone()))
+                .collect();
 
+            // Add responses for any pending tool calls
+            for tool_id in &pending_tool_calls {
+                if let Some(output) = result_map.get(tool_id) {
                     openai_messages.push(OpenAIMessage {
                         role: "tool".to_string(),
-                        content: Some(output),
+                        content: Some(output.clone()),
+                        tool_calls: None,
+                        tool_call_id: Some(tool_id.clone()),
+                    });
+                } else {
+                    // For any tool call without a provided result, add a default response
+                    // This is crucial for OpenAI - every tool call must have a response
+                    openai_messages.push(OpenAIMessage {
+                        role: "tool".to_string(),
+                        content: Some(
+                            "Tool execution completed without detailed results.".to_string(),
+                        ),
                         tool_calls: None,
                         tool_call_id: Some(tool_id.clone()),
                     });
                 }
-            } else {
-                // Return success but don't add any tool results - this avoids errors when the first tool result is added
-                // This is more graceful than erroring out completely
-                return Ok((
-                    "I'm ready to help with your questions about this project.".to_string(),
-                    None,
-                ));
+            }
+        } else if !pending_tool_calls.is_empty() {
+            // If we have pending tool calls but no results were provided,
+            // we need to add default responses for all pending tool calls
+            for tool_id in &pending_tool_calls {
+                openai_messages.push(OpenAIMessage {
+                    role: "tool".to_string(),
+                    content: Some("Tool execution completed without detailed results.".to_string()),
+                    tool_calls: None,
+                    tool_call_id: Some(tool_id.clone()),
+                });
             }
         }
 
