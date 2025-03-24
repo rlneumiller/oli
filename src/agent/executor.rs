@@ -35,6 +35,14 @@ impl AgentExecutor {
         }
     }
 
+    pub fn set_conversation_history(&mut self, history: Vec<Message>) {
+        self.conversation = history;
+    }
+
+    pub fn get_conversation_history(&self) -> Vec<Message> {
+        self.conversation.clone()
+    }
+
     /// Analyze conversation to determine if code parsing might be needed
     /// Uses the LLM directly to make this determination rather than keyword matching
     async fn might_need_codebase_parsing(&self) -> Result<bool> {
@@ -76,7 +84,8 @@ impl AgentExecutor {
                 json_schema: None,
             };
 
-            // Call the API to get the determination
+            // Call the API to get the determination - using a separate client call
+            // that doesn't affect our main conversation history
             let (response, _) = self
                 .api_client
                 .complete_with_tools(mini_conversation, options, None)
@@ -296,9 +305,9 @@ impl AgentExecutor {
                         }
 
                         // Instead of returning error, provide helpful error message to the model
-                        // Use the ID from the tool call if available
+                        // Use the ID from the tool call if available (ensuring it's valid for Anthropic API)
                         tool_results.push(ToolResult {
-                            tool_call_id: call.id.clone().unwrap_or_else(|| i.to_string()),
+                            tool_call_id: call.id.clone().unwrap_or_else(|| format!("tool_{}", i)),
                             output: format!("ERROR PARSING TOOL CALL: {}. Please check the format of your arguments and try again.", e),
                         });
                         continue;
@@ -570,11 +579,19 @@ impl AgentExecutor {
                     }
                 };
 
+                // Create a valid tool result ID (for Anthropic API: only alphanumeric, underscore, hyphen)
+                let tool_call_id = call.id.clone().unwrap_or_else(|| format!("tool_{}", i));
+
                 // Add tool result with proper ID for API compatibility
                 tool_results.push(ToolResult {
-                    // Use the ID from the tool call if available
-                    tool_call_id: call.id.clone().unwrap_or_else(|| i.to_string()),
-                    output: result,
+                    tool_call_id: tool_call_id.clone(),
+                    output: result.clone(),
+                });
+
+                // Also add a user message with the tool result to maintain history properly
+                self.conversation.push(Message {
+                    role: "user".to_string(),
+                    content: format!("Tool result for call {}: {}", tool_call_id, result),
                 });
             }
 

@@ -5,11 +5,11 @@ use anyhow::Result;
 use std::time::Instant;
 
 /// Message content threshold before considering summarization (in chars)
-const DEFAULT_SUMMARIZATION_CHAR_THRESHOLD: usize = 5000;
+const DEFAULT_SUMMARIZATION_CHAR_THRESHOLD: usize = 1000000;
 /// Message count threshold before considering summarization
-const DEFAULT_SUMMARIZATION_COUNT_THRESHOLD: usize = 30;
+const DEFAULT_SUMMARIZATION_COUNT_THRESHOLD: usize = 1000;
 /// Maximum number of messages to keep unsummarized (recent history)
-const DEFAULT_KEEP_RECENT_COUNT: usize = 10;
+const DEFAULT_KEEP_RECENT_COUNT: usize = 20;
 
 /// Represents a conversation summary
 pub struct ConversationSummary {
@@ -142,6 +142,11 @@ impl HistoryManager for App {
         // Reset both new and legacy scroll positions
         self.message_scroll.scroll_to_top();
         self.scroll_position = 0;
+
+        // Also clear agent's conversation history if it exists
+        if let Some(agent) = &mut self.agent {
+            agent.clear_history();
+        }
     }
 }
 
