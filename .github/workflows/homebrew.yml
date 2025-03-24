@@ -1,0 +1,43 @@
+name: Update Homebrew Formula
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-homebrew-formula:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract version
+        id: extract-version
+        run: |
+          echo "tag-name=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Build and create tarball
+        run: |
+          cargo build --release --bin oli
+          mkdir -p dist
+          tar -czf dist/oli-${{ steps.extract-version.outputs.version }}.tar.gz -C target/release oli
+
+      - name: Calculate SHA256
+        id: calculate-sha
+        run: |
+          echo "sha=$(shasum -a 256 dist/oli-${{ steps.extract-version.outputs.version }}.tar.gz | awk '{print $1}')" >> $GITHUB_OUTPUT
+
+      - name: Update Homebrew Formula
+        uses: mislav/bump-homebrew-formula-action@v3
+        with:
+          formula-name: oli
+          formula-path: Formula/oli.rb
+          homebrew-tap: amrit110/homebrew-oli
+          download-url: https://github.com/amrit110/oli/archive/refs/tags/${{ steps.extract-version.outputs.tag-name }}.tar.gz
+          commit-message: |
+            oli ${{ steps.extract-version.outputs.version }}
+            
+            Created by https://github.com/amrit110/oli/actions/runs/${{ github.run_id }}
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TOKEN }}
