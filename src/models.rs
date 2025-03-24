@@ -28,8 +28,12 @@ impl ModelConfig {
     }
 }
 
+use crate::apis::ollama::OllamaClient;
+use anyhow::Result;
+
 pub fn get_available_models() -> Vec<ModelConfig> {
-    vec![
+    // Start with just the API models
+    let mut models = vec![
         // Claude 3.7 Sonnet - Anthropic model supporting tool use
         ModelConfig {
             name: "Claude 3.7 Sonnet".into(),
@@ -60,5 +64,79 @@ pub fn get_available_models() -> Vec<ModelConfig> {
                 AgentCapability::RepositoryNavigation,
             ]),
         },
-    ]
+    ];
+
+    // Try to fetch available models from Ollama
+    if let Ok(ollama_models) = get_available_ollama_models() {
+        // Add each available Ollama model to the list
+        for model_info in ollama_models {
+            // Create a description based on the model details
+            let description = if let Some(details) = &model_info.details {
+                if let Some(desc) = &details.description {
+                    format!("{} - Running locally via Ollama", desc)
+                } else {
+                    format!("{} - Running locally via Ollama", model_info.name)
+                }
+            } else {
+                format!("{} - Running locally via Ollama", model_info.name)
+            };
+
+            // Add the model to the list
+            models.push(ModelConfig {
+                name: format!("{} - Local", model_info.name),
+                file_name: model_info.name.clone(),
+                description,
+                recommended_for: "Local code tasks, requires Ollama to be running".into(),
+                agentic_capabilities: Some(vec![
+                    AgentCapability::FileSearch,
+                    AgentCapability::CodeExecution,
+                    AgentCapability::FileEdit,
+                    AgentCapability::CodeCompletion,
+                    AgentCapability::CodeExplanation,
+                    AgentCapability::RepositoryNavigation,
+                ]),
+            });
+        }
+    }
+
+    models
+}
+
+fn get_available_ollama_models() -> Result<Vec<crate::apis::ollama::OllamaModelInfo>> {
+    // Try to get the list of models from Ollama in a non-async context
+    // We'll use a short timeout to avoid blocking the UI if Ollama is not running
+
+    // Create a runtime for the async call
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    // Try to list models with a timeout - if it fails, we just return an empty list
+    match runtime.block_on(async {
+        // Handle the client creation result explicitly rather than using ?
+        match OllamaClient::new(None) {
+            Ok(ollama_client) => {
+                // Use a short timeout (2 seconds) to avoid hanging if Ollama is not running
+                let models_future = ollama_client.list_models();
+                tokio::time::timeout(std::time::Duration::from_secs(2), models_future).await
+            }
+            Err(e) => {
+                // Return as a timeout error type to match the outer result type
+                Ok(Err(anyhow::anyhow!(
+                    "Failed to create Ollama client: {}",
+                    e
+                )))
+            }
+        }
+    }) {
+        Ok(Ok(models)) => Ok(models),
+        Err(_) => {
+            // Return empty list on timeout
+            Ok(Vec::new())
+        }
+        Ok(Err(_)) => {
+            // Return empty list on error
+            Ok(Vec::new())
+        }
+    }
 }

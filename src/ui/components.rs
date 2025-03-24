@@ -236,6 +236,13 @@ pub fn create_api_key_info(app: &App) -> List<'static> {
                 "You can also set the OPENAI_API_KEY environment variable to avoid this prompt.",
             ),
         ],
+        name if name.contains("Local") => vec![
+            ListItem::new("Local Ollama models don't require API keys."),
+            ListItem::new("Make sure Ollama is running with 'ollama serve'"),
+            ListItem::new(""),
+            ListItem::new("Press Enter to continue without an API key."),
+            ListItem::new("If you're seeing this screen, there may be a bug in the application."),
+        ],
         _ => vec![
             ListItem::new("To use Claude 3.7, you need to provide your Anthropic API key."),
             ListItem::new("You can get an API key from https://console.anthropic.com/"),

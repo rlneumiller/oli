@@ -1,6 +1,7 @@
 use crate::agent::executor::AgentExecutor;
 use crate::apis::anthropic::AnthropicClient;
 use crate::apis::api_client::{ApiClientEnum, DynApiClient, Message};
+use crate::apis::ollama::OllamaClient;
 use crate::apis::openai::OpenAIClient;
 use crate::fs_tools::code_parser::CodeParser;
 use crate::prompts::DEFAULT_AGENT_PROMPT;
@@ -12,6 +13,7 @@ use tokio::sync::mpsc;
 pub enum LLMProvider {
     Anthropic,
     OpenAI,
+    Ollama,
 }
 
 #[derive(Clone)]
@@ -84,6 +86,10 @@ impl Agent {
                 let client = OpenAIClient::new(self.model.clone())?;
                 ApiClientEnum::OpenAi(Arc::new(client))
             }
+            LLMProvider::Ollama => {
+                let client = OllamaClient::new(self.model.clone())?;
+                ApiClientEnum::Ollama(Arc::new(client))
+            }
         });
 
         // Initialize the code parser
@@ -103,6 +109,21 @@ impl Agent {
             LLMProvider::OpenAI => {
                 let client = OpenAIClient::with_api_key(api_key, self.model.clone())?;
                 ApiClientEnum::OpenAi(Arc::new(client))
+            }
+            LLMProvider::Ollama => {
+                // For Ollama, we'll use the api_key as the base URL if provided
+                // Otherwise, use the default localhost URL
+                let client = if api_key.trim().is_empty() {
+                    OllamaClient::new(self.model.clone())?
+                } else {
+                    // Treat the "API key" as the base URL for Ollama
+                    let model = self
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| "qwen2.5-coder:14b".to_string());
+                    OllamaClient::with_base_url(model, api_key)?
+                };
+                ApiClientEnum::Ollama(Arc::new(client))
             }
         });
 

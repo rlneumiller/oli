@@ -520,13 +520,20 @@ impl ModelManager for App {
         self.messages
             .push(format!("Setting up model: {}", model_name));
 
+        // Check if this is an Ollama local model (which doesn't need an API key)
+        let is_ollama_model = model_name.contains("Local");
+
         // Check if we need to ask for API key based on the selected model
-        let needs_api_key = match model_name.as_str() {
-            "GPT-4o" => std::env::var("OPENAI_API_KEY").is_err() && self.api_key.is_none(),
-            "Claude 3.7 Sonnet" => {
-                std::env::var("ANTHROPIC_API_KEY").is_err() && self.api_key.is_none()
+        let needs_api_key = if is_ollama_model {
+            false // Ollama models don't need API keys
+        } else {
+            match model_name.as_str() {
+                "GPT-4o" => std::env::var("OPENAI_API_KEY").is_err() && self.api_key.is_none(),
+                "Claude 3.7 Sonnet" => {
+                    std::env::var("ANTHROPIC_API_KEY").is_err() && self.api_key.is_none()
+                }
+                _ => true, // Default to requiring API key
             }
-            _ => true, // Default to requiring API key
         };
 
         if needs_api_key {
@@ -549,11 +556,22 @@ impl ModelManager for App {
             tx.send("setup_complete".into())?;
             Ok(())
         } else {
-            let provider_name = match model_name.as_str() {
-                "GPT-4o" => "OpenAI",
-                _ => "Anthropic",
-            };
-            self.handle_error(format!("{} API key not found or is invalid", provider_name));
+            // Check if this is an Ollama model that should have worked
+            if model_name.contains("Local") {
+                self.handle_error(
+                    "Failed to connect to Ollama server. Make sure Ollama is running with 'ollama serve'".to_string(),
+                );
+                // Add a helpful message with instructions
+                self.messages
+                    .push("Run 'ollama serve' in a separate terminal window and try again.".into());
+                self.messages.push("If Ollama is already running, check that it's available at http://localhost:11434".into());
+            } else {
+                let provider_name = match model_name.as_str() {
+                    "GPT-4o" => "OpenAI",
+                    _ => "Anthropic",
+                };
+                self.handle_error(format!("{} API key not found or is invalid", provider_name));
+            }
             tx.send("setup_failed".into())?;
             Ok(())
         }
@@ -683,6 +701,9 @@ impl AgentManager for App {
             std::env::var("ANTHROPIC_API_KEY").is_ok() || self.api_key.is_some();
         let has_openai_key = std::env::var("OPENAI_API_KEY").is_ok() || self.api_key.is_some();
 
+        // Check if the selected model is an Ollama model
+        let is_ollama_model = self.current_model().name.contains("Local");
+
         // Determine appropriate provider based on the selected model
         let provider = match agent::determine_provider(
             self.current_model().name.as_str(),
@@ -691,13 +712,19 @@ impl AgentManager for App {
         ) {
             Some(provider) => provider,
             None => {
-                // No valid provider found
-                self.messages.push(
-                    "No API key found for any provider. Agent features will be disabled.".into(),
-                );
-                self.messages.push("To enable agent features, set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable.".into());
-                self.use_agent = false;
-                return Ok(());
+                // Check if this is an Ollama model (which doesn't need API keys)
+                if is_ollama_model {
+                    LLMProvider::Ollama
+                } else {
+                    // No valid provider found
+                    self.messages.push(
+                        "No API key found for any provider. Agent features will be disabled."
+                            .into(),
+                    );
+                    self.messages.push("To enable agent features, set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable.".into());
+                    self.use_agent = false;
+                    return Ok(());
+                }
             }
         };
 
@@ -747,6 +774,14 @@ impl AgentManager for App {
                     self.messages
                         .push("GPT-4o agent capabilities enabled!".into());
                 }
+                LLMProvider::Ollama => {
+                    // Get the model name to show in the message
+                    let model_name = self.current_model().file_name.clone();
+                    self.messages.push(format!(
+                        "Local Ollama {} agent capabilities enabled!",
+                        model_name
+                    ));
+                }
             }
         } else {
             self.messages
@@ -790,13 +825,36 @@ impl AgentManager for App {
             return self.query_with_agent(prompt);
         }
 
-        // Local models are no longer supported
-        let error_msg = "Local model support has been temporarily removed. Please use cloud-based models instead.";
-        self.messages.push(format!("NOTE: {}", error_msg));
-        self.messages
-            .push("Ollama integration will be added in a future update.".into());
+        // Check if this is an Ollama model
+        if self.current_model().name.contains("Local") {
+            let error_msg =
+                "Failed to initialize Ollama model. Please make sure Ollama is running with 'ollama serve'.";
+            self.messages.push(format!("ERROR: {}", error_msg));
+            self.messages
+                .push("Run 'ollama serve' in a separate terminal window and try again.".into());
+            self.messages.push(
+                "If Ollama is already running, check that it's available at http://localhost:11434"
+                    .into(),
+            );
 
-        Err(anyhow::anyhow!(error_msg))
+            // Get the model name (clone it to avoid borrow issues)
+            let model_name = self.current_model().file_name.clone();
+            self.messages
+                .push(format!("Attempted to use model: {}", model_name));
+
+            // Suggest downloading the model if needed
+            self.messages.push(format!(
+                "If this model is not available, run: ollama pull {}",
+                model_name
+            ));
+
+            Err(anyhow::anyhow!(error_msg))
+        } else {
+            // Other models that should be using API clients
+            let error_msg = "API client setup failed. Please check your API keys.";
+            self.messages.push(format!("ERROR: {}", error_msg));
+            Err(anyhow::anyhow!(error_msg))
+        }
     }
 
     fn query_with_agent(&mut self, prompt: &str) -> Result<String> {
