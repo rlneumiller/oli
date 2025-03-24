@@ -27,7 +27,7 @@ pub use state::{App, AppState};
 pub use utils::{ErrorHandler, Scrollable};
 
 use crate::agent::core::{Agent, LLMProvider};
-use crate::apis::api_client::SessionManager;
+use crate::apis::api_client::{Message, SessionManager};
 use crate::models::{get_available_models, ModelConfig};
 use crate::prompts::DEFAULT_SESSION_PROMPT;
 
@@ -821,10 +821,15 @@ impl AgentManager for App {
             let session_messages = session.get_messages_for_api();
 
             // Update the agent's conversation history with all messages
+            // The session already contains the user query, so no need to add it again
             agent.clear_history();
             for msg in session_messages {
                 agent.add_message(msg);
             }
+        } else {
+            // If we don't have a session manager, add the user query directly to the agent
+            agent.clear_history();
+            agent.add_message(Message::user(prompt.to_string()));
         }
 
         // Create a progress channel
