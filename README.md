@@ -10,21 +10,9 @@ OLI is an open-source alternative to Claude Code, built in Rust to provide power
 
 - A flexible TUI interface for working with code
 - Support for both local LLMs (via vLLM or ollama) and cloud APIs (currently only tested using Anthropic Claude Sonnet 3.7 and OpenAI GPT4o but other APIs and local LLM support coming soon!)
-- Complete agentic capabilities including file search, edit, and command execution
+- Strong agentic capabilities including file search, edit, and command execution
 
 ⚠️ This project is in a very early stage and is prone to bugs and issues! Please post your issues as you encounter them.
-
-## Features
-
-- **LLM-Agnostic Design**: Works with any LLM provider - local or cloud-based
-- **Advanced Prompt Engineering**: Optimized prompts for maximum reliability
-- **Structured JSON Outputs**: Enhanced response parsing for reliable tool usage
-- **Agent Capabilities**: Read files, search code, edit code, and execute commands
-- **Terminal UI**: Streamlined interface for maximum productivity
-- **Cross-Platform**: Works on macOS, Linux, and Windows
-- **GPU Acceleration**: Supports Metal acceleration for local models
-- **Fully Open Source**: Apache 2.0 licensed
-- **Rust Performance**: Built for speed and reliability
 
 ## Installation
 
@@ -77,7 +65,7 @@ cargo run
 
 2. Select a model:
    - Cloud models (Claude 3 Sonnet, GPT-4o) for full agent capabilities
-   - Local models for offline use
+   - Local models via vllm or ollama (coming soon!)
 
 3. Make your coding query in the chat interface:
    - Ask for file searches
