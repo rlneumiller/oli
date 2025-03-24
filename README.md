@@ -9,8 +9,9 @@
 OLI is an open-source alternative to Claude Code, built in Rust to provide powerful agentic capabilities for coding assistance. It features:
 
 - A flexible TUI interface for working with code
-- Support for both local LLMs (via vLLM or ollama) and cloud APIs (currently only tested using Anthropic Claude Sonnet 3.7 and OpenAI GPT4o but other APIs and local LLM support coming soon!)
+- Support for both cloud APIs (Anthropic Claude Sonnet 3.7 and OpenAI GPT4o) and local LLMs (via Ollama)
 - Strong agentic capabilities including file search, edit, and command execution
+- Tool use support across all model providers (Anthropic, OpenAI, and Ollama)
 
 ⚠️ This project is in a very early stage and is prone to bugs and issues! Please post your issues as you encounter them.
 
@@ -43,6 +44,8 @@ cargo run
 
 ## Environment Setup
 
+### Cloud API Models
+
 For API-based features, set up your environment variables:
 
 ```bash
@@ -65,6 +68,26 @@ This implementation includes:
 - JSON schema output formatting for structured responses
 - Improved error handling and retry mechanisms
 
+### Using Ollama Models
+
+Oli supports local models through Ollama:
+
+1. Install [Ollama](https://ollama.com/) if you haven't already
+2. Start the Ollama server:
+   ```bash
+   ollama serve
+   ```
+3. Pull the model you want to use (we recommend models with tool use capabilities):
+   ```bash
+   # Examples of compatible models
+   ollama pull qwen2.5-coder:14b
+   ollama pull qwen2.5-coder:3b
+   ollama pull llama3:8b  
+   ```
+4. Start Oli and select the Ollama model from the model selection menu
+
+Note: For best results with tool use and agent capabilities, use models like Qwen 2.5 Coder which support function calling.
+
 ## Usage
 
 1. Start the application:
@@ -74,7 +97,7 @@ cargo run
 
 2. Select a model:
    - Cloud models (Claude 3 Sonnet, GPT-4o) for full agent capabilities
-   - Local models via vllm or ollama (coming soon!)
+   - Local models via Ollama (Qwen, Llama, etc.)
 
 3. Make your coding query in the chat interface:
    - Ask for file searches
