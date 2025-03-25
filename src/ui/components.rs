@@ -1,4 +1,5 @@
 use crate::app::commands::CommandHandler;
+// LogLevel is defined in logger.rs but not needed here
 use crate::app::models::ModelManager;
 use crate::app::state::App;
 use crate::ui::helpers;
@@ -14,11 +15,21 @@ use ratatui::{
 pub fn create_status_bar(app: &App) -> Line<'static> {
     let model_name = app.current_model().name.clone();
     let version = env!("CARGO_PKG_VERSION");
-    let scroll_info = format!(
-        "Scroll: {}/{}",
-        app.scroll_position,
-        app.messages.len().saturating_sub(10)
-    );
+
+    // Determine scroll counts based on what's currently being shown
+    let scroll_info = if app.show_logs {
+        format!(
+            "Scroll: {}/{}",
+            app.log_scroll.position,
+            app.logs.len().saturating_sub(10)
+        )
+    } else {
+        format!(
+            "Scroll: {}/{}",
+            app.scroll_position,
+            app.messages.len().saturating_sub(10)
+        )
+    };
 
     // Add agent indicator based on agent availability
     let agent_indicator = if app.use_agent && app.agent.is_some() {
@@ -38,6 +49,21 @@ pub fn create_status_bar(app: &App) -> Line<'static> {
         )
     };
 
+    // Debug indicator removed - we only need the LOGS view indicator
+
+    // View mode indicator (logs or conversation)
+    let view_mode = if app.show_logs {
+        Span::styled(
+            " LOGS ",
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::Rgb(80, 80, 200))
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled("", Style::default())
+    };
+
     Line::from(vec![
         Span::styled(
             format!(" oli v{} ", version),
@@ -55,6 +81,8 @@ pub fn create_status_bar(app: &App) -> Line<'static> {
         ),
         Span::raw(" "),
         agent_indicator,
+        Span::raw(" "),
+        view_mode, // Only show the LOGS indicator
         Span::raw(" | "),
         Span::styled(scroll_info, AppStyles::hint()),
         Span::raw(" | "),
@@ -91,7 +119,7 @@ pub fn create_message_list(app: &mut App, visible_area: Rect) -> Paragraph<'stat
 
     // Create block with scroll indicators
     let message_block = helpers::create_scrollable_block(
-        "OLI Assistant",
+        "oli Assistant",
         has_more_above,
         has_more_below,
         AppStyles::section_header(),
@@ -318,6 +346,79 @@ pub fn create_permission_content(app: &App) -> Paragraph<'static> {
         .wrap(Wrap { trim: true })
 }
 
+/// Create a log display view with highlighted log entries
+pub fn create_log_list(app: &mut App, visible_area: Rect) -> Paragraph<'_> {
+    // Process logs into styled lines
+    let mut all_lines = Vec::new();
+
+    // Process visible logs (most recent ones)
+    if app.logs.is_empty() {
+        // Add some spacing at the top
+        all_lines.push(Line::from(""));
+        all_lines.push(Line::from(vec![Span::styled(
+            "No logs yet. Logs will appear here when debug mode is enabled.",
+            Style::default().fg(Color::DarkGray),
+        )]));
+    } else {
+        // Add all log entries with color-coded levels
+        for log in &app.logs {
+            let line = if log.contains(" [DEBUG] ") {
+                Line::from(vec![Span::styled(
+                    log,
+                    Style::default().fg(Color::Rgb(120, 180, 180)), // Cyan for DEBUG
+                )])
+            } else if log.contains(" [INFO] ") {
+                Line::from(vec![Span::styled(
+                    log,
+                    Style::default().fg(Color::Rgb(100, 180, 100)), // Green for INFO
+                )])
+            } else if log.contains(" [WARN] ") {
+                Line::from(vec![Span::styled(
+                    log,
+                    Style::default().fg(Color::Rgb(230, 180, 80)), // Yellow for WARN
+                )])
+            } else if log.contains(" [ERROR] ") {
+                Line::from(vec![Span::styled(
+                    log,
+                    Style::default().fg(Color::Rgb(220, 60, 60)), // Red for ERROR
+                )])
+            } else {
+                // Default styling for unrecognized log format
+                Line::from(vec![Span::styled(log, Style::default().fg(Color::White))])
+            };
+
+            all_lines.push(line);
+        }
+    }
+
+    // Update scroll state
+    app.log_scroll
+        .update_dimensions(all_lines.len(), visible_area.height as usize);
+
+    // Apply scrolling
+    let visible_lines = if all_lines.len() <= visible_area.height as usize {
+        all_lines
+    } else {
+        all_lines
+            .into_iter()
+            .skip(app.log_scroll.position)
+            .take(visible_area.height as usize)
+            .collect()
+    };
+
+    // Create a styled log list
+    Paragraph::new(Text::from(visible_lines))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Debug Logs ")
+                .title_alignment(Alignment::Left)
+                .border_style(Style::default().fg(Color::Rgb(100, 150, 255)))
+                .padding(Padding::new(1, 0, 1, 0)),
+        )
+        .wrap(Wrap { trim: true })
+}
+
 /// Create a task list with animated status indicators
 pub fn create_task_list(app: &mut App, visible_area: Rect) -> Paragraph<'static> {
     // Get animation state for blinking effects
@@ -326,21 +427,12 @@ pub fn create_task_list(app: &mut App, visible_area: Rect) -> Paragraph<'static>
     // Process tasks into styled lines
     let mut all_lines = Vec::new();
 
-    // Add title
-    all_lines.push(Line::from(vec![Span::styled(
-        "Tasks",
-        Style::default()
-            .fg(AppStyles::primary_color())
-            .add_modifier(Modifier::BOLD),
-    )]));
-
-    // Add an empty line after title
-    all_lines.push(Line::from(""));
-
     // Process visible tasks (most recent ones)
     let visible_tasks = app.tasks.iter().rev().take(10).collect::<Vec<_>>();
 
     if visible_tasks.is_empty() {
+        // Add some spacing at the top
+        all_lines.push(Line::from(""));
         all_lines.push(Line::from(vec![Span::styled(
             "No tasks yet. Type a query to get started.",
             Style::default().fg(Color::DarkGray),
@@ -372,10 +464,10 @@ pub fn create_task_list(app: &mut App, visible_area: Rect) -> Paragraph<'static>
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Tasks")
+                .title(" Tasks ")
                 .title_alignment(Alignment::Left)
                 .border_style(AppStyles::border())
-                .padding(Padding::new(1, 1, 0, 0)),
+                .padding(Padding::new(1, 0, 1, 0)),
         )
         .wrap(Wrap { trim: false })
 }
