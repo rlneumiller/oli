@@ -113,11 +113,14 @@ pub struct App {
     pub textarea: TextArea<'static>, // TextArea widget for improved multiline input
     pub input: String,               // Keep for backward compatibility during transition
     pub messages: Vec<String>,
+    pub logs: Vec<String>, // Store logs separately from messages
+    pub show_logs: bool,   // Toggle between logs and messages display
     pub selected_model: usize,
     pub available_models: Vec<ModelConfig>,
     pub error_message: Option<String>,
     pub debug_messages: bool,
     pub message_scroll: ScrollState, // Improved scrolling for messages
+    pub log_scroll: ScrollState,     // Separate scrolling for logs
     pub scroll_position: usize,      // Legacy scroll position (kept for compatibility)
     pub last_query_time: Instant,
     pub last_message_time: Instant, // Timestamp for message animations
@@ -151,4 +154,6 @@ pub struct App {
     pub conversation_summaries: Vec<ConversationSummary>, // History of conversation summaries
     // Session management for API conversation
     pub session_manager: Option<SessionManager>, // Manages the API conversation session
+    // Session information for logging
+    pub session_id: String, // Unique ID for the current session
 }

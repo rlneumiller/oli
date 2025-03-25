@@ -76,7 +76,7 @@ pub fn draw_setup(f: &mut Frame, app: &mut App) {
 
     // Title with version
     let version = env!("CARGO_PKG_VERSION");
-    let title = Paragraph::new(format!("OLI v{} Setup Assistant", version))
+    let title = Paragraph::new(format!("oli v{} Setup Assistant", version))
         .style(AppStyles::title())
         .alignment(Alignment::Center);
     f.render_widget(title, chunks[0]);
@@ -241,9 +241,16 @@ pub fn draw_chat(f: &mut Frame, app: &mut App) {
     let status_bar_widget = Paragraph::new(status_bar).style(Style::default());
     f.render_widget(status_bar_widget, chunks[0]);
 
-    // Messages history
-    let messages_widget = create_message_list(app, chunks[1]);
-    f.render_widget(messages_widget, chunks[1]);
+    // Messages history or logs based on app.show_logs flag
+    if app.show_logs {
+        // Render logs instead of messages
+        let logs_widget = create_log_list(app, chunks[1]);
+        f.render_widget(logs_widget, chunks[1]);
+    } else {
+        // Render normal messages
+        let messages_widget = create_message_list(app, chunks[1]);
+        f.render_widget(messages_widget, chunks[1]);
+    }
 
     // Split the input area if command menu is visible
     if app.show_command_menu {

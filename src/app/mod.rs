@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod commands;
 pub mod history;
+pub mod logger;
 pub mod models;
 pub mod permissions;
 pub mod state;
@@ -21,6 +22,7 @@ use crate::app::utils::ScrollState;
 pub use agent::{determine_agent_model, determine_provider, AgentManager};
 pub use commands::{get_available_commands, CommandHandler, SpecialCommand};
 pub use history::ContextCompressor;
+pub use logger::Logger;
 pub use models::ModelManager;
 pub use permissions::{PendingToolExecution, PermissionHandler, ToolPermissionStatus};
 pub use state::{App, AppState};
@@ -30,6 +32,7 @@ use crate::agent::core::{Agent, LLMProvider};
 use crate::apis::api_client::{Message, SessionManager};
 use crate::models::{get_available_models, ModelConfig};
 use crate::prompts::DEFAULT_SESSION_PROMPT;
+use uuid::Uuid;
 
 impl Default for App {
     fn default() -> Self {
@@ -62,17 +65,23 @@ impl App {
         let session_manager =
             Some(SessionManager::new(100).with_system_message(DEFAULT_SESSION_PROMPT.to_string()));
 
+        // Generate a unique session ID
+        let session_id = Uuid::new_v4().to_string();
+
         Self {
             state: AppState::Setup,
             textarea,
             input: String::new(),
             messages: vec![],
+            logs: vec![],     // Initialize empty log storage
+            show_logs: false, // Start with normal messages display
             selected_model: 0,
             available_models: get_available_models(),
             error_message: None,
             debug_messages: false, // Debug mode off by default
             message_scroll: ScrollState::new(),
-            scroll_position: 0, // Legacy field kept for compatibility
+            log_scroll: ScrollState::new(), // Initialize log scroll state
+            scroll_position: 0,             // Legacy field kept for compatibility
             last_query_time: std::time::Instant::now(),
             last_message_time: std::time::Instant::now(), // For animation effects
             use_agent: false,
@@ -105,6 +114,8 @@ impl App {
             conversation_summaries: Vec::new(),
             // Initialize session manager
             session_manager,
+            // Initialize session ID for logging
+            session_id,
         }
     }
 }
@@ -142,11 +153,10 @@ impl CommandHandler for App {
 
                 // Debug logging
                 if self.debug_messages {
-                    self.messages.push(format!(
-                        "DEBUG: Reset command selection. Input: '{}', Commands: {}",
-                        input_text,
-                        filtered.len()
-                    ));
+                    self.log(
+                        "Reset command selection. Input: '{}', Commands: {}",
+                        &[&input_text, &filtered.len().to_string()],
+                    );
                 }
             }
         }
@@ -187,11 +197,13 @@ impl CommandHandler for App {
 
             // Debug message
             if self.debug_messages {
-                self.messages.push(format!(
-                    "DEBUG: Selected command {} of {}",
-                    self.selected_command + 1,
-                    num_commands
-                ));
+                self.log(
+                    "Selected command {} of {}",
+                    &[
+                        &(self.selected_command + 1).to_string(),
+                        &num_commands.to_string(),
+                    ],
+                );
             }
         }
     }
@@ -221,11 +233,13 @@ impl CommandHandler for App {
 
             // Debug message
             if self.debug_messages {
-                self.messages.push(format!(
-                    "DEBUG: Selected command {} of {}",
-                    self.selected_command + 1,
-                    num_commands
-                ));
+                self.log(
+                    "Selected command {} of {}",
+                    &[
+                        &(self.selected_command + 1).to_string(),
+                        &num_commands.to_string(),
+                    ],
+                );
             }
         }
     }
@@ -267,8 +281,10 @@ impl CommandHandler for App {
                 true
             }
             "/debug" => {
-                // Toggle debug messages visibility
+                // Toggle debug messages visibility and switch view mode
                 self.debug_messages = !self.debug_messages;
+                self.show_logs = self.debug_messages; // Switch to logs view when enabling debug mode
+
                 self.messages.push(format!(
                     "Debug messages {}.",
                     if self.debug_messages {
@@ -277,6 +293,21 @@ impl CommandHandler for App {
                         "disabled"
                     }
                 ));
+
+                // Add explanation of log view when enabling debug
+                if self.debug_messages {
+                    self.messages
+                        .push("Debug logs will be shown in a separate view.".into());
+                    self.messages.push(
+                        "The output pane now shows debug logs instead of conversation.".into(),
+                    );
+                    self.log("Debug mode enabled - logs are now being collected", &[]);
+                } else {
+                    // Switch back to normal view and add message
+                    self.messages
+                        .push("Returning to normal conversation view.".into());
+                }
+
                 true
             }
             "/steps" => {
@@ -321,7 +352,11 @@ impl CommandHandler for App {
 
 impl Scrollable for App {
     fn message_scroll_state(&mut self) -> &mut ScrollState {
-        &mut self.message_scroll
+        if self.show_logs {
+            &mut self.log_scroll
+        } else {
+            &mut self.message_scroll
+        }
     }
 
     fn task_scroll_state(&mut self) -> &mut ScrollState {
@@ -329,27 +364,39 @@ impl Scrollable for App {
     }
 
     fn scroll_up(&mut self, amount: usize) {
-        // Use new scroll state
-        self.message_scroll.scroll_up(amount);
-
-        // Update legacy scroll position for compatibility
-        self.scroll_position = self.message_scroll.position;
+        if self.show_logs {
+            // Scroll logs
+            self.log_scroll.scroll_up(amount);
+        } else {
+            // Scroll messages
+            self.message_scroll.scroll_up(amount);
+            // Update legacy scroll position for compatibility
+            self.scroll_position = self.message_scroll.position;
+        }
     }
 
     fn scroll_down(&mut self, amount: usize) {
-        // Use new scroll state
-        self.message_scroll.scroll_down(amount);
-
-        // Update legacy scroll position for compatibility
-        self.scroll_position = self.message_scroll.position;
+        if self.show_logs {
+            // Scroll logs
+            self.log_scroll.scroll_down(amount);
+        } else {
+            // Scroll messages
+            self.message_scroll.scroll_down(amount);
+            // Update legacy scroll position for compatibility
+            self.scroll_position = self.message_scroll.position;
+        }
     }
 
     fn auto_scroll_to_bottom(&mut self) {
-        // Use new scroll state
-        self.message_scroll.scroll_to_bottom();
-
-        // Update legacy scroll position for compatibility
-        self.scroll_position = self.message_scroll.position;
+        if self.show_logs {
+            // Scroll logs to bottom
+            self.log_scroll.scroll_to_bottom();
+        } else {
+            // Scroll messages to bottom
+            self.message_scroll.scroll_to_bottom();
+            // Update legacy scroll position for compatibility
+            self.scroll_position = self.message_scroll.position;
+        }
     }
 
     fn scroll_tasks_up(&mut self, amount: usize) {
@@ -432,10 +479,98 @@ impl App {
     }
 }
 
+impl Logger for App {
+    fn log(&mut self, message: &str, args: &[&str]) {
+        // Format the message with provided arguments
+        let formatted_message = if args.is_empty() {
+            message.to_string()
+        } else {
+            // Simple placeholder replacement ({}), not as sophisticated as format!
+            let mut result = message.to_string();
+            for arg in args {
+                if let Some(pos) = result.find("{}") {
+                    result.replace_range(pos..pos + 2, arg);
+                }
+            }
+            result
+        };
+
+        // Add timestamp
+        let now = chrono::Local::now();
+        let timestamped = format!(
+            "[{}] {}",
+            now.format("%Y-%m-%d %H:%M:%S%.3f"),
+            formatted_message
+        );
+
+        // Store log message
+        self.logs.push(timestamped.clone());
+
+        // Automatically write to log file
+        let _ = self.write_log_to_file(&timestamped);
+
+        // Auto-scroll log view if currently showing logs
+        if self.show_logs {
+            self.auto_scroll_to_bottom();
+        }
+    }
+
+    fn toggle_log_view(&mut self) {
+        self.show_logs = !self.show_logs;
+
+        // Log the view change
+        if self.show_logs {
+            self.log("Switched to log view", &[]);
+        } else {
+            self.log("Switched to conversation view", &[]);
+        }
+    }
+
+    fn get_log_directory(&self) -> std::path::PathBuf {
+        let mut log_dir = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+        log_dir.push(".oli");
+        log_dir.push("logs");
+        log_dir
+    }
+
+    fn get_log_file_path(&self) -> std::path::PathBuf {
+        let log_dir = self.get_log_directory();
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let filename = format!("oli_{}_{}.log", date, self.session_id);
+        log_dir.join(filename)
+    }
+
+    fn write_log_to_file(&self, message: &str) -> Result<()> {
+        use std::io::Write;
+
+        // Create log directory if it doesn't exist
+        let log_dir = self.get_log_directory();
+        if !log_dir.exists() {
+            std::fs::create_dir_all(&log_dir)?;
+        }
+
+        // Append to log file
+        let log_path = self.get_log_file_path();
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)?;
+
+        file.write_all(format!("{}\n", message).as_bytes())?;
+
+        Ok(())
+    }
+}
+
 impl ErrorHandler for App {
     fn handle_error(&mut self, message: String) {
         self.error_message = Some(message.clone());
         self.messages.push(format!("Error: {}", message));
+
+        // Also log the error
+        if self.debug_messages {
+            self.log("ERROR: {}", &[&message]);
+        }
     }
 }
 
@@ -468,7 +603,7 @@ impl ModelManager for App {
 
     fn load_model(&mut self, _model_path: &Path) -> Result<()> {
         if self.debug_messages {
-            self.messages.push("DEBUG: Model loading requested".into());
+            self.log("Model loading requested", &[]);
         }
 
         let model_config = self.current_model();
@@ -487,6 +622,7 @@ impl ModelManager for App {
                     "WARNING: Failed to initialize agent capabilities: {}",
                     e
                 ));
+                self.log("Failed to initialize agent: {}", &[&e.to_string()]);
                 self.use_agent = false;
             } else if self.use_agent {
                 self.messages.push(
@@ -510,7 +646,7 @@ impl ModelManager for App {
 
     fn setup_models(&mut self, tx: mpsc::Sender<String>) -> Result<()> {
         if self.debug_messages {
-            self.messages.push("DEBUG: setup_models called".into());
+            self.log("setup_models called", &[]);
         }
 
         self.error_message = None;
@@ -595,6 +731,14 @@ impl PermissionHandler for App {
             return ToolPermissionStatus::Granted;
         }
 
+        // Log permission request if debug mode enabled
+        if self.debug_messages {
+            self.log(
+                "Permission requested for tool: {} with args: {}",
+                &[tool_name, args],
+            );
+        }
+
         // Create a user-friendly description of what the tool will do
         let description = match tool_name {
             "Edit" => {
@@ -656,10 +800,32 @@ impl PermissionHandler for App {
             self.tool_permission_status = ToolPermissionStatus::Granted;
             self.messages
                 .push("[permission] ✅ Permission granted, executing tool...".to_string());
+
+            // Log permission grant if debug mode enabled
+            if self.debug_messages {
+                self.log(
+                    "Permission GRANTED for tool: {}",
+                    &[&self
+                        .pending_tool
+                        .as_ref()
+                        .map_or("unknown".to_string(), |t| t.tool_name.clone())],
+                );
+            }
         } else {
             self.tool_permission_status = ToolPermissionStatus::Denied;
             self.messages
                 .push("[permission] ❌ Permission denied, skipping tool execution".to_string());
+
+            // Log permission denial if debug mode enabled
+            if self.debug_messages {
+                self.log(
+                    "Permission DENIED for tool: {}",
+                    &[&self
+                        .pending_tool
+                        .as_ref()
+                        .map_or("unknown".to_string(), |t| t.tool_name.clone())],
+                );
+            }
         }
         self.auto_scroll_to_bottom();
     }
@@ -769,10 +935,15 @@ impl AgentManager for App {
                 LLMProvider::Anthropic => {
                     self.messages
                         .push("Claude 3.7 Sonnet agent capabilities enabled!".into());
+                    self.log(
+                        "Agent capabilities enabled using Anthropic Claude provider",
+                        &[],
+                    );
                 }
                 LLMProvider::OpenAI => {
                     self.messages
                         .push("GPT-4o agent capabilities enabled!".into());
+                    self.log("Agent capabilities enabled using OpenAI provider", &[]);
                 }
                 LLMProvider::Ollama => {
                     // Get the model name to show in the message
@@ -781,11 +952,16 @@ impl AgentManager for App {
                         "Local Ollama {} agent capabilities enabled!",
                         model_name
                     ));
+                    self.log(
+                        "Agent capabilities enabled using Ollama provider with model: {}",
+                        &[&model_name],
+                    );
                 }
             }
         } else {
             self.messages
                 .push("Failed to create async runtime. Agent features will be disabled.".into());
+            self.log("Failed to create async runtime for agent", &[]);
             self.use_agent = false;
         }
 
@@ -794,28 +970,24 @@ impl AgentManager for App {
 
     fn query_model(&mut self, prompt: &str) -> Result<String> {
         if self.debug_messages {
-            self.messages.push(format!(
-                "DEBUG: Querying with: {}",
-                if prompt.len() > 50 {
-                    format!("{}...", &prompt[..50])
-                } else {
-                    prompt.to_string()
-                }
-            ));
+            let truncated_prompt = if prompt.len() > 50 {
+                format!("{}...", &prompt[..50])
+            } else {
+                prompt.to_string()
+            };
+            self.log("Querying model with: {}", &[&truncated_prompt]);
         }
 
         // Check if the conversation needs to be summarized
         if self.should_compress() {
             if self.debug_messages {
-                self.messages
-                    .push("DEBUG: Auto-summarizing conversation before query".into());
+                self.log("Auto-summarizing conversation before query", &[]);
             }
 
             // Try to summarize, but continue even if it fails
             if let Err(e) = self.compress_context() {
                 if self.debug_messages {
-                    self.messages
-                        .push(format!("DEBUG: Failed to summarize: {}", e));
+                    self.log("Failed to summarize: {}", &[&e.to_string()]);
                 }
             }
         }
@@ -865,7 +1037,8 @@ impl AgentManager for App {
         };
 
         // Make sure we have an agent
-        let agent = match &mut self.agent {
+        let agent_opt = self.agent.clone();
+        let mut agent = match agent_opt {
             Some(agent) => agent,
             None => return Err(anyhow::anyhow!("Agent not initialized")),
         };
@@ -880,14 +1053,18 @@ impl AgentManager for App {
 
             // Update the agent's conversation history with all messages
             // The session already contains the user query, so no need to add it again
-            agent.clear_history();
+            let mut agent_mut = agent.clone();
+            agent_mut.clear_history();
             for msg in session_messages {
-                agent.add_message(msg);
+                agent_mut.add_message(msg);
             }
+            agent = agent_mut;
         } else {
             // If we don't have a session manager, add the user query directly to the agent
-            agent.clear_history();
-            agent.add_message(Message::user(prompt.to_string()));
+            let mut agent_mut = agent.clone();
+            agent_mut.clear_history();
+            agent_mut.add_message(Message::user(prompt.to_string()));
+            agent = agent_mut;
         }
 
         // Create a progress channel
@@ -900,8 +1077,20 @@ impl AgentManager for App {
         // Set tool execution flag
         self.tool_execution_in_progress = true;
 
-        // Copy the agent and execute the query
-        let agent_clone = agent.clone();
+        // We'll add the log directly to the logs vector instead of using the log method
+        // to avoid borrowing issues with the runtime
+        if self.debug_messages {
+            // Create a timestamp
+            let now = chrono::Local::now();
+            let log_message = format!(
+                "[{}] Tool execution started",
+                now.format("%Y-%m-%d %H:%M:%S%.3f")
+            );
+            self.logs.push(log_message.clone());
+
+            // Also write to log file without using the log method
+            let _ = self.write_log_to_file(&log_message);
+        }
         let prompt_clone = prompt.to_string();
 
         // Process this as a background task in the tokio runtime
@@ -913,7 +1102,7 @@ impl AgentManager for App {
         runtime.spawn(async move {
             // Set up the agent with progress sender
             let (tokio_progress_tx, mut tokio_progress_rx) = tokio::sync::mpsc::channel(100);
-            let agent_with_progress = agent_clone.with_progress_sender(tokio_progress_tx);
+            let agent_with_progress = agent.with_progress_sender(tokio_progress_tx);
 
             // Create a channel for the response
             let (final_response_tx, final_response_rx) = tokio::sync::oneshot::channel();
@@ -1029,6 +1218,10 @@ impl AgentManager for App {
         self.tool_execution_in_progress = false;
         self.permission_required = false;
         self.pending_tool = None;
+
+        if self.debug_messages {
+            self.log("Tool execution completed", &[]);
+        }
 
         // For now, we extract tokens in the UI layer based on response length
         // In the future, we could update this to use actual token counts from the API

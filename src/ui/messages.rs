@@ -24,7 +24,7 @@ enum MessageType {
 /// Initializes welcome messages for the setup screen
 pub fn initialize_setup_messages(app: &mut App) {
     app.messages.extend(vec![
-        "★ Welcome to OLI Assistant! ★".into(),
+        "★ Welcome to oli Assistant! ★".into(),
         "A terminal-based code assistant powered by local LLMs".into(),
         "".into(),
         "1. Select a model using Up/Down arrow keys".into(),
@@ -156,7 +156,7 @@ fn process_setup_related(app: &mut App, msg: &str) -> Result<()> {
         app.state = AppState::Chat;
 
         // Add welcome message
-        app.messages.push("★ Welcome to OLI assistant! ★".into());
+        app.messages.push("★ Welcome to oli assistant! ★".into());
         app.messages
             .push("Ready to code! Type /help for available commands".into());
 
@@ -172,7 +172,7 @@ fn process_setup_related(app: &mut App, msg: &str) -> Result<()> {
 
         // Clean welcome messages
         app.messages.clear();
-        app.messages.push("★ Welcome to OLI assistant! ★".into());
+        app.messages.push("★ Welcome to oli assistant! ★".into());
         app.messages
             .push("Ready to code! Type /help for available commands".into());
 
