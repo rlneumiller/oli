@@ -1,4 +1,4 @@
-use oli_tui::fs_tools::code_parser::CodeParser;
+use oli_tui::tools::code::parser::CodeParser;
 
 #[test]
 fn test_generate_llm_friendly_ast() {

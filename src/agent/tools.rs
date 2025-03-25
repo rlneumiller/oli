@@ -1,4 +1,4 @@
-use crate::fs_tools::{code_parser::CodeParser, file_ops::FileOps, search::SearchTools};
+use crate::tools::{code::parser::CodeParser, fs::file_ops::FileOps, fs::search::SearchTools};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

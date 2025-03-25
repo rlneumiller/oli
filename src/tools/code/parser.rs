@@ -843,7 +843,7 @@ impl CodeParser {
 
     /// Use search tools to find relevant files for a query, with efficiency optimizations
     fn find_relevant_files(&self, root_dir: &Path, query: &str) -> Result<Vec<PathBuf>> {
-        use crate::fs_tools::search::SearchTools;
+        use crate::tools::fs::search::SearchTools;
 
         let mut results = Vec::new();
 

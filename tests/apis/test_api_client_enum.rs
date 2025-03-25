@@ -66,5 +66,3 @@ fn test_enum_variant_matching() {
         }
     }
 }
-
-// Test helper functions removed to eliminate dead code warnings
