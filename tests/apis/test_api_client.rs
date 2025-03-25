@@ -60,7 +60,12 @@ fn test_tool_structures() {
     assert_eq!(tool_call.id, Some("call_123".to_string()));
     assert_eq!(tool_call.name, "TestTool");
     assert_eq!(
-        tool_call.arguments.get("test_param").unwrap().as_str().unwrap(),
+        tool_call
+            .arguments
+            .get("test_param")
+            .unwrap()
+            .as_str()
+            .unwrap(),
         "test_value"
     );
 
@@ -130,10 +135,14 @@ pub mod session_manager_tests {
     fn test_with_system_message() {
         // Create a session manager with a system message
         let system_message = "You are a helpful assistant.";
-        let session_manager = SessionManager::new(100).with_system_message(system_message.to_string());
+        let session_manager =
+            SessionManager::new(100).with_system_message(system_message.to_string());
 
         // System message should be set
-        assert_eq!(session_manager.system_message.as_ref().unwrap().content, system_message);
+        assert_eq!(
+            session_manager.system_message.as_ref().unwrap().content,
+            system_message
+        );
     }
 
     #[test]
@@ -175,8 +184,8 @@ pub mod session_manager_tests {
     #[test]
     fn test_clear() {
         // Create a session manager with messages
-        let mut session_manager = SessionManager::new(100)
-            .with_system_message("System message".to_string());
+        let mut session_manager =
+            SessionManager::new(100).with_system_message("System message".to_string());
         session_manager.add_user_message("User message".to_string());
 
         // Clear the session

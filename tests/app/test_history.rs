@@ -60,11 +60,8 @@ fn test_clear_history() {
     app.messages.push("Test message".to_string());
 
     // Add a fake summary
-    app.conversation_summaries.push(ConversationSummary::new(
-        "Test summary".to_string(),
-        5,
-        100,
-    ));
+    app.conversation_summaries
+        .push(ConversationSummary::new("Test summary".to_string(), 5, 100));
 
     // Clear history
     app.clear_history();
