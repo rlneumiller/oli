@@ -1,14 +1,30 @@
 use std::error::Error;
 use std::fmt;
 
+/// Main error type for the application
 #[derive(Debug)]
 pub enum AppError {
+    /// I/O errors from std::io operations
     IoError(std::io::Error),
+    /// Network errors from API requests
     NetworkError(String),
+    /// LLM errors for model-specific issues
+    /// Currently not used but available for future use for model-specific errors
     #[allow(dead_code)]
-    ModelError(String),
+    LLMError(String),
+    /// File operation errors
+    /// Currently not used but available for future use
     #[allow(dead_code)]
-    ValidationError(String),
+    FileError(String),
+    /// Parser errors for code and content parsing issues
+    /// Currently not used but available for future use
+    #[allow(dead_code)]
+    ParserError(String),
+    /// Tool execution errors
+    /// Currently not used but available for future use
+    #[allow(dead_code)]
+    ToolError(String),
+    /// Generic errors for cases not covered by other variants
     Other(String),
 }
 
@@ -17,8 +33,10 @@ impl fmt::Display for AppError {
         match self {
             AppError::IoError(e) => write!(f, "IO Error: {}", e),
             AppError::NetworkError(msg) => write!(f, "Network Error: {}", msg),
-            AppError::ModelError(msg) => write!(f, "Model Error: {}", msg),
-            AppError::ValidationError(msg) => write!(f, "Validation Error: {}", msg),
+            AppError::LLMError(msg) => write!(f, "Model Error: {}", msg),
+            AppError::FileError(msg) => write!(f, "File Error: {}", msg),
+            AppError::ParserError(msg) => write!(f, "Parser Error: {}", msg),
+            AppError::ToolError(msg) => write!(f, "Tool Error: {}", msg),
             AppError::Other(msg) => write!(f, "{}", msg),
         }
     }
