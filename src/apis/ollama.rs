@@ -265,7 +265,7 @@ impl OllamaClient {
             .map_err(|e| AppError::NetworkError(format!("Failed to get response text: {}", e)))?;
 
         let models_response: OllamaListModelsResponse = serde_json::from_str(&response_text)
-            .map_err(|e| AppError::Other(format!("Failed to parse Ollama response: {}", e)))?;
+            .map_err(|e| AppError::LLMError(format!("Failed to parse Ollama response: {}", e)))?;
 
         Ok(models_response.models)
     }

@@ -337,7 +337,7 @@ impl ApiClient for AnthropicClient {
         // Return an error if no text content was found
         if text_content.is_empty() {
             return Err(
-                AppError::Other("No text content in Anthropic response".to_string()).into(),
+                AppError::LLMError("No text content in Anthropic response".to_string()).into(),
             );
         }
 

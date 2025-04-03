@@ -6,25 +6,12 @@ pub struct ModelConfig {
     pub file_name: String,
     pub description: String,
     pub recommended_for: String,
-    pub agentic_capabilities: Option<Vec<AgentCapability>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum AgentCapability {
-    FileSearch,
-    CodeExecution,
-    FileEdit,
-    CodeCompletion,
-    CodeExplanation,
-    RepositoryNavigation,
+    pub supports_agent: bool,
 }
 
 impl ModelConfig {
-    pub fn supports_capability(&self, capability: &AgentCapability) -> bool {
-        match &self.agentic_capabilities {
-            Some(capabilities) => capabilities.contains(capability),
-            None => false,
-        }
+    pub fn has_agent_support(&self) -> bool {
+        self.supports_agent
     }
 }
 
@@ -40,14 +27,7 @@ pub fn get_available_models() -> Vec<ModelConfig> {
             file_name: "claude-3-7-sonnet-20250219".into(),
             description: "Latest Anthropic Claude with advanced code capabilities".into(),
             recommended_for: "Professional code tasks, requires ANTHROPIC_API_KEY".into(),
-            agentic_capabilities: Some(vec![
-                AgentCapability::FileSearch,
-                AgentCapability::CodeExecution,
-                AgentCapability::FileEdit,
-                AgentCapability::CodeCompletion,
-                AgentCapability::CodeExplanation,
-                AgentCapability::RepositoryNavigation,
-            ]),
+            supports_agent: true,
         },
         // GPT-4o - OpenAI model supporting tool use
         ModelConfig {
@@ -55,14 +35,7 @@ pub fn get_available_models() -> Vec<ModelConfig> {
             file_name: "gpt-4o".into(),
             description: "Latest OpenAI model with advanced tool use capabilities".into(),
             recommended_for: "Professional code tasks, requires OPENAI_API_KEY".into(),
-            agentic_capabilities: Some(vec![
-                AgentCapability::FileSearch,
-                AgentCapability::CodeExecution,
-                AgentCapability::FileEdit,
-                AgentCapability::CodeCompletion,
-                AgentCapability::CodeExplanation,
-                AgentCapability::RepositoryNavigation,
-            ]),
+            supports_agent: true,
         },
     ];
 
@@ -87,14 +60,7 @@ pub fn get_available_models() -> Vec<ModelConfig> {
                 file_name: model_info.name.clone(),
                 description,
                 recommended_for: "Local code tasks, requires Ollama to be running".into(),
-                agentic_capabilities: Some(vec![
-                    AgentCapability::FileSearch,
-                    AgentCapability::CodeExecution,
-                    AgentCapability::FileEdit,
-                    AgentCapability::CodeCompletion,
-                    AgentCapability::CodeExplanation,
-                    AgentCapability::RepositoryNavigation,
-                ]),
+                supports_agent: true,
             });
         }
     }

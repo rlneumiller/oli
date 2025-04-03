@@ -213,7 +213,7 @@ impl ApiClient for OpenAIClient {
             }
         }
 
-        Err(AppError::Other("No content in OpenAI response".to_string()).into())
+        Err(AppError::LLMError("No content in OpenAI response".to_string()).into())
     }
 
     async fn complete_with_tools(
