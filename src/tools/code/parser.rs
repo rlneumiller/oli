@@ -1,24 +1,13 @@
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use lazy_static::lazy_static;
-use regex::Regex;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use tree_sitter::{Language, Node, Parser, Query};
-
-// Helper struct to reduce function argument count
-struct AstNodeParams<'a> {
-    language: &'a str,
-    kind: &'a str,
-    line_num: usize,
-    line: &'a str,
-    capture: &'a str,
-    match_start: usize,
-    match_end: usize,
-}
+use std::sync::{Arc, Mutex, RwLock};
+use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 /// A representation of code structure that will be sent to the LLM
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +21,7 @@ pub struct CodeAST {
     pub content: Option<String>,
 }
 
+/// Represents a source code location range
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Range {
     pub start_row: usize,
@@ -40,75 +30,305 @@ pub struct Range {
     pub end_column: usize,
 }
 
+// Global query definitions for tree-sitter parsing
 lazy_static! {
-    // Language queries for extracting important code structures
+    /// PEG-style query for Rust code structures
     static ref RUST_QUERY: &'static str = r#"
-        (struct_item name: (identifier) @struct.name) @struct.def
-        (enum_item name: (identifier) @enum.name) @enum.def
-        (trait_item name: (identifier) @trait.name) @trait.def
-        (impl_item type: (type_identifier) @impl.type) @impl.def
-        (function_item name: (identifier) @function.name) @function.def
-        (mod_item name: (identifier) @module.name) @module.def
+        ; Struct declarations
+        (struct_item 
+            name: (identifier) @struct.name
+            body: (field_declaration_list)? @struct.body) @struct.def
+
+        ; Enum declarations
+        (enum_item 
+            name: (identifier) @enum.name
+            body: (enum_variant_list)? @enum.body) @enum.def
+
+        ; Trait declarations
+        (trait_item 
+            name: (identifier) @trait.name
+            body: (declaration_list)? @trait.body) @trait.def
+
+        ; Implementations
+        (impl_item 
+            trait: (type_identifier)? @impl.trait
+            type: (type_identifier) @impl.type
+            body: (declaration_list)? @impl.body) @impl.def
+
+        ; Functions
+        (function_item 
+            name: (identifier) @function.name
+            parameters: (parameters)? @function.params
+            body: (block)? @function.body) @function.def
+
+        ; Modules
+        (mod_item 
+            name: (identifier) @module.name
+            body: (declaration_list)? @module.body) @module.def
+
+        ; Constants and statics
+        (const_item
+            name: (identifier) @const.name
+            type: (_) @const.type
+            value: (_) @const.value) @const.def
+
+        (static_item
+            name: (identifier) @static.name
+            type: (_) @static.type
+            value: (_) @static.value) @static.def
     "#;
 
+    /// PEG-style query for JavaScript/TypeScript code structures
     static ref JAVASCRIPT_QUERY: &'static str = r#"
-        (class_declaration name: (identifier) @class.name) @class.def
-        (function_declaration name: (identifier) @function.name) @function.def
-        (method_definition name: (property_identifier) @method.name) @method.def
+        ; Classes
+        (class_declaration 
+            name: (identifier) @class.name
+            body: (class_body)? @class.body) @class.def
+
+        ; Functions
+        (function_declaration 
+            name: (identifier) @function.name
+            parameters: (formal_parameters) @function.params
+            body: (statement_block)? @function.body) @function.def
+
+        ; Methods
+        (method_definition 
+            name: (property_identifier) @method.name
+            parameters: (formal_parameters) @method.params
+            body: (statement_block)? @method.body) @method.def
+
+        ; Arrow functions in variable declarations
         (lexical_declaration 
             (variable_declarator 
                 name: (identifier) @const.name 
                 value: (arrow_function) @const.value)) @const.def
+
+        ; Object pattern in variable declarations
+        (variable_declaration
+            (variable_declarator
+                name: (identifier) @var.name)) @var.def
+        
+        ; Interface declarations (TypeScript)
+        (interface_declaration
+            name: (type_identifier) @interface.name
+            body: (object_type)? @interface.body) @interface.def
+
+        ; Type aliases (TypeScript)
+        (type_alias_declaration
+            name: (type_identifier) @type.name
+            value: (_) @type.value) @type.def
+
+        ; Export declarations
+        (export_statement
+            declaration: (_) @export.declaration) @export.def
     "#;
 
+    /// PEG-style query for Python code structures
     static ref PYTHON_QUERY: &'static str = r#"
-        (class_definition name: (identifier) @class.name) @class.def
-        (function_definition name: (identifier) @function.name) @function.def
+        ; Classes
+        (class_definition 
+            name: (identifier) @class.name
+            body: (block)? @class.body) @class.def
+
+        ; Functions
+        (function_definition 
+            name: (identifier) @function.name
+            parameters: (parameters) @function.params
+            body: (block)? @function.body) @function.def
+
+        ; Decorated definitions
+        (decorated_definition
+            definition: (_) @decorated.definition) @decorated.def
+
+        ; Imports
+        (import_statement
+            name: (dotted_name) @import.name) @import.def
+
+        (import_from_statement
+            module_name: (dotted_name) @import_from.module) @import_from.def
+
+        ; Global variables and constants
+        (assignment 
+            left: (identifier) @assignment.name
+            right: (_) @assignment.value) @assignment.def
+
+        ; Class attributes
+        (class_definition
+            body: (block 
+                (expression_statement
+                    (assignment
+                        left: (identifier) @class_attr.name)))) @class_attr.def
     "#;
 
+    /// PEG-style query for Go code structures
     static ref GO_QUERY: &'static str = r#"
-        (type_declaration (type_spec name: (type_identifier) @type.name)) @type.def
-        (function_declaration name: (identifier) @function.name) @function.def
-        (method_declaration name: (field_identifier) @method.name) @method.def
-        (struct_type) @struct.def
-        (interface_type) @interface.def
+        ; Type declarations
+        (type_declaration 
+            (type_spec 
+                name: (type_identifier) @type.name
+                type: (_) @type.value)) @type.def
+
+        ; Function declarations
+        (function_declaration 
+            name: (identifier) @function.name
+            parameters: (parameter_list) @function.params
+            result: (_)? @function.result
+            body: (block)? @function.body) @function.def
+
+        ; Method declarations
+        (method_declaration 
+            name: (field_identifier) @method.name
+            parameters: (parameter_list) @method.params
+            result: (_)? @method.result
+            body: (block)? @method.body) @method.def
+
+        ; Struct type definitions
+        (type_declaration
+            (type_spec
+                name: (type_identifier) @struct.name
+                type: (struct_type) @struct.body)) @struct.def
+
+        ; Interface type definitions
+        (type_declaration
+            (type_spec
+                name: (type_identifier) @interface.name
+                type: (interface_type) @interface.body)) @interface.def
+
+        ; Package clause
+        (package_clause
+            (package_identifier) @package.name) @package.def
+
+        ; Import declarations
+        (import_declaration
+            (import_spec_list) @import.specs) @import.def
     "#;
 
-    // Simple regex fallbacks
-    static ref RUST_STRUCT_RE: Regex = Regex::new(r"struct\s+([A-Za-z0-9_]+)").unwrap();
-    static ref RUST_ENUM_RE: Regex = Regex::new(r"enum\s+([A-Za-z0-9_]+)").unwrap();
-    static ref RUST_IMPL_RE: Regex = Regex::new(r"impl(?:\s+<[^>]+>)?\s+([A-Za-z0-9_:]+)").unwrap();
-    static ref RUST_FN_RE: Regex = Regex::new(r"fn\s+([A-Za-z0-9_]+)").unwrap();
-    static ref RUST_TRAIT_RE: Regex = Regex::new(r"trait\s+([A-Za-z0-9_]+)").unwrap();
-    static ref RUST_MOD_RE: Regex = Regex::new(r"mod\s+([A-Za-z0-9_]+)").unwrap();
+    /// PEG-style query for C/C++ code structures
+    static ref CPP_QUERY: &'static str = r#"
+        ; Function definitions
+        (function_definition
+            declarator: (function_declarator
+                declarator: (identifier) @function.name
+                parameters: (parameter_list) @function.params)
+            body: (compound_statement) @function.body) @function.def
 
-    static ref JS_CLASS_RE: Regex = Regex::new(r"class\s+([A-Za-z0-9_]+)").unwrap();
-    static ref JS_FUNCTION_RE: Regex = Regex::new(r"function\s+([A-Za-z0-9_]+)").unwrap();
-    static ref JS_ARROW_FN_RE: Regex = Regex::new(r"const\s+([A-Za-z0-9_]+)\s*=\s*\([^)]*\)\s*=>").unwrap();
-    static ref JS_INTERFACE_RE: Regex = Regex::new(r"interface\s+([A-Za-z0-9_]+)").unwrap();
-    static ref JS_TYPE_RE: Regex = Regex::new(r"type\s+([A-Za-z0-9_]+)").unwrap();
+        ; Class specifiers
+        (class_specifier
+            name: (type_identifier) @class.name
+            body: (field_declaration_list) @class.body) @class.def
+        
+        ; Struct specifiers
+        (struct_specifier
+            name: (type_identifier) @struct.name
+            body: (field_declaration_list) @struct.body) @struct.def
 
-    static ref PY_CLASS_RE: Regex = Regex::new(r"class\s+([A-Za-z0-9_]+)").unwrap();
-    static ref PY_FUNCTION_RE: Regex = Regex::new(r"def\s+([A-Za-z0-9_]+)").unwrap();
-    static ref PY_ASYNC_FN_RE: Regex = Regex::new(r"async\s+def\s+([A-Za-z0-9_]+)").unwrap();
+        ; Enum specifiers
+        (enum_specifier
+            name: (type_identifier) @enum.name
+            body: (enumerator_list) @enum.body) @enum.def
 
-    static ref GENERIC_BLOCK_RE: Regex = Regex::new(r"^\s*[{}]").unwrap();
+        ; Namespace definitions
+        (namespace_definition
+            name: (identifier) @namespace.name
+            body: (declaration_list) @namespace.body) @namespace.def
 
-    // Cache parsers and languages
-    static ref LANGUAGE_CACHE: Arc<Mutex<HashMap<String, Language>>> = Arc::new(Mutex::new(HashMap::new()));
-    static ref QUERY_CACHE: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+        ; Template declarations
+        (template_declaration
+            parameters: (template_parameter_list) @template.params
+            declaration: (_) @template.declaration) @template.def
+
+        ; Variable declarations
+        (declaration
+            declarator: (init_declarator
+                declarator: (identifier) @var.name)) @var.def
+
+        ; Method definitions
+        (function_definition
+            declarator: (function_declarator
+                declarator: (field_identifier) @method.name
+                parameters: (parameter_list) @method.params)
+            body: (compound_statement) @method.body) @method.def
+    "#;
+
+    /// PEG-style query for Java code structures
+    static ref JAVA_QUERY: &'static str = r#"
+        ; Class declarations
+        (class_declaration
+            name: (identifier) @class.name
+            body: (class_body) @class.body) @class.def
+
+        ; Method declarations
+        (method_declaration
+            name: (identifier) @method.name
+            parameters: (formal_parameters) @method.params
+            body: (block)? @method.body) @method.def
+
+        ; Interface declarations
+        (interface_declaration
+            name: (identifier) @interface.name
+            body: (interface_body) @interface.body) @interface.def
+
+        ; Constructor declarations
+        (constructor_declaration
+            name: (identifier) @constructor.name
+            parameters: (formal_parameters) @constructor.params
+            body: (constructor_body) @constructor.body) @constructor.def
+
+        ; Field declarations
+        (field_declaration
+            declarator: (variable_declarator
+                name: (identifier) @field.name)) @field.def
+
+        ; Package declarations
+        (package_declaration
+            name: (scoped_identifier) @package.name) @package.def
+
+        ; Import declarations
+        (import_declaration
+            name: (scoped_identifier) @import.name) @import.def
+
+        ; Annotation declarations
+        (annotation_type_declaration
+            name: (identifier) @annotation.name
+            body: (annotation_type_body) @annotation.body) @annotation.def
+    "#;
+
+    // Cache for parsers and languages
+    static ref LANGUAGE_CACHE: Arc<RwLock<HashMap<String, Language>>> = Arc::new(RwLock::new(HashMap::new()));
+    static ref PARSER_CACHE: Arc<Mutex<HashMap<String, Parser>>> = Arc::new(Mutex::new(HashMap::new()));
+    static ref QUERY_CACHE: Arc<RwLock<HashMap<String, String>>> = Arc::new(RwLock::new(HashMap::new()));
+    static ref TREE_CACHE: Arc<RwLock<HashMap<PathBuf, (Tree, String)>>> = Arc::new(RwLock::new(HashMap::new()));
 }
 
+/// A robust code parser system that analyzes source code and produces
+/// clean, accurate Abstract Syntax Trees (ASTs) optimized for LLM consumption.
+///
+/// # Key capabilities:
+/// - Consistent parsing approach using tree-sitter for reliable, accurate parsing
+/// - Clean, well-documented API for LLM tool use
+/// - Efficient error recovery for handling malformed code
+/// - Structured AST output that LLMs can easily interpret
+/// - Language detection with robust extension mapping
+/// - Declarative query patterns for extracting meaningful code structures
+/// - Efficient caching system for parsers and queries
 pub struct CodeParser {
+    /// Maps language names to file extensions
     languages: HashMap<String, Vec<String>>,
+    /// Default parser instance for initial parsing
     parser: Parser,
+    /// Cache size limit for AST trees (in bytes)
+    cache_size_limit: usize,
 }
 
 impl CodeParser {
+    /// Creates a new CodeParser instance with initialized language support.
+    ///
+    /// # Returns
+    /// - `Result<Self>` - A new CodeParser instance or an error
     pub fn new() -> Result<Self> {
         let mut languages = HashMap::new();
 
-        // Define supported languages (extensible for future needs)
+        // Define supported languages with their file extensions
         languages.insert("rust".to_string(), vec!["rs".to_string()]);
         languages.insert(
             "javascript".to_string(),
@@ -138,7 +358,7 @@ impl CodeParser {
 
         // Initialize language cache with known languages
         {
-            let mut cache = LANGUAGE_CACHE.lock().unwrap();
+            let mut cache = LANGUAGE_CACHE.write().unwrap();
             if cache.is_empty() {
                 // Load languages with the tree-sitter bindings
                 let rust_lang: Language = tree_sitter_rust::LANGUAGE.into();
@@ -165,39 +385,87 @@ impl CodeParser {
             }
         }
 
+        // Initialize parser cache
+        {
+            let mut cache = PARSER_CACHE.lock().unwrap();
+            if cache.is_empty() {
+                for lang_name in languages.keys() {
+                    let mut new_parser = Parser::new();
+                    if let Some(lang) = LANGUAGE_CACHE.read().unwrap().get(lang_name) {
+                        if new_parser.set_language(lang).is_ok() {
+                            cache.insert(lang_name.clone(), new_parser);
+                        }
+                    }
+                }
+            }
+        }
+
         // Initialize query cache with known language queries
         {
-            let mut cache = QUERY_CACHE.lock().unwrap();
+            let mut cache = QUERY_CACHE.write().unwrap();
             if cache.is_empty() {
                 cache.insert("rust".to_string(), RUST_QUERY.to_string());
                 cache.insert("javascript".to_string(), JAVASCRIPT_QUERY.to_string());
                 cache.insert("typescript".to_string(), JAVASCRIPT_QUERY.to_string());
                 cache.insert("python".to_string(), PYTHON_QUERY.to_string());
                 cache.insert("go".to_string(), GO_QUERY.to_string());
+                cache.insert("c".to_string(), CPP_QUERY.to_string());
+                cache.insert("cpp".to_string(), CPP_QUERY.to_string());
+                cache.insert("java".to_string(), JAVA_QUERY.to_string());
             }
         }
 
-        Ok(Self { languages, parser })
+        // Set a reasonable cache size limit (50MB)
+        let cache_size_limit = 50 * 1024 * 1024;
+
+        Ok(Self {
+            languages,
+            parser,
+            cache_size_limit,
+        })
     }
 
-    /// Try to get tree-sitter language for parsing
+    /// Gets a tree-sitter language for parsing
+    ///
+    /// # Arguments
+    /// - `language_name` - Name of the language to retrieve
+    ///
+    /// # Returns
+    /// - `Option<Language>` - The tree-sitter language if available
     fn get_language(&self, language_name: &str) -> Option<Language> {
-        let cache = LANGUAGE_CACHE.lock().unwrap();
-        cache.get(language_name).cloned()
+        LANGUAGE_CACHE.read().unwrap().get(language_name).cloned()
     }
 
-    /// Try to get query for a language
-    fn get_query(&self, language_name: &str) -> Option<Query> {
-        let query_cache = QUERY_CACHE.lock().unwrap();
-        if let Some(query_string) = query_cache.get(language_name) {
-            if let Some(lang) = self.get_language(language_name) {
-                return Query::new(&lang, query_string).ok();
+    // Note: get_parser method removed as it was unused
+
+    /// Gets a tree-sitter query for a language
+    ///
+    /// # Arguments
+    /// - `language_name` - Name of the language to get a query for
+    ///
+    /// # Returns
+    /// - `Option<Query>` - A tree-sitter query if available
+    fn get_query(&self, language_name: &str) -> Option<Result<Query>> {
+        let query_cache = QUERY_CACHE.read().unwrap();
+        let query_string = query_cache.get(language_name)?;
+
+        if let Some(lang) = self.get_language(language_name) {
+            match Query::new(&lang, query_string) {
+                Ok(query) => Some(Ok(query)),
+                Err(e) => Some(Err(anyhow::anyhow!("Failed to create query: {:?}", e))),
             }
+        } else {
+            None
         }
-        None
     }
 
-    /// Determine language from file extension
+    /// Determines the programming language from a file extension
+    ///
+    /// # Arguments
+    /// - `path` - Path to the file
+    ///
+    /// # Returns
+    /// - `Option<String>` - Language name if detected
     pub fn detect_language(&self, path: &Path) -> Option<String> {
         let extension = path.extension()?.to_str()?.to_lowercase();
 
@@ -218,7 +486,13 @@ impl CodeParser {
         None
     }
 
-    /// Parse a single file using tree-sitter and generate AST with size optimizations
+    /// Parses a single file using tree-sitter and generates an AST
+    ///
+    /// # Arguments
+    /// - `path` - Path to the file to parse
+    ///
+    /// # Returns
+    /// - `Result<CodeAST>` - The abstract syntax tree or an error
     pub fn parse_file(&mut self, path: &Path) -> Result<CodeAST> {
         // Detect language
         let language_name = self
@@ -289,160 +563,297 @@ impl CodeParser {
 
         // Try to use tree-sitter for parsing
         if let Some(language) = self.get_language(&language_name) {
-            // Configure parser
-            self.parser.set_language(&language)?;
+            // Check tree cache first
+            let path_buf = path.to_path_buf();
+            let tree_option = {
+                let cache = TREE_CACHE.read().unwrap();
+                if let Some((tree, content)) = cache.get(&path_buf) {
+                    if content == &source_code {
+                        Some(tree.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
 
-            // Parse the source code
-            if let Some(tree) = self.parser.parse(&source_code, None) {
-                // Try to use tree-sitter queries to extract structured information
-                if let Some(_query) = self.get_query(&language_name) {
-                    // Skip tree-sitter query-based parsing for now since we're having compatibility issues
-                    // We'll rely on more basic parsing methods instead
-                    let root_node = tree.root_node();
-                    let root_type = root_node.kind();
+            // If tree is not in cache, parse it
+            let tree = if let Some(cached_tree) = tree_option {
+                cached_tree
+            } else {
+                // Configure parser
+                self.parser.set_language(&language)?;
 
-                    // Add some basic information about the root node
-                    let child_ast = CodeAST {
-                        path: String::new(),
-                        language: language_name.to_string(),
-                        kind: "file_root".to_string(),
-                        name: Some(root_type.to_string()),
-                        range: Range {
-                            start_row: root_node.start_position().row,
-                            start_column: root_node.start_position().column,
-                            end_row: root_node.end_position().row,
-                            end_column: root_node.end_position().column,
-                        },
-                        children: Vec::new(),
-                        content: Some(format!("Root node type: {}", root_type)),
-                    };
+                // Parse with error recovery
+                let tree = self
+                    .parser
+                    .parse(&source_code, None)
+                    .context("Failed to parse source code")?;
 
-                    ast.children.push(child_ast);
+                // Store in cache
+                {
+                    let mut cache = TREE_CACHE.write().unwrap();
+
+                    // Check if we need to evict some entries to stay within the cache size limit
+                    let current_size: usize =
+                        cache.iter().map(|(_, (_, content))| content.len()).sum();
+
+                    if current_size + source_code.len() > self.cache_size_limit {
+                        // Simple LRU eviction: remove oldest entries first
+                        let mut keys_to_remove = Vec::new();
+                        let mut entries: Vec<_> = cache.iter().collect();
+                        entries.sort_by_key(|(_, (_, content))| content.len());
+
+                        let mut freed_size = 0;
+                        let needed_size = source_code.len();
+
+                        for (path, (_, content)) in entries {
+                            if current_size + needed_size - freed_size <= self.cache_size_limit {
+                                break;
+                            }
+
+                            freed_size += content.len();
+                            keys_to_remove.push(path.clone());
+                        }
+
+                        // Remove entries after we're done iterating
+                        for path in keys_to_remove {
+                            cache.remove(&path);
+                        }
+                    }
+
+                    cache.insert(path_buf.clone(), (tree.clone(), source_code.clone()));
                 }
 
-                // If tree-sitter worked and found structures, return the AST
+                tree
+            };
+
+            // Try to use tree-sitter queries to extract structured information
+            if let Some(Ok(query)) = self.get_query(&language_name) {
+                // Use tree-sitter query to extract structured information
+                let root_node = tree.root_node();
+                let mut query_cursor = QueryCursor::new();
+
+                // Extract nodes based on the query
+                let mut matches = query_cursor.matches(&query, root_node, source_code.as_bytes());
+
+                // Process matches to extract AST nodes
+                while let Some(match_item) = matches.next() {
+                    let mut node_data: HashMap<String, (Node, String)> = HashMap::new();
+
+                    // Extract each capture data
+                    for capture in match_item.captures {
+                        // Get the capture name
+                        let capture_name = &query.capture_names()[capture.index as usize];
+                        let node_text = capture
+                            .node
+                            .utf8_text(source_code.as_bytes())
+                            .unwrap_or("<unknown>");
+
+                        node_data.insert(
+                            capture_name.to_string(),
+                            (capture.node, node_text.to_string()),
+                        );
+                    }
+
+                    // Find definition nodes (with .def suffix)
+                    let def_entries: Vec<_> = node_data
+                        .iter()
+                        .filter(|(name, _)| name.ends_with(".def"))
+                        .collect();
+
+                    if !def_entries.is_empty() {
+                        let (def_name, (def_node, _)) = def_entries[0];
+                        let def_type = def_name.split('.').next().unwrap_or("unknown");
+                        let start_pos = def_node.start_position();
+                        let end_pos = def_node.end_position();
+
+                        // Find name nodes (with .name suffix)
+                        let name_entries: Vec<_> = node_data
+                            .iter()
+                            .filter(|(name, _)| name.ends_with(".name"))
+                            .collect();
+
+                        let name = if !name_entries.is_empty() {
+                            let (_, (_, name_text)) = name_entries[0];
+                            Some(name_text.clone())
+                        } else {
+                            None
+                        };
+
+                        // Extract body content if available
+                        let body_entries: Vec<_> = node_data
+                            .iter()
+                            .filter(|(name, _)| name.ends_with(".body"))
+                            .collect();
+
+                        let content = if !body_entries.is_empty() {
+                            let (_, (body_node, _)) = body_entries[0];
+                            body_node
+                                .utf8_text(source_code.as_bytes())
+                                .ok()
+                                .map(|s| s.to_string())
+                        } else {
+                            def_node
+                                .utf8_text(source_code.as_bytes())
+                                .ok()
+                                .map(|s| s.to_string())
+                        };
+
+                        // Create child AST node
+                        let mut child_ast = CodeAST {
+                            path: String::new(),
+                            language: language_name.to_string(),
+                            kind: def_type.to_string(),
+                            name,
+                            range: Range {
+                                start_row: start_pos.row,
+                                start_column: start_pos.column,
+                                end_row: end_pos.row,
+                                end_column: end_pos.column,
+                            },
+                            children: Vec::new(),
+                            content: content.map(|s| {
+                                // Truncate content if it's too large
+                                if s.len() > 1000 {
+                                    format!("{}...", &s[..1000])
+                                } else {
+                                    s
+                                }
+                            }),
+                        };
+
+                        // Extract nested structures (for hierarchical AST)
+                        self.extract_nested_structures(
+                            &source_code,
+                            *def_node,
+                            &mut child_ast,
+                            &language_name,
+                            3, // Limit recursion depth
+                        );
+
+                        ast.children.push(child_ast);
+                    }
+                }
+
+                // If tree-sitter query found structures, return the AST
                 if !ast.children.is_empty() {
                     return Ok(ast);
                 }
+            }
 
-                // If tree-sitter query didn't find anything useful, try traversing the syntax tree
-                // Limit to top-level nodes only to reduce size
-                let mut node_children =
-                    self.extract_important_nodes(tree.root_node(), &source_code, &language_name);
+            // If structured query didn't work, fallback to node traversal
+            let tree_node = tree.root_node();
+            let node_children =
+                self.extract_important_nodes(tree_node, &source_code, &language_name);
 
-                // Limit to 30 children max
-                if node_children.len() > 30 {
-                    node_children.truncate(30);
-                }
-
-                if !node_children.is_empty() {
-                    ast.children = node_children;
-                    return Ok(ast);
-                }
+            if !node_children.is_empty() {
+                ast.children = node_children;
+                return Ok(ast);
             }
         }
 
-        // Fallback to simplified regex-based parsing
-        // We're optimizing for conciseness, so limit capture size
+        // If tree-sitter couldn't produce useful results, use simplified extraction
         self.create_simplified_ast(path, &language_name, &source_code)
     }
 
-    /// Extract important nodes from a tree-sitter syntax tree using generic traversal
-    fn extract_important_nodes(
+    /// Extracts nested structures from a node to build a hierarchical AST
+    ///
+    /// # Arguments
+    /// - `source_code` - Source code of the file
+    /// - `node` - Current node to process
+    /// - `parent_ast` - Parent AST node to add children to
+    /// - `language` - Language of the source code
+    /// - `depth` - Recursion depth limit
+    fn extract_nested_structures(
         &self,
-        node: Node<'_>,
-        source: &str,
+        source_code: &str,
+        node: Node,
+        parent_ast: &mut CodeAST,
         language: &str,
-    ) -> Vec<CodeAST> {
-        let mut result = Vec::new();
-        let important_node_types = match language {
-            "rust" => &[
-                "struct_item",
-                "enum_item",
-                "impl_item",
-                "function_item",
-                "trait_item",
-                "mod_item",
-                "macro_definition",
-            ],
-            "javascript" | "typescript" => &[
-                "class_declaration",
-                "function_declaration",
-                "method_definition",
-                "lexical_declaration",
-                "interface_declaration",
-                "export_statement",
-                "variable_declaration", // Add an extra item to match the size of the rust array
-            ],
-            "python" => &[
-                "class_definition",
-                "function_definition",
-                "decorated_definition",
-                "import_statement",
-                "assignment",
-                "expression_statement",
-                "return_statement", // Added entries to match array size
-            ],
-            "go" => &[
-                "function_declaration",
-                "method_declaration",
-                "type_declaration",
-                "struct_type",
-                "interface_type",
-                "package_clause",
-                "import_declaration", // Added to match array size
-            ],
-            "c" | "cpp" => &[
-                "function_definition",
-                "class_specifier",
-                "struct_specifier",
-                "enum_specifier",
-                "namespace_definition",
-                "template_declaration",
-                "declaration", // Added to match
-            ],
-            "java" => &[
-                "class_declaration",
-                "method_declaration",
-                "interface_declaration",
-                "constructor_declaration",
-                "field_declaration",
-                "import_declaration",
-                "package_declaration", // Added to match
-            ],
-            _ => &[
-                "unknown", "unknown", "unknown", "unknown", "unknown", "unknown", "unknown",
-            ], // Dummy values to match size
-        };
-
-        // Check if this node is important
-        if important_node_types.contains(&node.kind()) {
-            self.process_important_node(node, source, language, &mut result);
+        depth: usize,
+    ) {
+        if depth == 0 {
+            return;
         }
 
-        // Recursively process child nodes
+        // Skip if the node is too small
+        if node.end_byte() - node.start_byte() < 10 {
+            return;
+        }
+
         let mut cursor = node.walk();
+
+        // Get nested defined structures based on language
+        let important_node_types = Self::get_important_node_types(language);
+
+        // Process child nodes
         for child in node.children(&mut cursor) {
-            // Skip tokens and trivial nodes
-            if child.child_count() > 0 && !child.is_named() {
-                let child_results = self.extract_important_nodes(child, source, language);
-                result.extend(child_results);
+            let kind = child.kind();
+
+            // Skip insignificant nodes
+            if kind == "(" || kind == ")" || kind == "{" || kind == "}" || kind == ";" {
+                continue;
+            }
+
+            // Process important child nodes
+            if important_node_types.contains(&kind) {
+                let start_pos = child.start_position();
+                let end_pos = child.end_position();
+
+                // Try to find a name for this node
+                let name = self.extract_node_name(&child, source_code);
+
+                // Get content truncated for brevity
+                let content = child.utf8_text(source_code.as_bytes()).ok().map(|s| {
+                    // Truncate content if it's too large
+                    if s.len() > 500 {
+                        format!("{}...", &s[..500])
+                    } else {
+                        s.to_string()
+                    }
+                });
+
+                // Create child AST node
+                let mut child_ast = CodeAST {
+                    path: String::new(),
+                    language: language.to_string(),
+                    kind: kind.to_string(),
+                    name,
+                    range: Range {
+                        start_row: start_pos.row,
+                        start_column: start_pos.column,
+                        end_row: end_pos.row,
+                        end_column: end_pos.column,
+                    },
+                    children: Vec::new(),
+                    content,
+                };
+
+                // Recursively extract nested structures
+                self.extract_nested_structures(
+                    source_code,
+                    child,
+                    &mut child_ast,
+                    language,
+                    depth - 1,
+                );
+
+                parent_ast.children.push(child_ast);
             }
         }
-
-        result
     }
 
-    /// Process an individual node that has been identified as important - optimized for size
-    fn process_important_node(
-        &self,
-        node: Node<'_>,
-        source: &str,
-        language: &str,
-        result: &mut Vec<CodeAST>,
-    ) {
-        // Try to find a name for this node
-        let mut name = None;
+    /// Extracts a name from a node based on common patterns
+    ///
+    /// # Arguments
+    /// - `node` - Node to extract name from
+    /// - `source` - Source code
+    ///
+    /// # Returns
+    /// - `Option<String>` - Extracted name if found
+    fn extract_node_name(&self, node: &Node, source: &str) -> Option<String> {
         let mut cursor = node.walk();
 
         // Look for identifier nodes that might contain the name
@@ -453,25 +864,146 @@ impl CodeParser {
                 || child.kind() == "property_identifier"
             {
                 if let Ok(text) = child.utf8_text(source.as_bytes()) {
-                    name = Some(text.to_string());
-                    break;
+                    return Some(text.to_string());
                 }
             }
         }
 
-        // Extract just the first line of content as a preview
-        let content = node
-            .utf8_text(source.as_bytes())
-            .ok()
-            .and_then(|s| s.lines().next())
-            .map(|first_line| {
-                // Limit content length
-                if first_line.len() > 100 {
-                    format!("{}...", &first_line[..100])
-                } else {
-                    first_line.to_string()
-                }
-            });
+        None
+    }
+
+    /// Gets a list of important node types for a given language
+    ///
+    /// # Arguments
+    /// - `language` - Language to get node types for
+    ///
+    /// # Returns
+    /// - `&[&str]` - Array of important node type names
+    fn get_important_node_types(language: &str) -> &'static [&'static str] {
+        match language {
+            "rust" => &[
+                "struct_item",
+                "enum_item",
+                "impl_item",
+                "function_item",
+                "trait_item",
+                "mod_item",
+                "macro_definition",
+                "const_item",
+                "static_item",
+            ],
+            "javascript" | "typescript" => &[
+                "class_declaration",
+                "function_declaration",
+                "method_definition",
+                "lexical_declaration",
+                "interface_declaration",
+                "type_alias_declaration",
+                "export_statement",
+                "variable_declaration",
+            ],
+            "python" => &[
+                "class_definition",
+                "function_definition",
+                "decorated_definition",
+                "import_statement",
+                "import_from_statement",
+                "assignment",
+            ],
+            "go" => &[
+                "function_declaration",
+                "method_declaration",
+                "type_declaration",
+                "struct_type",
+                "interface_type",
+                "package_clause",
+                "import_declaration",
+            ],
+            "c" | "cpp" => &[
+                "function_definition",
+                "class_specifier",
+                "struct_specifier",
+                "enum_specifier",
+                "namespace_definition",
+                "template_declaration",
+                "declaration",
+            ],
+            "java" => &[
+                "class_declaration",
+                "method_declaration",
+                "interface_declaration",
+                "constructor_declaration",
+                "field_declaration",
+                "package_declaration",
+                "import_declaration",
+                "annotation_type_declaration",
+            ],
+            _ => &[],
+        }
+    }
+
+    /// Extract important nodes from a tree-sitter syntax tree using generic traversal
+    ///
+    /// # Arguments
+    /// - `node` - Root node to traverse
+    /// - `source` - Source code text
+    /// - `language` - Language of the source code
+    ///
+    /// # Returns
+    /// - `Vec<CodeAST>` - List of extracted AST nodes
+    fn extract_important_nodes(
+        &self,
+        node: Node<'_>,
+        source: &str,
+        language: &str,
+    ) -> Vec<CodeAST> {
+        let mut result = Vec::new();
+        let important_node_types = Self::get_important_node_types(language);
+
+        // Check if this node is important
+        if important_node_types.contains(&node.kind()) {
+            self.process_important_node(node, source, language, &mut result);
+        }
+
+        // Recursively process child nodes
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            // Skip tokens and trivial nodes
+            if child.child_count() > 0 && child.is_named() {
+                let child_results = self.extract_important_nodes(child, source, language);
+                result.extend(child_results);
+            }
+        }
+
+        result
+    }
+
+    /// Process an individual node that has been identified as important
+    ///
+    /// # Arguments
+    /// - `node` - Node to process
+    /// - `source` - Source code text
+    /// - `language` - Language of the source code
+    /// - `result` - Vector to add processed nodes to
+    fn process_important_node(
+        &self,
+        node: Node<'_>,
+        source: &str,
+        language: &str,
+        result: &mut Vec<CodeAST>,
+    ) {
+        // Try to find a name for this node
+        let name = self.extract_node_name(&node, source);
+
+        // Extract content (full node text for better context)
+        let content = node.utf8_text(source.as_bytes()).ok().map(|s| {
+            // Truncate content if it's too large
+            if s.len() > 500 {
+                format!("{}...", &s[..500])
+            } else {
+                s.to_string()
+            }
+        });
 
         // Create a minimal AST node for this important node
         let ast_node = CodeAST {
@@ -481,9 +1013,9 @@ impl CodeParser {
             name,
             range: Range {
                 start_row: node.start_position().row,
-                start_column: 0, // Skip column info to save space
+                start_column: node.start_position().column,
                 end_row: node.end_position().row,
-                end_column: 0, // Skip column info to save space
+                end_column: node.end_position().column,
             },
             children: Vec::new(),
             content,
@@ -492,16 +1024,25 @@ impl CodeParser {
         result.push(ast_node);
     }
 
-    /// Fallback method: Create a simplified AST using regex - optimized for size
+    /// Create a simplified AST directly from the source code
+    /// This is a fallback method when tree-sitter parsing doesn't work
+    ///
+    /// # Arguments
+    /// - `path` - Path to the file
+    /// - `language` - Language of the source code
+    /// - `source_code` - Source code text
+    ///
+    /// # Returns
+    /// - `Result<CodeAST>` - Simplified AST or error
     pub fn create_simplified_ast(
         &self,
         path: &Path,
         language: &str,
         source_code: &str,
     ) -> Result<CodeAST> {
-        // Limit input size for regex processing
+        // Limit input size for processing
         let limited_source = if source_code.len() > 50_000 {
-            // Only process first ~50KB to avoid regex performance issues
+            // Only process first ~50KB for efficiency
             let truncated: String = source_code.chars().take(50_000).collect();
             truncated
         } else {
@@ -523,309 +1064,115 @@ impl CodeParser {
                 start_row: 0,
                 start_column: 0,
                 end_row: lines.len(),
-                end_column: 0, // Skip end column to save space
+                end_column: 0,
             },
             children: Vec::new(),
             content: None,
         };
 
-        // Extract top-level structures based on language, limit to most relevant ones
-        let mut children = match language {
-            "rust" => self.extract_rust_constructs(&limited_source),
-            "javascript" | "typescript" => self.extract_js_constructs(&limited_source),
-            "python" => self.extract_python_constructs(&limited_source),
-            _ => self.extract_generic_constructs(&limited_source),
-        };
-
-        // Limit number of children to reduce overall size
-        if children.len() > 30 {
-            children.truncate(30);
-        }
-
-        ast.children = children;
-
-        Ok(ast)
-    }
-
-    // Helper to create a minimal AST node from a regex match
-    fn create_ast_node(&self, params: AstNodeParams) -> CodeAST {
-        CodeAST {
-            path: String::new(), // Not relevant for child nodes
-            language: params.language.to_string(),
-            kind: params.kind.to_string(),
-            name: Some(params.capture.to_string()),
-            range: Range {
-                start_row: params.line_num,
-                start_column: params.match_start, // Use match column info
-                end_row: params.line_num,
-                end_column: params.match_end, // Use match column info
-            },
-            children: Vec::new(),
-            // Only include a short preview of the line
-            content: if params.line.len() > 100 {
-                Some(format!("{}...", &params.line[..100]))
-            } else {
-                Some(params.line.to_string())
-            },
-        }
-    }
-
-    // Extract Rust constructs using regex (fallback method)
-    fn extract_rust_constructs(&self, source: &str) -> Vec<CodeAST> {
-        let mut constructs = Vec::new();
-        let lines: Vec<&str> = source.lines().collect();
-
-        // Process each line to find Rust constructs
+        // Extract code blocks and declarations with line numbers
         for (line_num, line) in lines.iter().enumerate() {
-            // Check for structs
-            if let Some(captures) = RUST_STRUCT_RE.captures(line) {
-                if let Some(name_match) = captures.get(1) {
-                    constructs.push(self.create_ast_node(AstNodeParams {
-                        language: "rust",
-                        kind: "struct",
-                        line_num,
-                        line,
-                        capture: name_match.as_str(),
-                        match_start: name_match.start(),
-                        match_end: name_match.end(),
-                    }));
-                }
+            let trimmed = line.trim();
+
+            // Skip empty lines and simple statements
+            if trimmed.is_empty() || (trimmed.len() < 5 && !trimmed.contains('{')) {
+                continue;
             }
 
-            // Check for enums
-            if let Some(captures) = RUST_ENUM_RE.captures(line) {
-                if let Some(name_match) = captures.get(1) {
-                    constructs.push(self.create_ast_node(AstNodeParams {
-                        language: "rust",
-                        kind: "enum",
-                        line_num,
-                        line,
-                        capture: name_match.as_str(),
-                        match_start: name_match.start(),
-                        match_end: name_match.end(),
-                    }));
+            // Identify potential code blocks and declarations by common patterns
+            if trimmed.contains(" fn ")
+                || trimmed.contains("func ")
+                || trimmed.contains(" class ")
+                || trimmed.contains(" struct ")
+                || trimmed.contains(" trait ")
+                || trimmed.contains(" impl ")
+                || trimmed.contains(" interface ")
+                || trimmed.contains(" def ")
+                || trimmed.contains(" type ")
+                || trimmed.starts_with("fn ")
+                || trimmed.starts_with("class ")
+                || trimmed.starts_with("struct ")
+                || trimmed.starts_with("trait ")
+                || trimmed.starts_with("impl ")
+                || trimmed.starts_with("interface ")
+                || trimmed.starts_with("def ")
+                || trimmed.starts_with("type ")
+                || trimmed.starts_with("function ")
+                || trimmed.starts_with("async ")
+            {
+                // Determine the kind of node
+                let kind = if trimmed.contains(" fn ")
+                    || trimmed.contains("func ")
+                    || trimmed.starts_with("fn ")
+                    || trimmed.contains(" def ")
+                    || trimmed.starts_with("def ")
+                    || trimmed.starts_with("function ")
+                    || trimmed.contains("async ")
+                {
+                    "function"
+                } else if trimmed.contains(" class ") || trimmed.starts_with("class ") {
+                    "class"
+                } else if trimmed.contains(" struct ") || trimmed.starts_with("struct ") {
+                    "struct"
+                } else if trimmed.contains(" trait ") || trimmed.starts_with("trait ") {
+                    "trait"
+                } else if trimmed.contains(" impl ") || trimmed.starts_with("impl ") {
+                    "impl"
+                } else if trimmed.contains(" interface ") || trimmed.starts_with("interface ") {
+                    "interface"
+                } else if trimmed.contains(" type ") || trimmed.starts_with("type ") {
+                    "type"
+                } else {
+                    "block"
+                };
+
+                // Extract a simple name from the line by splitting on spaces and symbols
+                let words: Vec<&str> = trimmed.split_whitespace().collect();
+                let mut name = None;
+
+                // Try to find a name based on the kind (position after keyword)
+                if words.len() > 1 {
+                    let name_word_idx = match kind {
+                        "function" => {
+                            if trimmed.contains(" fn ") {
+                                words.iter().position(|&w| w == "fn").map(|p| p + 1)
+                            } else if trimmed.contains(" def ") {
+                                words.iter().position(|&w| w == "def").map(|p| p + 1)
+                            } else if trimmed.contains("func ") {
+                                words.iter().position(|&w| w == "func").map(|p| p + 1)
+                            } else if trimmed.contains(" function ") {
+                                words.iter().position(|&w| w == "function").map(|p| p + 1)
+                            } else {
+                                Some(1) // Assume name is the second word
+                            }
+                        }
+                        "class" => words.iter().position(|&w| w == "class").map(|p| p + 1),
+                        "struct" => words.iter().position(|&w| w == "struct").map(|p| p + 1),
+                        "trait" => words.iter().position(|&w| w == "trait").map(|p| p + 1),
+                        "impl" => words.iter().position(|&w| w == "impl").map(|p| p + 1),
+                        "interface" => words.iter().position(|&w| w == "interface").map(|p| p + 1),
+                        "type" => words.iter().position(|&w| w == "type").map(|p| p + 1),
+                        _ => Some(1),
+                    };
+
+                    if let Some(idx) = name_word_idx {
+                        if idx < words.len() {
+                            // Clean up the name (remove trailing colons, brackets, etc.)
+                            name = Some(
+                                words[idx]
+                                    .trim_end_matches(|c| ",:;<>(){}".contains(c))
+                                    .to_string(),
+                            );
+                        }
+                    }
                 }
-            }
 
-            // Check for impls
-            if let Some(captures) = RUST_IMPL_RE.captures(line) {
-                if let Some(name_match) = captures.get(1) {
-                    constructs.push(self.create_ast_node(AstNodeParams {
-                        language: "rust",
-                        kind: "impl",
-                        line_num,
-                        line,
-                        capture: name_match.as_str(),
-                        match_start: name_match.start(),
-                        match_end: name_match.end(),
-                    }));
-                }
-            }
-
-            // Check for functions
-            if let Some(captures) = RUST_FN_RE.captures(line) {
-                if let Some(name_match) = captures.get(1) {
-                    constructs.push(self.create_ast_node(AstNodeParams {
-                        language: "rust",
-                        kind: "function",
-                        line_num,
-                        line,
-                        capture: name_match.as_str(),
-                        match_start: name_match.start(),
-                        match_end: name_match.end(),
-                    }));
-                }
-            }
-
-            // Check for traits
-            if let Some(captures) = RUST_TRAIT_RE.captures(line) {
-                if let Some(name_match) = captures.get(1) {
-                    constructs.push(self.create_ast_node(AstNodeParams {
-                        language: "rust",
-                        kind: "trait",
-                        line_num,
-                        line,
-                        capture: name_match.as_str(),
-                        match_start: name_match.start(),
-                        match_end: name_match.end(),
-                    }));
-                }
-            }
-
-            // Check for modules
-            if let Some(captures) = RUST_MOD_RE.captures(line) {
-                if let Some(name_match) = captures.get(1) {
-                    constructs.push(self.create_ast_node(AstNodeParams {
-                        language: "rust",
-                        kind: "module",
-                        line_num,
-                        line,
-                        capture: name_match.as_str(),
-                        match_start: name_match.start(),
-                        match_end: name_match.end(),
-                    }));
-                }
-            }
-        }
-
-        constructs
-    }
-
-    // Extract JavaScript/TypeScript constructs using regex (fallback method)
-    fn extract_js_constructs(&self, source: &str) -> Vec<CodeAST> {
-        let mut constructs = Vec::new();
-        let lines: Vec<&str> = source.lines().collect();
-
-        // Process each line to find JS/TS constructs
-        for (line_num, line) in lines.iter().enumerate() {
-            // Check for classes
-            if let Some(captures) = JS_CLASS_RE.captures(line) {
-                if let Some(name_match) = captures.get(1) {
-                    constructs.push(self.create_ast_node(AstNodeParams {
-                        language: "javascript",
-                        kind: "class",
-                        line_num,
-                        line,
-                        capture: name_match.as_str(),
-                        match_start: name_match.start(),
-                        match_end: name_match.end(),
-                    }));
-                }
-            }
-
-            // Check for functions
-            if let Some(captures) = JS_FUNCTION_RE.captures(line) {
-                if let Some(name_match) = captures.get(1) {
-                    constructs.push(self.create_ast_node(AstNodeParams {
-                        language: "javascript",
-                        kind: "function",
-                        line_num,
-                        line,
-                        capture: name_match.as_str(),
-                        match_start: name_match.start(),
-                        match_end: name_match.end(),
-                    }));
-                }
-            }
-
-            // Check for arrow functions
-            if let Some(captures) = JS_ARROW_FN_RE.captures(line) {
-                if let Some(name_match) = captures.get(1) {
-                    constructs.push(self.create_ast_node(AstNodeParams {
-                        language: "javascript",
-                        kind: "arrow_function",
-                        line_num,
-                        line,
-                        capture: name_match.as_str(),
-                        match_start: name_match.start(),
-                        match_end: name_match.end(),
-                    }));
-                }
-            }
-
-            // Check for interfaces (TypeScript)
-            if let Some(captures) = JS_INTERFACE_RE.captures(line) {
-                if let Some(name_match) = captures.get(1) {
-                    constructs.push(self.create_ast_node(AstNodeParams {
-                        language: "javascript",
-                        kind: "interface",
-                        line_num,
-                        line,
-                        capture: name_match.as_str(),
-                        match_start: name_match.start(),
-                        match_end: name_match.end(),
-                    }));
-                }
-            }
-
-            // Check for types (TypeScript)
-            if let Some(captures) = JS_TYPE_RE.captures(line) {
-                if let Some(name_match) = captures.get(1) {
-                    constructs.push(self.create_ast_node(AstNodeParams {
-                        language: "javascript",
-                        kind: "type",
-                        line_num,
-                        line,
-                        capture: name_match.as_str(),
-                        match_start: name_match.start(),
-                        match_end: name_match.end(),
-                    }));
-                }
-            }
-        }
-
-        constructs
-    }
-
-    // Extract Python constructs using regex (fallback method)
-    fn extract_python_constructs(&self, source: &str) -> Vec<CodeAST> {
-        let mut constructs = Vec::new();
-        let lines: Vec<&str> = source.lines().collect();
-
-        // Process each line to find Python constructs
-        for (line_num, line) in lines.iter().enumerate() {
-            // Check for classes
-            if let Some(captures) = PY_CLASS_RE.captures(line) {
-                if let Some(name_match) = captures.get(1) {
-                    constructs.push(self.create_ast_node(AstNodeParams {
-                        language: "python",
-                        kind: "class",
-                        line_num,
-                        line,
-                        capture: name_match.as_str(),
-                        match_start: name_match.start(),
-                        match_end: name_match.end(),
-                    }));
-                }
-            }
-
-            // Check for functions
-            if let Some(captures) = PY_FUNCTION_RE.captures(line) {
-                if let Some(name_match) = captures.get(1) {
-                    constructs.push(self.create_ast_node(AstNodeParams {
-                        language: "python",
-                        kind: "function",
-                        line_num,
-                        line,
-                        capture: name_match.as_str(),
-                        match_start: name_match.start(),
-                        match_end: name_match.end(),
-                    }));
-                }
-            }
-
-            // Check for async functions
-            if let Some(captures) = PY_ASYNC_FN_RE.captures(line) {
-                if let Some(name_match) = captures.get(1) {
-                    constructs.push(self.create_ast_node(AstNodeParams {
-                        language: "python",
-                        kind: "async_function",
-                        line_num,
-                        line,
-                        capture: name_match.as_str(),
-                        match_start: name_match.start(),
-                        match_end: name_match.end(),
-                    }));
-                }
-            }
-        }
-
-        constructs
-    }
-
-    // Extract generic code constructs (fallback method)
-    fn extract_generic_constructs(&self, source: &str) -> Vec<CodeAST> {
-        let mut constructs = Vec::new();
-        let lines: Vec<&str> = source.lines().collect();
-
-        // Process each line to find generic code blocks
-        for (line_num, line) in lines.iter().enumerate() {
-            if GENERIC_BLOCK_RE.is_match(line) {
-                constructs.push(CodeAST {
+                // Create AST node for this code construct
+                let ast_node = CodeAST {
                     path: String::new(),
-                    language: "generic".to_string(),
-                    kind: "block".to_string(),
-                    name: None,
+                    language: language.to_string(),
+                    kind: kind.to_string(),
+                    name,
                     range: Range {
                         start_row: line_num,
                         start_column: 0,
@@ -834,21 +1181,35 @@ impl CodeParser {
                     },
                     children: Vec::new(),
                     content: Some(line.to_string()),
-                });
+                };
+
+                ast.children.push(ast_node);
             }
         }
 
-        constructs
+        // Limit number of children to reduce overall size
+        if ast.children.len() > 30 {
+            ast.children.truncate(30);
+        }
+
+        Ok(ast)
     }
 
-    /// Use search tools to find relevant files for a query, with efficiency optimizations
+    /// Use search tools to find relevant files for a query
+    ///
+    /// # Arguments
+    /// - `root_dir` - Root directory to search in
+    /// - `query` - User query to determine relevant files
+    ///
+    /// # Returns
+    /// - `Result<Vec<PathBuf>>` - List of relevant file paths
     fn find_relevant_files(&self, root_dir: &Path, query: &str) -> Result<Vec<PathBuf>> {
         use crate::tools::fs::search::SearchTools;
 
         let mut results = Vec::new();
 
         // Hard limit on number of files to process
-        let max_files = 25; // Reduced from 50 to limit AST size
+        let max_files = 25;
 
         // Filter to respect gitignore patterns using the ignore crate
         let filter_gitignore = |path: &Path| -> bool {
@@ -865,7 +1226,8 @@ impl CodeParser {
         // Start with more targeted approach - look for specific files first
         // Extract specific file mentions from query (like "check file.rs" or "in models.rs")
         let file_regex =
-            Regex::new(r"(?:file|in|check|view|read)\s+([a-zA-Z0-9_\-\.]+\.[a-zA-Z0-9]+)").unwrap();
+            regex::Regex::new(r"(?:file|in|check|view|read)\s+([a-zA-Z0-9_\-\.]+\.[a-zA-Z0-9]+)")
+                .unwrap();
         let mut specific_files = Vec::new();
 
         for cap in file_regex.captures_iter(query) {
@@ -967,6 +1329,12 @@ impl CodeParser {
     }
 
     /// Extract search terms from a query for grep search
+    ///
+    /// # Arguments
+    /// - `query` - User query string
+    ///
+    /// # Returns
+    /// - `Vec<String>` - Extracted search terms
     pub fn extract_search_terms(&self, query: &str) -> Vec<String> {
         let mut terms = Vec::new();
 
@@ -1020,23 +1388,43 @@ impl CodeParser {
     }
 
     /// Parse an entire codebase and generate ASTs for selected files
+    ///
+    /// # Arguments
+    /// - `root_dir` - Root directory of the codebase
+    /// - `query` - User query to determine relevant files
+    ///
+    /// # Returns
+    /// - `Result<Vec<CodeAST>>` - List of ASTs for relevant files
     pub fn parse_codebase(&mut self, root_dir: &Path, query: &str) -> Result<Vec<CodeAST>> {
-        let mut asts = Vec::new();
-
         // Get files relevant to the query
         let relevant_files = self.find_relevant_files(root_dir, query)?;
 
-        // Parse each file
-        for path in relevant_files {
-            if let Ok(ast) = self.parse_file(&path) {
-                asts.push(ast);
-            }
-        }
+        // Use parallel processing for better performance
+        let asts: Vec<Result<CodeAST>> = relevant_files
+            .par_iter()
+            .map(|path| {
+                let mut local_parser = CodeParser::new()?;
+                local_parser.parse_file(path)
+            })
+            .collect();
 
-        Ok(asts)
+        // Filter out errors and collect successful ASTs
+        let valid_asts: Vec<CodeAST> = asts
+            .into_iter()
+            .filter_map(|ast_result| ast_result.ok())
+            .collect();
+
+        Ok(valid_asts)
     }
 
-    /// Generate a concise AST optimized for LLM consumption, respecting API size limits
+    /// Generate a structured AST optimized for LLM consumption
+    ///
+    /// # Arguments
+    /// - `root_dir` - Root directory of the codebase
+    /// - `query` - User query to determine relevant files
+    ///
+    /// # Returns
+    /// - `Result<String>` - Structured AST as a string
     pub fn generate_llm_friendly_ast(&mut self, root_dir: &Path, query: &str) -> Result<String> {
         // Parse the relevant parts of the codebase
         let mut asts = self.parse_codebase(root_dir, query)?;
@@ -1062,113 +1450,192 @@ impl CodeParser {
             asts.truncate(10);
         }
 
-        // Limit content size within each AST node
-        for ast in &mut asts {
-            // Limit child nodes to most important ones (max 20 per file)
-            if ast.children.len() > 20 {
-                ast.children.truncate(20);
-            }
+        // Create a structured code map that shows the hierarchy of code
+        let mut structured_output = String::new();
+        structured_output.push_str(&format!(
+            "# Code Structure Analysis for Query: \"{}\"
 
-            // Truncate content for each child node
-            for child in &mut ast.children {
-                if let Some(content) = &child.content {
-                    if content.len() > 500 {
-                        let truncated: String = content.chars().take(500).collect();
-                        child.content = Some(format!("{}... [truncated]", truncated));
-                    }
-                }
-            }
-        }
-
-        // Generate a summary of the AST data
-        let mut summary = String::new();
-        summary.push_str(&format!(
-            "# Code Structure Analysis for Query: \"{}\"\n\n",
+",
             query
         ));
-        summary.push_str(&format!(
-            "Found {} relevant files (showing {} most relevant). Key structures:\n\n",
-            asts.len(),
+
+        // Add a hierarchical breakdown of each file
+        structured_output.push_str(&format!(
+            "## Codebase Structure Overview
+
+{} relevant files found. Showing hierarchical breakdown:
+
+",
             asts.len()
         ));
 
-        // Add a simple text summary of the most important structures
+        // Create a structured code map
         for ast in &asts {
-            summary.push_str(&format!("## File: {}\n", ast.path));
-            summary.push_str(&format!("Language: {}\n\n", ast.language));
+            // Add file header
+            structured_output.push_str(&format!("### File: {}\n", ast.path));
+            structured_output.push_str(&format!("Language: {}\n\n", ast.language));
 
-            for child in &ast.children {
+            // Sort children by line number for logical ordering
+            let mut ordered_children = ast.children.clone();
+            ordered_children.sort_by_key(|child| child.range.start_row);
+
+            // Track seen types to avoid duplication in the output
+            let mut seen_types = HashSet::new();
+
+            // Add each code structure with line numbers
+            for child in &ordered_children {
                 let name = child.name.as_deref().unwrap_or("anonymous");
-                summary.push_str(&format!(
-                    "- {} `{}` at line {}\n",
+
+                // Skip if we've already seen this exact type+name combination
+                let type_name_key = format!("{}:{}", child.kind, name);
+                if seen_types.contains(&type_name_key) {
+                    continue;
+                }
+                seen_types.insert(type_name_key);
+
+                structured_output.push_str(&format!(
+                    "- {} `{}` (line {})\n",
                     child.kind,
                     name,
                     child.range.start_row + 1
                 ));
 
-                // Include a short snippet of the content if available
+                // Add a code snippet if available
                 if let Some(content) = &child.content {
-                    // Only take first line for brevity
-                    let first_line = content.lines().next().unwrap_or("");
-                    if !first_line.is_empty() {
-                        summary.push_str(&format!(
-                            "   ```{}\n   {}\n   ```\n",
-                            ast.language, first_line
-                        ));
+                    // Get just the first line or a limited preview
+                    let preview = content.lines().next().unwrap_or("");
+                    if !preview.is_empty() {
+                        structured_output
+                            .push_str(&format!("  ```{}\n  {}\n  ```\n", ast.language, preview));
+                    }
+                }
+
+                // Add nested children if any (for hierarchical display)
+                if !child.children.is_empty() {
+                    for nested_child in &child.children {
+                        if let Some(nested_name) = &nested_child.name {
+                            structured_output.push_str(&format!(
+                                "  - {} `{}` (line {})\n",
+                                nested_child.kind,
+                                nested_name,
+                                nested_child.range.start_row + 1
+                            ));
+                        }
                     }
                 }
             }
 
-            summary.push('\n');
+            structured_output.push('\n');
         }
 
-        // Create a simplified JSON representation with just the essential information
-        let simplified_asts: Vec<serde_json::Value> = asts
-            .iter()
-            .map(|ast| {
-                let simplified_children: Vec<serde_json::Value> = ast
-                    .children
-                    .iter()
-                    .map(|child| {
-                        serde_json::json!({
-                            "kind": child.kind,
-                            "name": child.name,
-                            "line": child.range.start_row + 1
-                        })
-                    })
-                    .collect();
+        // Add a table of all identified symbols across files
+        structured_output.push_str("## Symbol Table\n\n");
+        structured_output.push_str("| Type | Name | File | Line |\n");
+        structured_output.push_str("|------|------|------|------|\n");
 
-                serde_json::json!({
-                    "path": ast.path,
-                    "language": ast.language,
-                    "entities": simplified_children
-                })
-            })
-            .collect();
+        // Collect all symbols for the table
+        let mut all_symbols = Vec::new();
+        for ast in &asts {
+            for child in &ast.children {
+                if let Some(name) = &child.name {
+                    // Skip symbols with generic or empty names
+                    if name == "anonymous" || name.is_empty() {
+                        continue;
+                    }
 
-        // Add the simplified JSON representation
-        summary.push_str("\n## Simplified Code Structure:\n\n```json\n");
-        let simplified_json = serde_json::to_string_pretty(&simplified_asts)
-            .context("Failed to serialize simplified AST to JSON")?;
-        summary.push_str(&simplified_json);
-        summary.push_str("\n```\n");
+                    all_symbols.push((
+                        child.kind.clone(),
+                        name.clone(),
+                        ast.path.clone(),
+                        child.range.start_row + 1,
+                    ));
+                }
+            }
+        }
 
-        // Add full AST data in JSON format for more detailed analysis
-        summary.push_str("\n## Full AST Data (JSON):\n\n```json\n");
-        let full_json =
-            serde_json::to_string_pretty(&asts).context("Failed to serialize full AST to JSON")?;
-        summary.push_str(&full_json);
-        summary.push_str("\n```\n");
+        // Sort symbols by type and name
+        all_symbols.sort_by(|a, b| {
+            let type_cmp = a.0.cmp(&b.0);
+            if type_cmp == std::cmp::Ordering::Equal {
+                a.1.cmp(&b.1)
+            } else {
+                type_cmp
+            }
+        });
 
-        Ok(summary)
+        // Add symbols to table
+        for (kind, name, file, line) in all_symbols {
+            // Extract just the file name for brevity
+            let file_name = Path::new(&file)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+
+            structured_output.push_str(&format!(
+                "| {} | `{}` | {} | {} |\n",
+                kind, name, file_name, line
+            ));
+        }
+
+        // Add a section for relationships between symbols
+        structured_output.push_str("\n## Symbol Relationships\n\n");
+        structured_output.push_str("This section shows relationships between code elements:\n\n");
+
+        // Extract relationships from the AST (like inheritance, implementation, etc.)
+        let mut relationships = Vec::new();
+
+        for ast in &asts {
+            // For Rust, look for impl blocks
+            if ast.language == "rust" {
+                for child in &ast.children {
+                    if child.kind == "impl" {
+                        if let Some(name) = &child.name {
+                            relationships.push(format!(
+                                "- `{}` implements trait/functionality for type `{}`",
+                                ast.path, name
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // For other languages, look for inheritance/implementation patterns
+            // (This would be expanded based on language-specific patterns)
+        }
+
+        if !relationships.is_empty() {
+            for relationship in relationships {
+                structured_output.push_str(&format!("{}\n", relationship));
+            }
+        } else {
+            structured_output.push_str("No clear relationships detected between symbols.\n");
+        }
+
+        // Add the full AST data in JSON format for programmatic use
+        // This is limited to avoid overwhelming the LLM with too much data
+        structured_output.push_str("\n## AST Summary\n\n");
+        // Instead of full JSON, provide a summary of what's available
+        structured_output.push_str(&format!(
+            "Analyzed {} files containing {} total code structures.\n",
+            asts.len(),
+            asts.iter().map(|ast| ast.children.len()).sum::<usize>()
+        ));
+
+        Ok(structured_output)
     }
 
     /// Determine which files to parse based on user query
+    ///
+    /// # Arguments
+    /// - `query` - User query string
+    ///
+    /// # Returns
+    /// - `Vec<String>` - List of glob patterns for relevant files
     pub fn determine_relevant_files(&self, query: &str) -> Vec<String> {
         let mut patterns = Vec::new();
 
         // Look for specific file mentions in the query
-        let file_regex = Regex::new(r#"['"]([^'"]+\.\w+)['"]"#).unwrap();
+        let file_regex = regex::Regex::new(r#"['"](\S+\.\w+)['"]"#).unwrap();
         for cap in file_regex.captures_iter(query) {
             if let Some(file_match) = cap.get(1) {
                 let file_pattern = format!("**/{}", file_match.as_str());

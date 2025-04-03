@@ -103,6 +103,8 @@ impl App {
             show_intermediate_steps: true, // Default to showing intermediate steps
             show_shortcuts_hint: true,     // Default to showing shortcut hints
             show_detailed_shortcuts: false, // Default to not showing detailed shortcuts
+            // Special command state
+            parse_code_mode: false, // Not in parse_code mode initially
             // Initialize cursor position
             cursor_position: 0, // Start at the beginning of the input
             // Initialize task tracking
@@ -339,6 +341,37 @@ impl CommandHandler for App {
                     self.messages
                         .push(format!("Error summarizing history: {}", e));
                 }
+                true
+            }
+            "/parse_code" => {
+                // Only allow in debug mode
+                if !self.debug_messages {
+                    self.messages.push("The /parse_code command is only available in debug mode. Use /debug to enable debug mode first.".into());
+                    return true;
+                }
+
+                // Get current working directory (unused now but might be needed later)
+                let _cwd = self
+                    .current_working_dir
+                    .clone()
+                    .unwrap_or_else(|| String::from("."));
+
+                // Prompt the user to enter a file path
+                self.messages
+                    .push("Enter the path to the file you want to parse:".into());
+
+                // When user replies, we'll use the CodeParser in query_model method
+                self.input.clear();
+                self.textarea.select_all();
+                self.textarea.delete_line_by_end();
+                self.command_mode = false;
+                self.parse_code_mode = true;
+
+                self.log(
+                    "Parse code command initiated - waiting for file path input",
+                    &[],
+                );
+
                 true
             }
             "/exit" => {
@@ -1235,5 +1268,9 @@ impl AgentManager for App {
         }
 
         result
+    }
+
+    fn current_working_dir(&self) -> Option<&str> {
+        self.current_working_dir.as_deref()
     }
 }

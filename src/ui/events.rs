@@ -527,7 +527,15 @@ fn handle_enter_key(
 
                 // Now execute the actual query and get the final result
                 // This ensures all tool messages are displayed BEFORE we get the final result
-                let result = app.query_model(&input);
+                let result = match app.parse_code_mode {
+                    // If we're in parse_code mode, this input is a file path to parse
+                    true => {
+                        app.parse_code_mode = false; // Turn off the mode after processing
+                        app.handle_parse_code_command(&input)
+                    }
+                    // Otherwise, normal query
+                    false => app.query_model(&input),
+                };
 
                 // Final phase - make sure we've displayed all tool messages
                 let final_timeout = Duration::from_millis(500);

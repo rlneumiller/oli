@@ -143,6 +143,8 @@ pub struct App {
     pub show_intermediate_steps: bool, // Show intermediate steps like tool use and file reads
     pub show_shortcuts_hint: bool, // Show the shortcut hint below input box
     pub show_detailed_shortcuts: bool, // Show all shortcuts when ? is pressed
+    // State for special commands
+    pub parse_code_mode: bool, // Flag to indicate we're in parse_code command mode waiting for file path
     // Cursor position in input - kept for backward compatibility
     pub cursor_position: usize, // Current cursor position in the input string
     // Task tracking

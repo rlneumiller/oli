@@ -1,4 +1,6 @@
 use oli_tui::tools::code::parser::CodeParser;
+use std::fs;
+use tempfile::tempdir;
 
 #[test]
 fn test_generate_llm_friendly_ast() {
@@ -46,9 +48,9 @@ fn main() {
     assert!(ast_data.contains("test.rs"));
     assert!(ast_data.contains("TestStruct"));
 
-    // Verify JSON data is included
-    assert!(ast_data.contains("Full AST Data (JSON):"));
-    assert!(ast_data.contains("```json"));
+    // Verify the new AST Summary format is used
+    assert!(ast_data.contains("AST Summary"));
+    assert!(ast_data.contains("Analyzed"));
 
     // Clean up
     temp_dir.close().unwrap();
@@ -194,6 +196,151 @@ fn main() {
         !struct_nodes.is_empty() || !function_nodes.is_empty(),
         "Expected to find either struct or function nodes"
     );
+
+    // Clean up
+    temp_dir.close().unwrap();
+}
+
+#[test]
+fn test_parse_javascript_file() {
+    // Skip if SKIP_INTEGRATION is set (useful for CI/CD environments)
+    if std::env::var("SKIP_INTEGRATION").is_ok() {
+        return;
+    }
+
+    // Create a temporary directory for test files
+    let temp_dir = tempdir().unwrap();
+    let file_path = temp_dir.path().join("test.js");
+
+    // Create test JavaScript file with various language constructs
+    fs::write(
+        &file_path,
+        r#"
+class TestClass {
+    constructor(value) {
+        this.value = value;
+    }
+
+    getValue() {
+        return this.value;
+    }
+}
+
+function testFunction() {
+    return "test";
+}
+
+const arrowFunc = () => {
+    return "arrow";
+};
+
+const obj = {
+    method() {
+        return this;
+    }
+};
+
+export const exportedVar = 42;
+        "#,
+    )
+    .unwrap();
+
+    let mut parser = CodeParser::new().unwrap();
+    let ast = parser.parse_file(&file_path).unwrap();
+
+    // Basic AST validation
+    assert_eq!(ast.language, "javascript");
+    assert_eq!(ast.kind, "file");
+
+    // Verify it found our key structures (either with tree-sitter specific names or fallback names)
+    let child_kinds: Vec<_> = ast.children.iter().map(|c| c.kind.as_str()).collect();
+    assert!(
+        child_kinds.contains(&"class") || child_kinds.contains(&"class_declaration"),
+        "Expected to find class declarations"
+    );
+
+    // Clean up
+    temp_dir.close().unwrap();
+}
+
+#[test]
+fn test_extract_search_terms() {
+    let parser = CodeParser::new().unwrap();
+
+    // Test extraction of code identifiers
+    let terms = parser.extract_search_terms("Find the TestStruct implementation");
+    assert!(terms.contains(&"TestStruct".to_string()));
+
+    // Test with function names
+    let terms = parser.extract_search_terms("How does the parse_file function work?");
+    assert!(terms.contains(&"parse_file".to_string()));
+
+    // Test with multiple terms
+    let terms = parser.extract_search_terms("Show me how CodeParser uses tree_sitter");
+    assert!(terms.contains(&"CodeParser".to_string()));
+    assert!(terms.contains(&"tree_sitter".to_string()));
+
+    // Test that common words are filtered
+    let terms = parser.extract_search_terms("Show me the function and class definitions");
+    assert!(!terms.contains(&"function".to_string()));
+    assert!(!terms.contains(&"class".to_string()));
+}
+
+#[test]
+fn test_determine_relevant_files() {
+    let parser = CodeParser::new().unwrap();
+
+    // Test with file mentions
+    let patterns = parser.determine_relevant_files("Check 'main.rs' for the entry point");
+    assert!(patterns.iter().any(|p| p.contains("main.rs")));
+
+    // Test language-specific patterns
+    let patterns = parser.determine_relevant_files("Show me the Rust code structure");
+    assert!(patterns.iter().any(|p| p.ends_with(".rs")));
+
+    let patterns = parser.determine_relevant_files("Analyze JavaScript components");
+    assert!(
+        patterns.iter().any(|p| p.ends_with(".js")) || patterns.iter().any(|p| p.ends_with(".jsx"))
+    );
+
+    let patterns = parser.determine_relevant_files("Parse Python classes");
+    assert!(patterns.iter().any(|p| p.ends_with(".py")));
+}
+
+#[test]
+fn test_parallel_processing() {
+    // Skip if SKIP_INTEGRATION is set
+    if std::env::var("SKIP_INTEGRATION").is_ok() {
+        return;
+    }
+
+    let temp_dir = tempdir().unwrap();
+
+    // Create multiple sample files
+    let file1_path = temp_dir.path().join("file1.rs");
+    fs::write(&file1_path, "struct File1 { field: i32 }").unwrap();
+
+    let file2_path = temp_dir.path().join("file2.rs");
+    fs::write(&file2_path, "struct File2 { field: i32 }").unwrap();
+
+    let file3_path = temp_dir.path().join("file3.rs");
+    fs::write(&file3_path, "struct File3 { field: i32 }").unwrap();
+
+    // Create subdirectory with a file
+    let subdir_path = temp_dir.path().join("subdir");
+    fs::create_dir(&subdir_path).unwrap();
+    let file4_path = subdir_path.join("file4.rs");
+    fs::write(&file4_path, "struct File4 { field: i32 }").unwrap();
+
+    let mut parser = CodeParser::new().unwrap();
+    let query = "Find all structs";
+
+    // This test primarily verifies that parallel processing doesn't crash
+    // The actual number of files found might vary based on implementation details
+    let asts = parser.parse_codebase(temp_dir.path(), query).unwrap();
+
+    // We should find at least some files
+    assert!(!asts.is_empty(), "Expected to find at least some files");
 
     // Clean up
     temp_dir.close().unwrap();
