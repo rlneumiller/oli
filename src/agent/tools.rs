@@ -65,6 +65,9 @@ pub struct BashParams {
 pub struct ParseCodeParams {
     pub root_dir: String,
     pub query: String,
+    pub max_file_size: Option<usize>,
+    pub max_files: Option<usize>,
+    pub max_depth: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,17 +184,19 @@ impl ToolCall {
                 Ok(result)
             }
             ToolCall::ParseCode(params) => {
-                let mut parser = CodeParser::new()?;
+                let mut parser = CodeParser::with_config(
+                    None, // Use default cache size
+                    params.max_file_size,
+                    params.max_files,
+                    params.max_depth,
+                )?;
                 let root_dir = PathBuf::from(&params.root_dir);
 
                 // Generate AST data optimized for LLM consumption
                 let ast_data = parser.generate_llm_friendly_ast(&root_dir, &params.query)?;
 
-                // Return the AST data as JSON
-                Ok(format!(
-                    "Code structure parsed successfully. AST data:\n\n{}",
-                    ast_data
-                ))
+                // Return the AST data in markdown format
+                Ok(ast_data)
             }
         }
     }
@@ -342,17 +347,29 @@ pub fn get_tool_definitions() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "ParseCode",
-            "description": "Parses codebase and generates AST for LLM understanding",
+            "description": "Parses individual files, lists of files, or entire codebases to generate structural understanding. The tool analyzes source code and produces a clean, accurate Abstract Syntax Tree (AST) optimized for LLM consumption. It can handle Rust, JavaScript, TypeScript, Python, Go, C/C++, and Java code.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "root_dir": {
                         "type": "string",
-                        "description": "The root directory of the codebase to parse"
+                        "description": "The root directory of the codebase to parse. Can be a path to a single file, a directory containing specific files, or the root of a codebase."
                     },
                     "query": {
                         "type": "string",
-                        "description": "The user query to determine relevant files and context"
+                        "description": "A natural language query to determine what to parse. Examples: 'Parse all JavaScript files', 'Show me the implementation of CodeParser', 'Analyze the class hierarchy in src/models/'. The query helps focus parsing on relevant files."
+                    },
+                    "max_file_size": {
+                        "type": "integer",
+                        "description": "Optional maximum file size to parse in bytes (default: 1,000,000 bytes / 1MB)"
+                    },
+                    "max_files": {
+                        "type": "integer",
+                        "description": "Optional maximum number of files to parse (default: 25)"
+                    },
+                    "max_depth": {
+                        "type": "integer",
+                        "description": "Optional maximum recursion depth for parsing nested structures (default: 3)"
                     }
                 },
                 "required": ["root_dir", "query"]

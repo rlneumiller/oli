@@ -103,6 +103,8 @@ impl App {
             show_intermediate_steps: true, // Default to showing intermediate steps
             show_shortcuts_hint: true,     // Default to showing shortcut hints
             show_detailed_shortcuts: false, // Default to not showing detailed shortcuts
+            // Special command state
+            parse_code_mode: false, // Not in parse_code mode initially
             // Initialize cursor position
             cursor_position: 0, // Start at the beginning of the input
             // Initialize task tracking
@@ -277,7 +279,6 @@ impl CommandHandler for App {
             }
             "/clear" => {
                 self.clear_history();
-                self.messages.push("Conversation history cleared.".into());
                 true
             }
             "/debug" => {
@@ -339,6 +340,37 @@ impl CommandHandler for App {
                     self.messages
                         .push(format!("Error summarizing history: {}", e));
                 }
+                true
+            }
+            "/parse_code" => {
+                // Only allow in debug mode
+                if !self.debug_messages {
+                    self.messages.push("The /parse_code command is only available in debug mode. Use /debug to enable debug mode first.".into());
+                    return true;
+                }
+
+                // Get current working directory (unused now but might be needed later)
+                let _cwd = self
+                    .current_working_dir
+                    .clone()
+                    .unwrap_or_else(|| String::from("."));
+
+                // Prompt the user to enter a file path
+                self.messages
+                    .push("Enter the path to the file you want to parse:".into());
+
+                // When user replies, we'll use the CodeParser in query_model method
+                self.input.clear();
+                self.textarea.select_all();
+                self.textarea.delete_line_by_end();
+                self.command_mode = false;
+                self.parse_code_mode = true;
+
+                self.log(
+                    "Parse code command initiated - waiting for file path input",
+                    &[],
+                );
+
                 true
             }
             "/exit" => {
@@ -1077,20 +1109,6 @@ impl AgentManager for App {
         // Set tool execution flag
         self.tool_execution_in_progress = true;
 
-        // We'll add the log directly to the logs vector instead of using the log method
-        // to avoid borrowing issues with the runtime
-        if self.debug_messages {
-            // Create a timestamp
-            let now = chrono::Local::now();
-            let log_message = format!(
-                "[{}] Tool execution started",
-                now.format("%Y-%m-%d %H:%M:%S%.3f")
-            );
-            self.logs.push(log_message.clone());
-
-            // Also write to log file without using the log method
-            let _ = self.write_log_to_file(&log_message);
-        }
         let prompt_clone = prompt.to_string();
 
         // Process this as a background task in the tokio runtime
@@ -1219,10 +1237,6 @@ impl AgentManager for App {
         self.permission_required = false;
         self.pending_tool = None;
 
-        if self.debug_messages {
-            self.log("Tool execution completed", &[]);
-        }
-
         // For now, we extract tokens in the UI layer based on response length
         // In the future, we could update this to use actual token counts from the API
         // The token usage will be recorded when completing the task in ui/events.rs
@@ -1235,5 +1249,9 @@ impl AgentManager for App {
         }
 
         result
+    }
+
+    fn current_working_dir(&self) -> Option<&str> {
+        self.current_working_dir.as_deref()
     }
 }

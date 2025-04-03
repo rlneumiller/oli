@@ -23,6 +23,10 @@ pub fn get_available_commands() -> Vec<SpecialCommand> {
         SpecialCommand::new("/debug", "Toggle debug messages visibility"),
         SpecialCommand::new("/steps", "Toggle showing intermediate tool steps"),
         SpecialCommand::new("/summarize", "Manually summarize conversation history"),
+        SpecialCommand::new(
+            "/parse_code",
+            "Display code structure of a file (debug mode only)",
+        ),
         SpecialCommand::new("/exit", "Exit the TUI"),
     ]
 }
