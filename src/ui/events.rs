@@ -102,9 +102,12 @@ fn process_channel_messages(
         // Don't redraw here - let the main loop control the redraw timing
     }
 
-    // If we received any messages, add auto-scroll marker
+    // If we received any messages, add more auto-scroll markers to ensure visibility
     if received_message {
-        app.messages.push("_AUTO_SCROLL_".into());
+        // Add multiple markers to ensure enough scrolling
+        for _ in 0..3 {
+            app.messages.push("_AUTO_SCROLL_".into());
+        }
     }
 
     Ok(())
@@ -177,10 +180,13 @@ fn process_agent_messages(
         app.last_message_time = std::time::Instant::now();
     }
 
-    // Add auto-scroll marker if we processed any messages, but don't force redraw
+    // Add auto-scroll marker if we processed any messages
     if has_messages || any_tool_executed {
-        app.messages.push("_AUTO_SCROLL_".into());
-        // Don't force redraw - let the main loop handle it based on timing
+        // Add one auto-scroll marker for each message (to ensure proper scroll amount)
+        for _ in 0..messages_to_process.len().max(1) {
+            app.messages.push("_AUTO_SCROLL_".into());
+        }
+        // Don't force redraw - let the process_auto_scroll function handle it
     }
 
     Ok(())
@@ -189,20 +195,30 @@ fn process_agent_messages(
 /// Process auto-scroll markers in messages without forcing redraws
 fn process_auto_scroll(
     app: &mut App,
-    _terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
     // Check if we need to auto-scroll after processing messages
-    let needs_scroll = app.messages.iter().any(|m| m == "_AUTO_SCROLL_");
+    let auto_scroll_count = app
+        .messages
+        .iter()
+        .filter(|m| *m == "_AUTO_SCROLL_")
+        .count();
 
-    // Always remove any auto-scroll markers first
-    app.messages.retain(|m| m != "_AUTO_SCROLL_");
+    // Only process if there are markers
+    if auto_scroll_count > 0 {
+        // Remove auto-scroll markers
+        app.messages.retain(|m| m != "_AUTO_SCROLL_");
 
-    if needs_scroll {
-        // Only auto-scroll when explicitly requested via auto-scroll marker
+        // Force content to be at the bottom - this ensures we always see new content
+        app.message_scroll.follow_bottom = true;
         app.auto_scroll_to_bottom();
 
-        // Don't force a redraw here - let the main loop handle it when appropriate
-        // This prevents unnecessary screen updates that block scrolling
+        // Force multiple immediate redraws with short delay to ensure content is visible
+        // This helps overcome timing issues with terminal rendering
+        for _ in 0..2 {
+            terminal.draw(|f| ui(f, app))?;
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     Ok(())

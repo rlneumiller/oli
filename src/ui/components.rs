@@ -106,16 +106,29 @@ pub fn create_message_list(app: &mut App, visible_area: Rect) -> Paragraph<'stat
     let all_lines =
         helpers::process_messages(&display_messages, animation_state, app.debug_messages);
 
-    // Update scroll state and apply scrolling
+    // Calculate available height for content (accounting for block borders and padding)
+    // Subtract borders (2) and additional padding (1) to ensure we have the correct viewport size
+    let available_height = visible_area.height.saturating_sub(3) as usize; // -3 for borders and padding
+
+    // Store the previous content size for comparison
+    let previous_content_size = app.message_scroll.content_size;
+
+    // Update scroll state dimensions with actual content size
     app.message_scroll
-        .update_dimensions(all_lines.len(), visible_area.height as usize);
+        .update_dimensions(all_lines.len(), available_height);
+
+    // If content size increased significantly and we're following the bottom,
+    // ensure we're really at the absolute bottom
+    if app.message_scroll.follow_bottom && all_lines.len() > previous_content_size + 1 {
+        app.message_scroll.position = app.message_scroll.max_scroll();
+    }
+
+    // Update legacy scroll position for compatibility
     app.scroll_position = app.message_scroll.position;
 
-    let (visible_messages, has_more_above, has_more_below) = helpers::apply_scrolling(
-        &all_lines,
-        app.message_scroll.position,
-        visible_area.height as usize,
-    );
+    // Calculate which messages are visible in the viewport
+    let (visible_messages, has_more_above, has_more_below) =
+        helpers::apply_scrolling(&all_lines, app.message_scroll.position, available_height);
 
     // Create block with scroll indicators
     let message_block = helpers::create_scrollable_block(
@@ -129,7 +142,7 @@ pub fn create_message_list(app: &mut App, visible_area: Rect) -> Paragraph<'stat
     Paragraph::new(Text::from(visible_messages))
         .block(message_block)
         .wrap(Wrap { trim: false })
-        .scroll((0, 0)) // Prevent auto-scrolling issues
+        .scroll((0, 0)) // Prevent automatic scrolling
 }
 
 /// Create an input box for chat or API key input

@@ -318,14 +318,40 @@ pub struct CodeParser {
     parser: Parser,
     /// Cache size limit for AST trees (in bytes)
     cache_size_limit: usize,
+    /// Maximum file size to parse in bytes (default: 1MB)
+    max_file_size: usize,
+    /// Maximum number of files to parse in a codebase (default: 25)
+    max_files: usize,
+    /// Maximum recursion depth for nested structures (default: 3)
+    max_depth: usize,
 }
 
 impl CodeParser {
-    /// Creates a new CodeParser instance with initialized language support.
+    /// Creates a new CodeParser instance with initialized language support
+    /// and default configuration.
     ///
     /// # Returns
     /// - `Result<Self>` - A new CodeParser instance or an error
     pub fn new() -> Result<Self> {
+        Self::with_config(None, None, None, None)
+    }
+
+    /// Creates a new CodeParser instance with custom configuration.
+    ///
+    /// # Arguments
+    /// - `cache_size_limit` - Optional cache size limit in bytes (default: 50MB)
+    /// - `max_file_size` - Optional maximum file size to parse in bytes (default: 1MB)
+    /// - `max_files` - Optional maximum number of files to parse (default: 25)
+    /// - `max_depth` - Optional maximum recursion depth (default: 3)
+    ///
+    /// # Returns
+    /// - `Result<Self>` - A new CodeParser instance or an error
+    pub fn with_config(
+        cache_size_limit: Option<usize>,
+        max_file_size: Option<usize>,
+        max_files: Option<usize>,
+        max_depth: Option<usize>,
+    ) -> Result<Self> {
         let mut languages = HashMap::new();
 
         // Define supported languages with their file extensions
@@ -415,13 +441,19 @@ impl CodeParser {
             }
         }
 
-        // Set a reasonable cache size limit (50MB)
-        let cache_size_limit = 50 * 1024 * 1024;
+        // Set defaults or use provided values
+        let cache_size_limit = cache_size_limit.unwrap_or(50 * 1024 * 1024); // 50MB cache
+        let max_file_size = max_file_size.unwrap_or(1_000_000); // 1MB max file size
+        let max_files = max_files.unwrap_or(25); // Maximum files to parse
+        let max_depth = max_depth.unwrap_or(3); // Maximum recursion depth
 
         Ok(Self {
             languages,
             parser,
             cache_size_limit,
+            max_file_size,
+            max_files,
+            max_depth,
         })
     }
 
@@ -502,8 +534,8 @@ impl CodeParser {
         // Read file content - limit file size for very large files
         let metadata = fs::metadata(path)?;
 
-        // Skip files larger than 1MB to avoid processing too much data
-        if metadata.len() > 1_000_000 {
+        // Skip files larger than the max file size to avoid processing too much data
+        if metadata.len() > self.max_file_size as u64 {
             return Ok(CodeAST {
                 path: path.to_string_lossy().to_string(),
                 language: language_name.to_string(),
@@ -730,7 +762,7 @@ impl CodeParser {
                             *def_node,
                             &mut child_ast,
                             &language_name,
-                            3, // Limit recursion depth
+                            self.max_depth, // Use configured recursion depth
                         );
 
                         ast.children.push(child_ast);
@@ -1208,8 +1240,8 @@ impl CodeParser {
 
         let mut results = Vec::new();
 
-        // Hard limit on number of files to process
-        let max_files = 25;
+        // Use configured limit on number of files to process
+        let max_files = self.max_files;
 
         // Filter to respect gitignore patterns using the ignore crate
         let filter_gitignore = |path: &Path| -> bool {
@@ -1411,7 +1443,11 @@ impl CodeParser {
         // Filter out errors and collect successful ASTs
         let valid_asts: Vec<CodeAST> = asts
             .into_iter()
-            .filter_map(|ast_result| ast_result.ok())
+            .filter_map(|ast_result| {
+                // Just silently ignore parse errors since we're doing best-effort parsing
+                // and may not need all files
+                ast_result.ok()
+            })
             .collect();
 
         Ok(valid_asts)
@@ -1420,14 +1456,21 @@ impl CodeParser {
     /// Generate a structured AST optimized for LLM consumption
     ///
     /// # Arguments
-    /// - `root_dir` - Root directory of the codebase
+    /// - `root_dir` - Root directory of the codebase or path to a single file
     /// - `query` - User query to determine relevant files
     ///
     /// # Returns
     /// - `Result<String>` - Structured AST as a string
     pub fn generate_llm_friendly_ast(&mut self, root_dir: &Path, query: &str) -> Result<String> {
-        // Parse the relevant parts of the codebase
-        let mut asts = self.parse_codebase(root_dir, query)?;
+        // Check if the path is a file or directory
+        let mut asts = if root_dir.is_file() {
+            // Just parse this single file
+            let ast = self.parse_file(root_dir)?;
+            vec![ast]
+        } else {
+            // Parse the relevant parts of the codebase
+            self.parse_codebase(root_dir, query)?
+        };
 
         // If no AST data was generated, return a helpful message
         if asts.is_empty() {

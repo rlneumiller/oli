@@ -279,7 +279,6 @@ impl CommandHandler for App {
             }
             "/clear" => {
                 self.clear_history();
-                self.messages.push("Conversation history cleared.".into());
                 true
             }
             "/debug" => {
@@ -1110,20 +1109,6 @@ impl AgentManager for App {
         // Set tool execution flag
         self.tool_execution_in_progress = true;
 
-        // We'll add the log directly to the logs vector instead of using the log method
-        // to avoid borrowing issues with the runtime
-        if self.debug_messages {
-            // Create a timestamp
-            let now = chrono::Local::now();
-            let log_message = format!(
-                "[{}] Tool execution started",
-                now.format("%Y-%m-%d %H:%M:%S%.3f")
-            );
-            self.logs.push(log_message.clone());
-
-            // Also write to log file without using the log method
-            let _ = self.write_log_to_file(&log_message);
-        }
         let prompt_clone = prompt.to_string();
 
         // Process this as a background task in the tokio runtime
@@ -1251,10 +1236,6 @@ impl AgentManager for App {
         self.tool_execution_in_progress = false;
         self.permission_required = false;
         self.pending_tool = None;
-
-        if self.debug_messages {
-            self.log("Tool execution completed", &[]);
-        }
 
         // For now, we extract tokens in the UI layer based on response length
         // In the future, we could update this to use actual token counts from the API

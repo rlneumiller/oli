@@ -86,6 +86,7 @@ impl ScrollState {
     /// Scroll to the bottom of the content
     pub fn scroll_to_bottom(&mut self) {
         self.follow_bottom = true;
+        // Calculate the max position (content size - viewport size)
         self.position = self.max_scroll();
     }
 
