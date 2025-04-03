@@ -13,6 +13,7 @@ const DEFAULT_SUMMARIZATION_COUNT_THRESHOLD: usize = 1000;
 /// Maximum number of messages to keep unsummarized (recent history)
 const DEFAULT_KEEP_RECENT_COUNT: usize = 20;
 
+#[derive(Clone)]
 /// Represents a conversation summary
 pub struct ConversationSummary {
     /// The summarized content

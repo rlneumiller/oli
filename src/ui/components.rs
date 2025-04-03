@@ -320,12 +320,13 @@ pub fn create_permission_dialog(_app: &App, _area: Rect) -> Block<'static> {
 }
 
 /// Create permission dialog content
-pub fn create_permission_content(app: &App) -> Paragraph<'static> {
+pub fn create_permission_content(app: &App) -> Paragraph<'_> {
     let tool = app.pending_tool.as_ref().unwrap();
     let tool_name = tool.tool_name.clone();
     let description = tool.description.to_string();
 
-    let info_text = Text::from(vec![
+    // Start with header lines
+    let mut text_lines = vec![
         Line::from(vec![
             Span::styled("⚠️  ", Style::default().fg(Color::Rgb(240, 180, 100))),
             Span::styled(
@@ -347,14 +348,53 @@ pub fn create_permission_content(app: &App) -> Paragraph<'static> {
                 Style::default().fg(AppStyles::secondary_color()),
             ),
         ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Press Y to allow or N to deny",
-            AppStyles::hint(),
-        )]),
-    ]);
+    ];
 
-    Paragraph::new(info_text)
+    // Add diff preview if available for Edit/Replace
+    if let Some(diff_preview) = &tool.diff_preview {
+        // Add a separator
+        text_lines.push(Line::from(""));
+
+        // Create a title for the diff section
+        text_lines.push(Line::from(vec![Span::styled(
+            "File Changes Preview:",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )]));
+
+        // Add the diff content, parsing ANSI color codes
+        for line in diff_preview.lines() {
+            // Handle colored lines (added/removed)
+            if line.contains("\x1b[92m") {
+                // Added line (green)
+                let clean_line = line.replace("\x1b[92m", "").replace("\x1b[0m", "");
+                text_lines.push(Line::from(vec![Span::styled(
+                    clean_line,
+                    Style::default().fg(Color::Green),
+                )]));
+            } else if line.contains("\x1b[91m") {
+                // Removed line (red)
+                let clean_line = line.replace("\x1b[91m", "").replace("\x1b[0m", "");
+                text_lines.push(Line::from(vec![Span::styled(
+                    clean_line,
+                    Style::default().fg(Color::Red),
+                )]));
+            } else {
+                // Normal line
+                text_lines.push(Line::from(line));
+            }
+        }
+    }
+
+    // Add prompt at the end
+    text_lines.push(Line::from(""));
+    text_lines.push(Line::from(vec![Span::styled(
+        "Press Y to allow or N to deny",
+        AppStyles::hint(),
+    )]));
+
+    Paragraph::new(Text::from(text_lines))
         .alignment(Alignment::Left)
         .wrap(Wrap { trim: true })
 }

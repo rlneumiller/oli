@@ -148,13 +148,13 @@ impl ToolCall {
             }
             ToolCall::Edit(params) => {
                 let path = PathBuf::from(&params.file_path);
-                FileOps::edit_file(&path, &params.old_string, &params.new_string)?;
-                Ok(format!("Successfully edited file: {}", params.file_path))
+                let diff = FileOps::edit_file(&path, &params.old_string, &params.new_string)?;
+                Ok(diff)
             }
             ToolCall::Replace(params) => {
                 let path = PathBuf::from(&params.file_path);
-                FileOps::write_file(&path, &params.content)?;
-                Ok(format!("Successfully replaced file: {}", params.file_path))
+                let diff = FileOps::write_file_with_diff(&path, &params.content)?;
+                Ok(diff)
             }
             ToolCall::Bash(params) => {
                 use std::process::{Command, Stdio};

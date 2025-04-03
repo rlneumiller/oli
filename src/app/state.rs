@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum AppState {
     Setup,
     ApiKeyInput,
@@ -107,6 +107,55 @@ impl Task {
 }
 
 use tui_textarea::TextArea;
+
+// Add Clone implementation for App
+impl Clone for App {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            textarea: TextArea::default(), // Cannot clone TextArea, create default
+            input: self.input.clone(),
+            messages: self.messages.clone(),
+            logs: self.logs.clone(),
+            show_logs: self.show_logs,
+            selected_model: self.selected_model,
+            available_models: self.available_models.clone(),
+            error_message: self.error_message.clone(),
+            debug_messages: self.debug_messages,
+            message_scroll: self.message_scroll.clone(),
+            log_scroll: self.log_scroll.clone(),
+            scroll_position: self.scroll_position,
+            last_query_time: self.last_query_time,
+            last_message_time: self.last_message_time,
+            use_agent: self.use_agent,
+            agent: None,             // Cannot clone Agent, use None
+            tokio_runtime: None,     // Cannot clone Runtime, use None
+            agent_progress_rx: None, // Cannot clone Receiver, use None
+            api_key: self.api_key.clone(),
+            current_working_dir: self.current_working_dir.clone(),
+            command_mode: self.command_mode,
+            available_commands: self.available_commands.clone(),
+            selected_command: self.selected_command,
+            show_command_menu: self.show_command_menu,
+            permission_required: self.permission_required,
+            pending_tool: self.pending_tool.clone(),
+            tool_permission_status: self.tool_permission_status.clone(),
+            tool_execution_in_progress: self.tool_execution_in_progress,
+            show_intermediate_steps: self.show_intermediate_steps,
+            show_shortcuts_hint: self.show_shortcuts_hint,
+            show_detailed_shortcuts: self.show_detailed_shortcuts,
+            parse_code_mode: self.parse_code_mode,
+            cursor_position: self.cursor_position,
+            tasks: self.tasks.clone(),
+            current_task_id: self.current_task_id.clone(),
+            task_scroll: self.task_scroll.clone(),
+            task_scroll_position: self.task_scroll_position,
+            conversation_summaries: self.conversation_summaries.clone(),
+            session_manager: None, // Cannot clone SessionManager, use None
+            session_id: self.session_id.clone(),
+        }
+    }
+}
 
 pub struct App {
     pub state: AppState,

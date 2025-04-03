@@ -641,11 +641,7 @@ impl ModelManager for App {
         let model_config = self.current_model();
 
         // Check if the model supports agent capabilities
-        let supports_agent = model_config
-            .agentic_capabilities
-            .as_ref()
-            .map(|caps| !caps.is_empty())
-            .unwrap_or(false);
+        let supports_agent = model_config.has_agent_support();
 
         // Try setting up agent if supported
         if supports_agent {
@@ -804,6 +800,21 @@ impl PermissionHandler for App {
             _ => format!("Execute tool: {}", tool_name),
         };
 
+        // For Edit and Replace tools, try to extract diff preview from the message history
+        let diff_preview = if tool_name == "Edit" || tool_name == "Replace" {
+            // Check the most recent messages for a diff output (sent by the agent)
+            self.messages.iter().rev().take(5).find_map(|msg| {
+                if msg.contains("Updated") && (msg.contains("addition") || msg.contains("removal"))
+                {
+                    Some(msg.clone())
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+
         // Create a message for display
         let display_message = format!(
             "[permission] ⚠️ Permission required: {} - Press 'y' to allow or 'n' to deny",
@@ -816,6 +827,7 @@ impl PermissionHandler for App {
             tool_name: tool_name.to_string(),
             tool_args: args.to_string(),
             description: description.clone(),
+            diff_preview,
         });
         self.tool_permission_status = ToolPermissionStatus::Pending;
 

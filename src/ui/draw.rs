@@ -357,8 +357,22 @@ pub fn draw_error(f: &mut Frame, error_msg: &str) {
 pub fn draw_permission_dialog(f: &mut Frame, app: &App) {
     // Calculate dialog size and position (centered)
     let area = f.area();
-    let width = std::cmp::min(72, area.width.saturating_sub(8));
-    let height = 10;
+    let width = std::cmp::min(90, area.width.saturating_sub(8));
+
+    // Adjust height based on whether we have a diff preview
+    let has_diff = app
+        .pending_tool
+        .as_ref()
+        .and_then(|pt| pt.diff_preview.as_ref())
+        .is_some();
+
+    // Minimum height with or without diff preview
+    let height = if has_diff {
+        std::cmp::min(30, area.height.saturating_sub(4))
+    } else {
+        10
+    };
+
     let x = (area.width - width) / 2;
     let y = (area.height - height) / 2;
 

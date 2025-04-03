@@ -3,6 +3,8 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use super::diff::DiffTools;
+
 pub struct FileOps;
 
 impl FileOps {
@@ -44,6 +46,23 @@ impl FileOps {
         Ok(numbered_content)
     }
 
+    pub fn generate_write_diff(path: &Path, content: &str) -> Result<(String, bool)> {
+        // Check if file exists to determine if this is an update or new file
+        let is_new_file = !path.exists();
+
+        let old_content = if is_new_file {
+            String::new()
+        } else {
+            Self::read_file(path)?
+        };
+
+        // Generate a diff
+        let diff_lines = DiffTools::generate_diff(&old_content, content);
+        let formatted_diff = DiffTools::format_diff(&diff_lines, &path.display().to_string())?;
+
+        Ok((formatted_diff, is_new_file))
+    }
+
     pub fn write_file(path: &Path, content: &str) -> Result<()> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
@@ -58,7 +77,17 @@ impl FileOps {
         Ok(())
     }
 
-    pub fn edit_file(path: &Path, old_string: &str, new_string: &str) -> Result<()> {
+    pub fn write_file_with_diff(path: &Path, content: &str) -> Result<String> {
+        let (diff, _) = Self::generate_write_diff(path, content)?;
+        Self::write_file(path, content)?;
+        Ok(diff)
+    }
+
+    pub fn generate_edit_diff(
+        path: &Path,
+        old_string: &str,
+        new_string: &str,
+    ) -> Result<(String, String)> {
         let content = Self::read_file(path)?;
 
         // Count occurrences to ensure we're replacing a unique string
@@ -71,7 +100,18 @@ impl FileOps {
         }
 
         let new_content = content.replace(old_string, new_string);
-        Self::write_file(path, &new_content)
+
+        // Generate a diff
+        let diff_lines = DiffTools::generate_diff(&content, &new_content);
+        let formatted_diff = DiffTools::format_diff(&diff_lines, &path.display().to_string())?;
+
+        Ok((new_content, formatted_diff))
+    }
+
+    pub fn edit_file(path: &Path, old_string: &str, new_string: &str) -> Result<String> {
+        let (new_content, diff) = Self::generate_edit_diff(path, old_string, new_string)?;
+        Self::write_file(path, &new_content)?;
+        Ok(diff)
     }
 
     pub fn list_directory(path: &Path) -> Result<Vec<PathBuf>> {

@@ -13,6 +13,7 @@ pub struct PendingToolExecution {
     pub tool_name: String,
     pub tool_args: String,
     pub description: String,
+    pub diff_preview: Option<String>, // Added field for storing the diff preview
 }
 
 pub trait PermissionHandler {

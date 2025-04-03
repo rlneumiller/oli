@@ -317,8 +317,59 @@ impl AgentExecutor {
                 // No need for additional tool selection message since we already show it above
                 // This prevents redundant messages about tool usage
 
+                // For Edit and Replace tools, show diff preview before executing
+                let needs_diff_preview = matches!(call.name.as_str(), "Edit" | "Replace");
+
                 // Execute the tool
-                let result = match tool_call.execute() {
+                let result = match if needs_diff_preview {
+                    // For file modifications, preview the diff first, then request permission and execute
+                    match &tool_call {
+                        ToolCall::Edit(params) => {
+                            use crate::tools::fs::file_ops::FileOps;
+                            use std::path::PathBuf;
+
+                            // Generate the diff without making changes yet
+                            let path = PathBuf::from(&params.file_path);
+                            match FileOps::generate_edit_diff(
+                                &path,
+                                &params.old_string,
+                                &params.new_string,
+                            ) {
+                                Ok((_, diff)) => {
+                                    // Send the diff as a progress message for the permission system to pick up
+                                    if let Some(sender) = &self.progress_sender {
+                                        let _ = sender.send(diff.clone()).await;
+                                    }
+                                    // Now execute the actual tool to make the changes
+                                    tool_call.execute()
+                                }
+                                Err(e) => Err(e),
+                            }
+                        }
+                        ToolCall::Replace(params) => {
+                            use crate::tools::fs::file_ops::FileOps;
+                            use std::path::PathBuf;
+
+                            // Generate the diff without making changes yet
+                            let path = PathBuf::from(&params.file_path);
+                            match FileOps::generate_write_diff(&path, &params.content) {
+                                Ok((diff, _)) => {
+                                    // Send the diff as a progress message for the permission system to pick up
+                                    if let Some(sender) = &self.progress_sender {
+                                        let _ = sender.send(diff.clone()).await;
+                                    }
+                                    // Now execute the actual tool to make the changes
+                                    tool_call.execute()
+                                }
+                                Err(e) => Err(e),
+                            }
+                        }
+                        _ => tool_call.execute(), // Shouldn't happen, but fallback
+                    }
+                } else {
+                    // For non-file operations, execute normally
+                    tool_call.execute()
+                } {
                     Ok(output) => {
                         // Send a special marker for tool counting that's easy to detect
                         if let Some(sender) = &self.progress_sender {
@@ -487,10 +538,12 @@ impl AgentExecutor {
                                     }
                                 }
                                 "Edit" | "Replace" => {
-                                    if let Some(path) =
+                                    if let Some(_path) =
                                         call.arguments.get("file_path").and_then(|v| v.as_str())
                                     {
-                                        format!("{} file: \"{}\" → {}", call.name, path, output)
+                                        // The output is now already formatted as a diff, directly pass it through
+                                        // We return multiple lines that show colored diff output
+                                        output.clone()
                                     } else {
                                         format!("Tool result: {}", preview)
                                     }
