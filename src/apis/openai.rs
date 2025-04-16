@@ -1,6 +1,7 @@
 use crate::apis::api_client::{
     ApiClient, CompletionOptions, Message, ToolCall, ToolDefinition, ToolResult,
 };
+use crate::app::logger::{format_log_with_color, LogLevel};
 use crate::errors::AppError;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -174,6 +175,14 @@ impl ApiClient for OpenAIClient {
             }));
         }
 
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                &format!("Sending request to OpenAI API with model: {}", self.model)
+            )
+        );
+
         let response = self
             .client
             .post(&self.api_base)
@@ -181,7 +190,9 @@ impl ApiClient for OpenAIClient {
             .send()
             .await
             .map_err(|e| {
-                AppError::NetworkError(format!("Failed to send request to OpenAI: {}", e))
+                let error_msg = format!("Failed to send request to OpenAI: {}", e);
+                eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+                AppError::NetworkError(error_msg)
             })?;
 
         if !response.status().is_success() {
@@ -198,13 +209,29 @@ impl ApiClient for OpenAIClient {
         }
 
         // Parse response
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| AppError::NetworkError(format!("Failed to get response text: {}", e)))?;
+        let response_text = response.text().await.map_err(|e| {
+            let error_msg = format!("Failed to get response text: {}", e);
+            eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+            AppError::NetworkError(error_msg)
+        })?;
 
-        let openai_response: OpenAIResponse = serde_json::from_str(&response_text)
-            .map_err(|e| AppError::Other(format!("Failed to parse OpenAI response: {}", e)))?;
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                &format!(
+                    "OpenAI API response received: {} bytes",
+                    response_text.len()
+                )
+            )
+        );
+
+        let openai_response: OpenAIResponse =
+            serde_json::from_str(&response_text).map_err(|e| {
+                let error_msg = format!("Failed to parse OpenAI response: {}", e);
+                eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+                AppError::Other(error_msg)
+            })?;
 
         // Extract content from the first choice
         if let Some(first_choice) = openai_response.choices.first() {
@@ -213,7 +240,9 @@ impl ApiClient for OpenAIClient {
             }
         }
 
-        Err(AppError::LLMError("No content in OpenAI response".to_string()).into())
+        let error_msg = "No content in OpenAI response".to_string();
+        eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+        Err(AppError::LLMError(error_msg).into())
     }
 
     async fn complete_with_tools(
@@ -342,6 +371,14 @@ impl ApiClient for OpenAIClient {
             };
         }
 
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                &format!("Sending request to OpenAI API with model: {}", self.model)
+            )
+        );
+
         let response = self
             .client
             .post(&self.api_base)
@@ -349,7 +386,9 @@ impl ApiClient for OpenAIClient {
             .send()
             .await
             .map_err(|e| {
-                AppError::NetworkError(format!("Failed to send request to OpenAI: {}", e))
+                let error_msg = format!("Failed to send request to OpenAI: {}", e);
+                eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+                AppError::NetworkError(error_msg)
             })?;
 
         if !response.status().is_success() {
@@ -366,13 +405,29 @@ impl ApiClient for OpenAIClient {
         }
 
         // Parse response
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| AppError::NetworkError(format!("Failed to get response text: {}", e)))?;
+        let response_text = response.text().await.map_err(|e| {
+            let error_msg = format!("Failed to get response text: {}", e);
+            eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+            AppError::NetworkError(error_msg)
+        })?;
 
-        let openai_response: OpenAIResponse = serde_json::from_str(&response_text)
-            .map_err(|e| AppError::Other(format!("Failed to parse OpenAI response: {}", e)))?;
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                &format!(
+                    "OpenAI API response received: {} bytes",
+                    response_text.len()
+                )
+            )
+        );
+
+        let openai_response: OpenAIResponse =
+            serde_json::from_str(&response_text).map_err(|e| {
+                let error_msg = format!("Failed to parse OpenAI response: {}", e);
+                eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+                AppError::Other(error_msg)
+            })?;
 
         // Extract content and tool calls from the first choice
         if let Some(first_choice) = openai_response.choices.first() {

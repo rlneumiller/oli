@@ -1,4 +1,5 @@
 use crate::apis::api_client::{ApiClient, CompletionOptions, Message, ToolCall, ToolResult};
+use crate::app::logger::{format_log_with_color, LogLevel};
 use crate::errors::AppError;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -137,9 +138,18 @@ impl AnthropicClient {
                             .and_then(|val| val.parse::<u64>().ok())
                             .unwrap_or(delay_ms);
 
-                        // Clone the response for logging if needed
-                        #[cfg(debug_assertions)]
-                        let _error_body = resp.text().await.unwrap_or_default();
+                        // Clone the response for logging
+                        let error_body = resp.text().await.unwrap_or_default();
+                        eprintln!(
+                            "{}",
+                            format_log_with_color(
+                                LogLevel::Warning,
+                                &format!(
+                                    "Anthropic API rate limited or overloaded: {}",
+                                    error_body
+                                )
+                            )
+                        );
 
                         // Exponential backoff with jitter
                         let jitter = rand::random::<u64>() % 500;
@@ -311,17 +321,31 @@ impl ApiClient for AnthropicClient {
         }
 
         // Get the response as a string first for debugging
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| AppError::NetworkError(format!("Failed to get response text: {}", e)))?;
+        let response_text = response.text().await.map_err(|e| {
+            let error_msg = format!("Failed to get response text: {}", e);
+            eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+            AppError::NetworkError(error_msg)
+        })?;
 
-        // Debug logging should stay within the TUI, removing direct print statements
-        // that would interfere with the terminal interface
+        // Log response details
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                &format!(
+                    "Anthropic API response received: {} bytes",
+                    response_text.len()
+                )
+            )
+        );
 
         // Try to parse the response
-        let anthropic_response: AnthropicResponse = serde_json::from_str(&response_text)
-            .map_err(|e| AppError::Other(format!("Failed to parse Anthropic response: {}", e)))?;
+        let anthropic_response: AnthropicResponse =
+            serde_json::from_str(&response_text).map_err(|e| {
+                let error_msg = format!("Failed to parse Anthropic response: {}", e);
+                eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+                AppError::Other(error_msg)
+            })?;
 
         // Extract content from response
         let mut text_content = String::new();
@@ -336,9 +360,9 @@ impl ApiClient for AnthropicClient {
 
         // Return an error if no text content was found
         if text_content.is_empty() {
-            return Err(
-                AppError::LLMError("No text content in Anthropic response".to_string()).into(),
-            );
+            let error_msg = "No text content in Anthropic response".to_string();
+            eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+            return Err(AppError::LLMError(error_msg).into());
         }
 
         let content = text_content;
@@ -451,17 +475,31 @@ impl ApiClient for AnthropicClient {
         }
 
         // Get the response as a string first for debugging
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| AppError::NetworkError(format!("Failed to get response text: {}", e)))?;
+        let response_text = response.text().await.map_err(|e| {
+            let error_msg = format!("Failed to get response text: {}", e);
+            eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+            AppError::NetworkError(error_msg)
+        })?;
 
-        // Debug logging should stay within the TUI, removing direct print statements
-        // that would interfere with the terminal interface
+        // Log response details
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                &format!(
+                    "Anthropic API response received: {} bytes",
+                    response_text.len()
+                )
+            )
+        );
 
         // Try to parse the response
-        let anthropic_response: AnthropicResponse = serde_json::from_str(&response_text)
-            .map_err(|e| AppError::Other(format!("Failed to parse Anthropic response: {}", e)))?;
+        let anthropic_response: AnthropicResponse =
+            serde_json::from_str(&response_text).map_err(|e| {
+                let error_msg = format!("Failed to parse Anthropic response: {}", e);
+                eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+                AppError::Other(error_msg)
+            })?;
 
         // First extract tool calls from content
         let mut tool_calls_vec = Vec::new();
