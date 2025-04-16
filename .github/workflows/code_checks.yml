@@ -86,7 +86,9 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Run pre-commit hooks
-        run: pre-commit run --all-files
+        run: |
+          source .venv/bin/activate
+          pre-commit run --all-files
 
       - name: Check build
         run: cargo check --all-features
