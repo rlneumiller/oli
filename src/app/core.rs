@@ -1,6 +1,7 @@
 use crate::agent::core::Agent;
 use crate::apis::api_client::{ApiClient, SessionManager};
 use crate::app::history::ConversationSummary;
+use crate::app::logger::{format_log_with_color, LogLevel};
 use crate::models;
 use crate::models::ModelConfig;
 use anyhow::Result;
@@ -201,8 +202,10 @@ impl App {
         let _task_id = self.create_task(prompt);
 
         // Add processing message to logs
-        let log_message = format!("Processing query: '{}'", prompt);
-        self.log(&log_message);
+        eprintln!(
+            "{}",
+            format_log_with_color(LogLevel::Info, &format!("Processing query: '{}'", prompt))
+        );
 
         // Update query time
         self.last_query_time = Instant::now();
@@ -228,8 +231,10 @@ impl App {
         let model_file_name = model.file_name.clone();
 
         // Log model info
-        let model_log = format!("Using model: {}", model_name);
-        self.log(&model_log);
+        eprintln!(
+            "{}",
+            format_log_with_color(LogLevel::Info, &format!("Using model: {}", model_name))
+        );
 
         // API key
         let api_key = self.api_key.clone().unwrap_or_else(|| {
@@ -265,8 +270,13 @@ impl App {
             && !model_name_lower.contains("local");
 
         if unrecognized {
-            let warning = format!("Warning: Unrecognized model type: {}", model_name);
-            self.log(&warning);
+            eprintln!(
+                "{}",
+                format_log_with_color(
+                    LogLevel::Warning,
+                    &format!("Warning: Unrecognized model type: {}", model_name)
+                )
+            );
         }
 
         // Now make the API call - carefully extracting runtime to avoid borrow issues
@@ -323,11 +333,16 @@ impl App {
         let estimated_tokens = (response.len() as f64 / 4.0).ceil() as u32;
         self.complete_current_task(estimated_tokens);
 
-        let completion_log = format!(
-            "Query completed, received approximately {} tokens",
-            estimated_tokens
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Info,
+                &format!(
+                    "Query completed, received approximately {} tokens",
+                    estimated_tokens
+                )
+            )
         );
-        self.log(&completion_log);
 
         Ok(response)
     }
@@ -419,11 +434,13 @@ impl App {
         self.current_task_id = None;
     }
 
-    /// Add a log message
-    pub fn log(&mut self, message: &str) {
-        let now = chrono::Local::now();
-        let timestamped = format!("[{}] {}", now.format("%Y-%m-%d %H:%M:%S%.3f"), message);
-        self.logs.push(timestamped);
+    /// Add a log message (now deprecated in favor of direct eprintln calls)
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use eprintln with format_log_with_color instead"
+    )]
+    pub fn log(&mut self, _message: &str) {
+        // This function is kept for backward compatibility but should not be used
     }
 }
 

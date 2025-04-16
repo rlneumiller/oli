@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-# Run script for Oli (Rust backend + React/Ink frontend)
-echo "Starting Oli (Hybrid Rust/React Application)"
+# Run script for oli (Rust backend + React/Ink frontend)
+echo "Starting oli (Hybrid Rust/React Application)"
 
 # Check if the backend build exists
 if [ ! -f "target/release/oli" ] && [ ! -f "../target/release/oli" ]; then

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use oli_tui::app::logger::{format_log_with_color, LogLevel};
 use oli_tui::communication::rpc::RpcServer;
 use oli_tui::App;
 use serde_json::json;
@@ -27,7 +28,13 @@ fn main() -> Result<()> {
         let model_index = params["model_index"].as_u64().unwrap_or(0) as usize;
 
         // Store the selected model index for the query
-        app.log(&format!("Using model at index: {}", model_index));
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Info,
+                &format!("Using model at index: {}", model_index)
+            )
+        );
 
         // Query the model with the selected model index
         match app.query_model(prompt) {
@@ -69,7 +76,15 @@ fn main() -> Result<()> {
     });
 
     // Run the RPC server
-    println!("Starting Oli backend server");
+    {
+        // Log with INFO log level for visibility
+        let starting_msg = format_log_with_color(LogLevel::Info, "Starting oli server");
+        eprintln!("{}", starting_msg);
+
+        // Log server started message before starting
+        let success_msg = format_log_with_color(LogLevel::Info, "oli server started successfully");
+        eprintln!("{}", success_msg);
+    }
     rpc_server.run()?;
 
     Ok(())

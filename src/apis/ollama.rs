@@ -1,6 +1,7 @@
 use crate::apis::api_client::{
     ApiClient, CompletionOptions, Message, ToolCall, ToolDefinition, ToolResult,
 };
+use crate::app::logger::{format_log_with_color, LogLevel};
 use crate::errors::AppError;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -233,16 +234,24 @@ impl OllamaClient {
     pub async fn list_models(&self) -> Result<Vec<OllamaModelInfo>> {
         let url = format!("{}/api/tags", self.api_base);
 
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                &format!("Listing Ollama models from: {}", url)
+            )
+        );
+
         let response = self.client.get(&url).send().await.map_err(|e| {
-            if e.is_connect() {
+            let error_msg = if e.is_connect() {
                 // Connection failed - likely Ollama is not running
-                AppError::NetworkError(
-                    "Failed to connect to Ollama server. Make sure 'ollama serve' is running."
-                        .to_string(),
-                )
+                "Failed to connect to Ollama server. Make sure 'ollama serve' is running."
+                    .to_string()
             } else {
-                AppError::NetworkError(format!("Failed to send request to Ollama: {}", e))
-            }
+                format!("Failed to send request to Ollama: {}", e)
+            };
+            eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+            AppError::NetworkError(error_msg)
         })?;
 
         if !response.status().is_success() {
@@ -259,13 +268,29 @@ impl OllamaClient {
         }
 
         // Parse response
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| AppError::NetworkError(format!("Failed to get response text: {}", e)))?;
+        let response_text = response.text().await.map_err(|e| {
+            let error_msg = format!("Failed to get response text: {}", e);
+            eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+            AppError::NetworkError(error_msg)
+        })?;
+
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                &format!(
+                    "Ollama API response received: {} bytes",
+                    response_text.len()
+                )
+            )
+        );
 
         let models_response: OllamaListModelsResponse = serde_json::from_str(&response_text)
-            .map_err(|e| AppError::LLMError(format!("Failed to parse Ollama response: {}", e)))?;
+            .map_err(|e| {
+                let error_msg = format!("Failed to parse Ollama response: {}", e);
+                eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+                AppError::LLMError(error_msg)
+            })?;
 
         Ok(models_response.models)
     }
@@ -300,6 +325,14 @@ impl ApiClient for OllamaClient {
 
         let url = format!("{}/api/chat", self.api_base);
 
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                &format!("Sending request to Ollama API with model: {}", self.model)
+            )
+        );
+
         let response = self
             .client
             .post(&url)
@@ -332,17 +365,35 @@ impl ApiClient for OllamaClient {
         }
 
         // Parse response
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| AppError::NetworkError(format!("Failed to get response text: {}", e)))?;
+        let response_text = response.text().await.map_err(|e| {
+            let error_msg = format!("Failed to get response text: {}", e);
+            eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+            AppError::NetworkError(error_msg)
+        })?;
+
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                &format!(
+                    "Ollama API response received: {} bytes",
+                    response_text.len()
+                )
+            )
+        );
 
         // Try to parse as a direct response
         let ollama_response = match serde_json::from_str::<OllamaResponse>(&response_text) {
             Ok(resp) => resp,
             Err(e) => {
-                eprintln!("Ollama API response parsing error: {}", e);
-                eprintln!("Response text: {}", response_text);
+                // Log errors when parsing Ollama API response
+                eprintln!(
+                    "{}",
+                    format_log_with_color(
+                        LogLevel::Warning,
+                        &format!("Failed to parse standard Ollama response: {}, attempting alternate parsing", e)
+                    )
+                );
 
                 // Try to parse as a generic JSON value to extract what we need
                 let json_value: Result<serde_json::Value, _> = serde_json::from_str(&response_text);
@@ -463,6 +514,14 @@ impl ApiClient for OllamaClient {
 
         let url = format!("{}/api/chat", self.api_base);
 
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                &format!("Sending request to Ollama API with model: {}", self.model)
+            )
+        );
+
         let response = self
             .client
             .post(&url)
@@ -495,17 +554,35 @@ impl ApiClient for OllamaClient {
         }
 
         // Parse response
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| AppError::NetworkError(format!("Failed to get response text: {}", e)))?;
+        let response_text = response.text().await.map_err(|e| {
+            let error_msg = format!("Failed to get response text: {}", e);
+            eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+            AppError::NetworkError(error_msg)
+        })?;
+
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                &format!(
+                    "Ollama API response received: {} bytes",
+                    response_text.len()
+                )
+            )
+        );
 
         // Try to parse as a direct response
         let ollama_response = match serde_json::from_str::<OllamaResponse>(&response_text) {
             Ok(resp) => resp,
             Err(e) => {
-                eprintln!("Ollama API response parsing error: {}", e);
-                eprintln!("Response text: {}", response_text);
+                // Log errors when parsing Ollama API response
+                eprintln!(
+                    "{}",
+                    format_log_with_color(
+                        LogLevel::Warning,
+                        &format!("Failed to parse standard Ollama response: {}, attempting alternate parsing", e)
+                    )
+                );
 
                 // Try to parse as a generic JSON value to extract what we need
                 let json_value: Result<serde_json::Value, _> = serde_json::from_str(&response_text);
