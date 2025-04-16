@@ -72,7 +72,7 @@ const TaskList: React.FC<TaskListProps> = ({ tasks }) => {
             {/* Task details */}
             <Box marginLeft={2} flexDirection="column">
               <Text dimColor>
-                Tools: {task.tool_count} | Time: {formatElapsedTime(task.created_at)}
+                Tools: {task.tool_count} | Time: {formatElapsedTime(Math.floor(Date.now() / 1000) - task.created_at)}
               </Text>
               {task.status === 'completed' && (
                 <Text dimColor>
