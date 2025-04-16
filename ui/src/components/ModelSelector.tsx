@@ -39,7 +39,7 @@ const WelcomeBox = ({ children }: { children: React.ReactNode }) => (
         <Box marginY={1} />
         {children}
         <Box marginY={1} />
-        <Text color={theme.colors.dark.fg4}>cwd: /Users/amritkrishnan/src/oli</Text>
+        <Text color={theme.colors.dark.fg4}>cwd: {process.cwd()}</Text>
       </Box>
     </Box>
   </Box>
