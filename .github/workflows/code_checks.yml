@@ -63,7 +63,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182
         with:
-          version: "0.1.28"
+          version: "0.6.14"
           enable-cache: true
 
       - name: Set up Python
@@ -86,7 +86,9 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Run pre-commit hooks
-        run: pre-commit run --all-files
+        run: |
+          source .venv/bin/activate
+          pre-commit run --all-files
 
       - name: Check build
         run: cargo check --all-features

@@ -27,6 +27,8 @@ interface AppState {
 interface Model {
   name: string;
   id: string;
+  description: string;
+  supports_agent: boolean;
 }
 
 // Task interface
@@ -184,7 +186,7 @@ const App: React.FC<AppProps> = ({ backend }) => {
       const assistantMessage: Message = {
         id: `assistant-${Date.now()}`,
         role: "assistant",
-        content: result.response,
+        content: result.response as string,
         timestamp: Date.now(),
       };
 

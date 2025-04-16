@@ -73,7 +73,7 @@ export class BackendService extends EventEmitter {
             if (response.error) {
               pending.reject(new Error(response.error.message));
             } else {
-              pending.resolve(response.result);
+              pending.resolve(response.result || {});
             }
             this.pendingRequests.delete(response.id);
           }
