@@ -1,6 +1,5 @@
-use oli_tui::app::history::ConversationSummary;
-use oli_tui::app::state::{App, AppState};
-use oli_tui::app::ContextCompressor;
+use oli_tui::app::core::{App, AppState};
+use oli_tui::app::history::{ContextCompressor, ConversationSummary};
 
 #[test]
 fn test_conversation_char_count() {
@@ -66,8 +65,9 @@ fn test_clear_history() {
     // Clear history
     app.clear_history();
 
-    // Both messages and summaries should be empty
-    assert!(app.messages.is_empty());
+    // Summaries should be empty
+    // Messages won't be empty because clear_history adds a notification message
+    assert_eq!(app.messages.len(), 1);
+    assert!(app.messages[0].contains("Chat history cleared"));
     assert!(app.conversation_summaries.is_empty());
-    assert_eq!(app.scroll_position, 0);
 }

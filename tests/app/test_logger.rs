@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use tempfile::tempdir;
 
 use chrono::Local;
-use oli_tui::app::logger::{format_log, format_log_with_color, LogLevel, Logger};
+use oli_tui::app::{format_log, format_log_with_color, LogLevel, Logger};
 
 // Mock implementation of Logger for testing
 struct MockLogger {
