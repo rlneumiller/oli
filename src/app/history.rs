@@ -1,7 +1,6 @@
 use crate::agent::core::Agent;
 use crate::apis::api_client::Message;
-use crate::app::state::{App, AppState};
-use crate::app::utils::Scrollable;
+use crate::app::core::{App, AppState};
 use crate::prompts::CONVERSATION_SUMMARY_PROMPT;
 use anyhow::Result;
 use std::time::Instant;
@@ -134,8 +133,7 @@ impl ContextCompressor for App {
             to_summarize, messages_chars
         ));
 
-        // Make sure to auto-scroll
-        self.auto_scroll_to_bottom();
+        // No auto-scroll needed in backend-only mode
 
         Ok(())
     }
@@ -173,9 +171,7 @@ impl ContextCompressor for App {
         self.messages.clear();
         self.conversation_summaries.clear();
 
-        // Reset both new and legacy scroll positions
-        self.message_scroll.scroll_to_top();
-        self.scroll_position = 0;
+        // No scrolling needed in backend-only mode
 
         // Also clear agent's conversation history if it exists
         if let Some(agent) = &mut self.agent {
@@ -186,6 +182,9 @@ impl ContextCompressor for App {
         if let Some(session) = &mut self.session_manager {
             session.clear();
         }
+
+        // Notify clients that history was cleared
+        self.messages.push("[info] Chat history cleared".into());
     }
 
     fn display_to_session_messages(&self, display_messages: &[String]) -> Vec<Message> {

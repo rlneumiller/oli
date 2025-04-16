@@ -1,26 +1,29 @@
 use crate::agent::core::Agent;
 use crate::apis::api_client::SessionManager;
+use crate::app::async_processor::AsyncProcessor;
 use crate::app::commands::SpecialCommand;
 use crate::app::history::ConversationSummary;
-use crate::app::models::ToolPermissionStatus;
 use crate::app::permissions::PendingToolExecution;
-use crate::app::utils::ScrollState;
+use crate::app::models::ToolPermissionStatus;
 use crate::models::ModelConfig;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, PartialEq, Clone)]
+/// Backend application state enum
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub enum AppState {
     Setup,
     ApiKeyInput,
     Error(String),
+    Ready,
     Chat,
 }
 
 /// Status of a task
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TaskStatus {
     /// Task is in progress/ongoing
     InProgress,
@@ -36,7 +39,7 @@ pub enum TaskStatus {
 }
 
 /// Represents a task the assistant is working on
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: String,
     pub description: String,
@@ -106,105 +109,117 @@ impl Task {
     }
 }
 
-use tui_textarea::TextArea;
-
-// Add Clone implementation for App
-impl Clone for App {
-    fn clone(&self) -> Self {
-        Self {
-            state: self.state.clone(),
-            textarea: TextArea::default(), // Cannot clone TextArea, create default
-            input: self.input.clone(),
-            messages: self.messages.clone(),
-            logs: self.logs.clone(),
-            show_logs: self.show_logs,
-            selected_model: self.selected_model,
-            available_models: self.available_models.clone(),
-            error_message: self.error_message.clone(),
-            debug_messages: self.debug_messages,
-            message_scroll: self.message_scroll.clone(),
-            log_scroll: self.log_scroll.clone(),
-            scroll_position: self.scroll_position,
-            last_query_time: self.last_query_time,
-            last_message_time: self.last_message_time,
-            use_agent: self.use_agent,
-            agent: None,             // Cannot clone Agent, use None
-            tokio_runtime: None,     // Cannot clone Runtime, use None
-            agent_progress_rx: None, // Cannot clone Receiver, use None
-            api_key: self.api_key.clone(),
-            current_working_dir: self.current_working_dir.clone(),
-            command_mode: self.command_mode,
-            available_commands: self.available_commands.clone(),
-            selected_command: self.selected_command,
-            show_command_menu: self.show_command_menu,
-            permission_required: self.permission_required,
-            pending_tool: self.pending_tool.clone(),
-            tool_permission_status: self.tool_permission_status.clone(),
-            tool_execution_in_progress: self.tool_execution_in_progress,
-            show_intermediate_steps: self.show_intermediate_steps,
-            show_shortcuts_hint: self.show_shortcuts_hint,
-            show_detailed_shortcuts: self.show_detailed_shortcuts,
-            parse_code_mode: self.parse_code_mode,
-            cursor_position: self.cursor_position,
-            tasks: self.tasks.clone(),
-            current_task_id: self.current_task_id.clone(),
-            task_scroll: self.task_scroll.clone(),
-            task_scroll_position: self.task_scroll_position,
-            conversation_summaries: self.conversation_summaries.clone(),
-            session_manager: None, // Cannot clone SessionManager, use None
-            session_id: self.session_id.clone(),
-        }
-    }
-}
-
+/// Main application state - stripped of UI components
 pub struct App {
     pub state: AppState,
-    pub textarea: TextArea<'static>, // TextArea widget for improved multiline input
-    pub input: String,               // Keep for backward compatibility during transition
+    pub input: String,
     pub messages: Vec<String>,
-    pub logs: Vec<String>, // Store logs separately from messages
-    pub show_logs: bool,   // Toggle between logs and messages display
-    pub selected_model: usize,
+    pub logs: Vec<String>,
     pub available_models: Vec<ModelConfig>,
     pub error_message: Option<String>,
-    pub debug_messages: bool,
-    pub message_scroll: ScrollState, // Improved scrolling for messages
-    pub log_scroll: ScrollState,     // Separate scrolling for logs
-    pub scroll_position: usize,      // Legacy scroll position (kept for compatibility)
     pub last_query_time: Instant,
-    pub last_message_time: Instant, // Timestamp for message animations
     pub use_agent: bool,
     pub agent: Option<Agent>,
     pub tokio_runtime: Option<Runtime>,
-    pub agent_progress_rx: Option<mpsc::Receiver<String>>,
     pub api_key: Option<String>,
     pub current_working_dir: Option<String>,
-    // Command-related fields
-    pub command_mode: bool,
     pub available_commands: Vec<SpecialCommand>,
-    pub selected_command: usize,
-    pub show_command_menu: bool,
-    // Tool permission-related fields
-    pub permission_required: bool, // If true, we're waiting for user input on a tool permission
-    pub pending_tool: Option<PendingToolExecution>, // The tool waiting for permission
-    pub tool_permission_status: ToolPermissionStatus, // Current permission status
-    pub tool_execution_in_progress: bool, // Flag to indicate active tool execution
-    pub show_intermediate_steps: bool, // Show intermediate steps like tool use and file reads
-    pub show_shortcuts_hint: bool, // Show the shortcut hint below input box
-    pub show_detailed_shortcuts: bool, // Show all shortcuts when ? is pressed
-    // State for special commands
-    pub parse_code_mode: bool, // Flag to indicate we're in parse_code command mode waiting for file path
-    // Cursor position in input - kept for backward compatibility
-    pub cursor_position: usize, // Current cursor position in the input string
-    // Task tracking
+    pub permission_required: bool,
+    pub pending_tool: Option<PendingToolExecution>,
+    pub tool_permission_status: ToolPermissionStatus,
+    pub tool_execution_in_progress: bool,
+    pub parse_code_mode: bool,
     pub tasks: Vec<Task>,
     pub current_task_id: Option<String>,
-    pub task_scroll: ScrollState,    // Improved scrolling for task list
-    pub task_scroll_position: usize, // Legacy scroll position (kept for compatibility)
-    // Conversation history management
-    pub conversation_summaries: Vec<ConversationSummary>, // History of conversation summaries
-    // Session management for API conversation
-    pub session_manager: Option<SessionManager>, // Manages the API conversation session
-    // Session information for logging
-    pub session_id: String, // Unique ID for the current session
+    pub conversation_summaries: Vec<ConversationSummary>,
+    pub session_manager: Option<SessionManager>,
+    pub session_id: String,
+    pub model_processor: AsyncProcessor<String>,
+    pub tool_processor: AsyncProcessor<String>,
+    pub command_processor: AsyncProcessor<String>,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl App {
+    pub fn new() -> Self {
+        // Load environment variables from .env file if present
+        let _ = dotenv::dotenv();
+
+        // Create tokio runtime for async operations
+        let tokio_runtime = Runtime::new().ok();
+
+        // Get current working directory
+        let current_working_dir = std::env::current_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().to_string());
+
+        // Initialize the session manager with default settings
+        let session_manager = Some(SessionManager::new(100).with_system_message(crate::prompts::DEFAULT_SESSION_PROMPT.to_string()));
+
+        // Generate a unique session ID
+        let session_id = Uuid::new_v4().to_string();
+
+        use crate::app::async_processor::AsyncProcessor;
+        use crate::models::get_available_models;
+
+        Self {
+            state: AppState::Setup,
+            input: String::new(),
+            messages: vec![],
+            logs: vec![],
+            available_models: get_available_models(),
+            error_message: None,
+            last_query_time: std::time::Instant::now(),
+            use_agent: false,
+            agent: None,
+            tokio_runtime,
+            api_key: None,
+            current_working_dir,
+            available_commands: crate::app::commands::get_available_commands(),
+            permission_required: false,
+            pending_tool: None,
+            tool_permission_status: ToolPermissionStatus::Pending,
+            tool_execution_in_progress: false,
+            parse_code_mode: false,
+            tasks: Vec::new(),
+            current_task_id: None,
+            conversation_summaries: Vec::new(),
+            session_manager,
+            session_id,
+            model_processor: AsyncProcessor::default(),
+            tool_processor: AsyncProcessor::default(),
+            command_processor: AsyncProcessor::default(),
+        }
+    }
+    
+    /// Check if there are any active tasks
+    pub fn has_active_tasks(&self) -> bool {
+        self.tasks.iter().any(|task| task.is_in_progress())
+    }
+    
+    /// Get the task statuses for all tasks
+    pub fn get_task_statuses(&self) -> Vec<serde_json::Value> {
+        self.tasks.iter().map(|task| {
+            let status = match &task.status {
+                TaskStatus::InProgress => "in_progress",
+                TaskStatus::Completed { .. } => "completed",
+                TaskStatus::Failed(_) => "failed",
+            };
+            
+            serde_json::json!({
+                "id": task.id,
+                "description": task.description,
+                "status": status,
+                "tool_count": task.tool_count,
+                "input_tokens": task.input_tokens,
+                "output_tokens": task.output_tokens,
+                "created_at": task.created_at.elapsed().as_secs(),
+            })
+        }).collect()
+    }
 }

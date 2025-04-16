@@ -6,9 +6,11 @@
 
 # oli - Open Local Intelligent assistant
 
-oli is an open-source alternative to Claude Code, built in Rust to provide powerful agentic capabilities for coding assistance. It features:
+oli is an open-source alternative to Claude Code with powerful agentic capabilities for coding assistance. Features:
 
-- A flexible TUI interface for working with code
+- A modern hybrid architecture:
+  - Rust backend for performance and core functionality
+  - React/Ink frontend for a beautiful, interactive terminal UI
 - Support for both cloud APIs (Anthropic Claude Sonnet 3.7 and OpenAI GPT4o) and local LLMs (via Ollama)
 - Strong agentic capabilities including file search, edit, and command execution
 - Tool use support across all model providers (Anthropic, OpenAI, and Ollama)
@@ -37,9 +39,11 @@ brew install oli
 git clone https://github.com/amrit110/oli
 cd oli
 
-# Build and run
-cargo build --release
-cargo run
+# Build both backend and frontend
+./build.sh
+
+# Run the hybrid application
+./run.sh
 ```
 
 ## Environment Setup
@@ -92,7 +96,7 @@ Note: For best results with tool use and agent capabilities, use models like Qwe
 
 1. Start the application:
 ```bash
-cargo run
+./run.sh
 ```
 
 2. Select a model:
@@ -104,6 +108,23 @@ cargo run
    - Request code edits
    - Execute shell commands
    - Get explanations of code
+
+## Architecture
+
+The application uses a hybrid architecture:
+
+```
+┌─────────────────────┐        ┌─────────────────────┐
+│  React + Ink UI     │◄───────┤  Rust Backend       │
+│                     │  JSON  │                     │
+│  - UI               │  RPC   │  - Agent            │
+│  - Task Display     │        │  - Tool Execution   │
+│  - Loading state    │        │  - Code Parsing     │
+└─────────────────────┘        └─────────────────────┘
+```
+
+- **Rust Backend**: Handles agent functionality, tool execution, and API calls
+- **React/Ink Frontend**: Provides a modern, interactive terminal interface with smooth animations
 
 ## Examples
 
@@ -122,5 +143,6 @@ This project is licensed under the Apache 2.0 License - see the LICENSE file for
 
 - This project is inspired by Claude Code and similar AI assistants
 - Uses Anthropic's Claude 3.7 Sonnet model for optimal agent capabilities
-- Built with Rust and the Ratatui library for terminal UI
-- Special thanks to the Rust community for excellent libraries and tools
+- Backend built with Rust for performance and reliability
+- Frontend built with React and Ink for a modern terminal UI experience
+- Special thanks to the Rust and React communities for excellent libraries and tools

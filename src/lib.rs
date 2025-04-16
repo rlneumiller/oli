@@ -1,13 +1,14 @@
 mod agent;
 pub mod apis;
 pub mod app;
+pub mod communication;
 mod errors;
 mod models;
 mod prompts;
 pub mod tools;
-mod ui;
 
-// Re-export App and UI for the main application
-pub use app::state::App;
-pub use app::state::AppState;
-pub use ui::run_app;
+// Re-export key backend components
+pub use agent::core::Agent;
+pub use app::core::App;
+pub use app::core::AppState;
+pub use communication::rpc::RpcServer;
