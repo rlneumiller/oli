@@ -35,7 +35,7 @@ const WelcomeBox = ({ children }: { children: React.ReactNode }) => (
       width={60}
     >
       <Box flexDirection="column">
-        <Text color={theme.colors.dark.green} bold>✻ Welcome to Oli!</Text>
+        <Text color={theme.colors.dark.green} bold>✻ Welcome to oli!</Text>
         <Box marginY={1} />
         {children}
         <Box marginY={1} />

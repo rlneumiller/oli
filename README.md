@@ -114,13 +114,13 @@ Note: For best results with tool use and agent capabilities, use models like Qwe
 The application uses a hybrid architecture:
 
 ```
-┌─────────────────────┐        ┌─────────────────────┐
-│  React + Ink UI     │◄───────┤  Rust Backend       │
-│                     │  JSON  │                     │
-│  - UI               │  RPC   │  - Agent            │
-│  - Task Display     │        │  - Tool Execution   │
-│  - Loading state    │        │  - Code Parsing     │
-└─────────────────────┘        └─────────────────────┘
+┌───────────────┐        ┌───────────────┐
+│ React + Ink UI│◄───────┤ Rust Backend  │
+│               │  JSON  │               │
+│ - UI          │  RPC   │ - Agent       │
+│ - Task Display│        │ - Tool Exec   │
+│ - Loading     │        │ - Code Parse  │
+└───────────────┘        └───────────────┘
 ```
 
 - **Rust Backend**: Handles agent functionality, tool execution, and API calls
