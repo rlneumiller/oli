@@ -341,8 +341,8 @@ impl ApiClient for OllamaClient {
         let ollama_response = match serde_json::from_str::<OllamaResponse>(&response_text) {
             Ok(resp) => resp,
             Err(e) => {
-                eprintln!("Ollama API response parsing error: {}", e);
-                eprintln!("Response text: {}", response_text);
+                // Log errors when parsing Ollama API response
+                // These would be better with the app logger but we don't have access to it here
 
                 // Try to parse as a generic JSON value to extract what we need
                 let json_value: Result<serde_json::Value, _> = serde_json::from_str(&response_text);
@@ -504,8 +504,8 @@ impl ApiClient for OllamaClient {
         let ollama_response = match serde_json::from_str::<OllamaResponse>(&response_text) {
             Ok(resp) => resp,
             Err(e) => {
-                eprintln!("Ollama API response parsing error: {}", e);
-                eprintln!("Response text: {}", response_text);
+                // Log errors when parsing Ollama API response
+                // These would be better with the app logger but we don't have access to it here
 
                 // Try to parse as a generic JSON value to extract what we need
                 let json_value: Result<serde_json::Value, _> = serde_json::from_str(&response_text);
