@@ -1,7 +1,7 @@
 {
   "name": "oli-ui",
   "version": "0.1.0",
-  "description": "React/Ink Terminal UI for Oli",
+  "description": "React/Ink Terminal UI for oli",
   "type": "module",
   "main": "dist/index.js",
   "bin": "dist/cli.js",

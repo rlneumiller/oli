@@ -227,7 +227,7 @@ const App: React.FC<AppProps> = ({ backend }) => {
             marginBottom={1}
           >
             <Text {...theme.styles.text.heading}>
-              Oli • {state.models[state.selectedModel]?.name || 'AI Assistant'}
+              oli • {state.models[state.selectedModel]?.name || 'AI Assistant'}
             </Text>
           </Box>
 

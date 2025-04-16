@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-# Build script for Oli (Rust backend + React/Ink frontend)
-echo "Building Oli (Hybrid Rust/React Application)"
+# Build script for oli (Rust backend + React/Ink frontend)
+echo "Building oli (Hybrid Rust/React Application)"
 
 # Check for required tools
 command -v cargo >/dev/null 2>&1 || { echo "Error: cargo is not installed. Please install Rust."; exit 1; }

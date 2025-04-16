@@ -105,9 +105,9 @@ pub fn draw_api_key_input(f: &mut Frame, app: &mut App) {
     // Determine title based on selected model
     let version = env!("CARGO_PKG_VERSION");
     let title_text = match app.current_model().name.as_str() {
-        "GPT-4o" => format!("Oli v{} - OpenAI API Key Setup", version),
-        name if name.contains("Local") => format!("Oli v{} - Local Model Setup", version),
-        _ => format!("Oli v{} - Anthropic API Key Setup", version),
+        "GPT-4o" => format!("oli v{} - OpenAI API Key Setup", version),
+        name if name.contains("Local") => format!("oli v{} - Local Model Setup", version),
+        _ => format!("oli v{} - Anthropic API Key Setup", version),
     };
 
     let title = Paragraph::new(title_text)
