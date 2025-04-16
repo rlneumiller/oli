@@ -58,7 +58,7 @@ impl User {
     pub fn new(id: u64, username: String, email: String) -> Self {
         Self { id, username, email }
     }
-    
+
     pub fn validate(&self) -> bool {
         !self.username.is_empty() && !self.email.is_empty() && self.email.contains('@')
     }
@@ -97,13 +97,13 @@ pub fn generate_id() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_validate_email() {
         assert!(validate_email("user@example.com"));
         assert!(!validate_email("invalid-email"));
     }
-    
+
     #[test]
     fn test_format_date() {
         assert_eq!(format_date(1672531200), "2023-01-01");
@@ -123,7 +123,7 @@ class User {
         this.username = username;
         this.email = email;
     }
-    
+
     validate() {
         return this.username && this.email && validateEmail(this.email);
     }

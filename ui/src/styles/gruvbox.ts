@@ -3,82 +3,82 @@ export const colors = {
   // Dark theme colors
   dark: {
     // Background colors
-    bg: '#282828',
-    bg0: '#282828',
-    bg1: '#3c3836',
-    bg2: '#504945',
-    bg3: '#665c54',
-    bg4: '#7c6f64',
-    
+    bg: "#282828",
+    bg0: "#282828",
+    bg1: "#3c3836",
+    bg2: "#504945",
+    bg3: "#665c54",
+    bg4: "#7c6f64",
+
     // Foreground colors
-    fg: '#ebdbb2',
-    fg0: '#fbf1c7',
-    fg1: '#ebdbb2',
-    fg2: '#d5c4a1',
-    fg3: '#bdae93',
-    fg4: '#a89984',
-    
+    fg: "#ebdbb2",
+    fg0: "#fbf1c7",
+    fg1: "#ebdbb2",
+    fg2: "#d5c4a1",
+    fg3: "#bdae93",
+    fg4: "#a89984",
+
     // Accent colors
-    red: '#fb4934',
-    green: '#b8bb26',
-    yellow: '#fabd2f',
-    blue: '#83a598',
-    purple: '#d3869b',
-    aqua: '#8ec07c',
-    orange: '#fe8019',
-    
+    red: "#fb4934",
+    green: "#b8bb26",
+    yellow: "#fabd2f",
+    blue: "#83a598",
+    purple: "#d3869b",
+    aqua: "#8ec07c",
+    orange: "#fe8019",
+
     // Muted accent colors
-    darkRed: '#cc241d',
-    darkGreen: '#98971a',
-    darkYellow: '#d79921',
-    darkBlue: '#458588',
-    darkPurple: '#b16286',
-    darkAqua: '#689d6a',
-    darkOrange: '#d65d0e',
-    
+    darkRed: "#cc241d",
+    darkGreen: "#98971a",
+    darkYellow: "#d79921",
+    darkBlue: "#458588",
+    darkPurple: "#b16286",
+    darkAqua: "#689d6a",
+    darkOrange: "#d65d0e",
+
     // Grayscale
-    gray: '#928374',
+    gray: "#928374",
   },
-  
+
   // Light theme colors (not used for now)
   light: {
     // Background colors
-    bg: '#fbf1c7',
-    bg0: '#fbf1c7',
-    bg1: '#ebdbb2',
-    bg2: '#d5c4a1',
-    bg3: '#bdae93',
-    bg4: '#a89984',
-    
+    bg: "#fbf1c7",
+    bg0: "#fbf1c7",
+    bg1: "#ebdbb2",
+    bg2: "#d5c4a1",
+    bg3: "#bdae93",
+    bg4: "#a89984",
+
     // Foreground colors
-    fg: '#3c3836',
-    fg0: '#282828',
-    fg1: '#3c3836',
-    fg2: '#504945',
-    fg3: '#665c54',
-    fg4: '#7c6f64',
-    
+    fg: "#3c3836",
+    fg0: "#282828",
+    fg1: "#3c3836",
+    fg2: "#504945",
+    fg3: "#665c54",
+    fg4: "#7c6f64",
+
     // Accent colors
-    red: '#9d0006',
-    green: '#79740e',
-    yellow: '#b57614',
-    blue: '#076678',
-    purple: '#8f3f71',
-    aqua: '#427b58',
-    orange: '#af3a03',
-    
+    red: "#9d0006",
+    green: "#79740e",
+    yellow: "#b57614",
+    blue: "#076678",
+    purple: "#8f3f71",
+    aqua: "#427b58",
+    orange: "#af3a03",
+
     // Bright accent colors
-    brightRed: '#cc241d',
-    brightGreen: '#98971a',
-    brightYellow: '#d79921',
-    brightBlue: '#458588',
-    brightPurple: '#b16286',
-    brightAqua: '#689d6a',
-    brightOrange: '#d65d0e',
-    
+    brightRed: "#cc241d",
+    brightGreen: "#98971a",
+    brightYellow: "#d79921",
+    brightBlue: "#458588",
+    brightPurple: "#b16286",
+    brightAqua: "#689d6a",
+    brightOrange: "#d65d0e",
+
     // Grayscale
-    gray: '#928374',
-  }
+    gray: "#928374",
+  },
 };
 
 // Common UI components styling
@@ -99,11 +99,11 @@ export const styles = {
       borderColor: colors.dark.gray,
     },
     input: {
-      borderStyle: "single" as const, 
+      borderStyle: "single" as const,
       borderColor: colors.dark.gray,
     },
   },
-  
+
   // Text styles
   text: {
     heading: {
@@ -149,12 +149,12 @@ export const styles = {
       color: colors.dark.blue,
     },
   },
-  
+
   // Status indicators
   status: {
     active: {
       color: colors.dark.green,
-      icon: '●',
+      icon: "●",
     },
     processing: {
       color: colors.dark.yellow,
@@ -162,14 +162,14 @@ export const styles = {
     },
     error: {
       color: colors.dark.red,
-      icon: '○',
+      icon: "○",
     },
     inactive: {
       color: colors.dark.gray,
-      icon: '○',
+      icon: "○",
     },
   },
-  
+
   // Button-like elements
   button: {
     primary: {

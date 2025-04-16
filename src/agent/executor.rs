@@ -531,7 +531,7 @@ impl AgentExecutor {
                                             output.lines().filter(|l| l.contains("FILE")).count();
                                         let dir_count =
                                             output.lines().filter(|l| l.contains("DIR")).count();
-                                        format!("LS(path: \"{}\") → Listed {} items ({} files, {} dirs)", 
+                                        format!("LS(path: \"{}\") → Listed {} items ({} files, {} dirs)",
                                             path, file_count + dir_count, file_count, dir_count)
                                     } else {
                                         format!("Tool result: {}", preview)

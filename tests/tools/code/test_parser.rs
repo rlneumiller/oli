@@ -202,7 +202,7 @@ impl TestStruct {
             field2: String::new(),
         }
     }
-    
+
     fn test_method(&self) -> i32 {
         self.field1
     }

@@ -35,34 +35,34 @@ lazy_static! {
     /// PEG-style query for Rust code structures
     static ref RUST_QUERY: &'static str = r#"
         ; Struct declarations
-        (struct_item 
+        (struct_item
             name: (identifier) @struct.name
             body: (field_declaration_list)? @struct.body) @struct.def
 
         ; Enum declarations
-        (enum_item 
+        (enum_item
             name: (identifier) @enum.name
             body: (enum_variant_list)? @enum.body) @enum.def
 
         ; Trait declarations
-        (trait_item 
+        (trait_item
             name: (identifier) @trait.name
             body: (declaration_list)? @trait.body) @trait.def
 
         ; Implementations
-        (impl_item 
+        (impl_item
             trait: (type_identifier)? @impl.trait
             type: (type_identifier) @impl.type
             body: (declaration_list)? @impl.body) @impl.def
 
         ; Functions
-        (function_item 
+        (function_item
             name: (identifier) @function.name
             parameters: (parameters)? @function.params
             body: (block)? @function.body) @function.def
 
         ; Modules
-        (mod_item 
+        (mod_item
             name: (identifier) @module.name
             body: (declaration_list)? @module.body) @module.def
 
@@ -81,33 +81,33 @@ lazy_static! {
     /// PEG-style query for JavaScript/TypeScript code structures
     static ref JAVASCRIPT_QUERY: &'static str = r#"
         ; Classes
-        (class_declaration 
+        (class_declaration
             name: (identifier) @class.name
             body: (class_body)? @class.body) @class.def
 
         ; Functions
-        (function_declaration 
+        (function_declaration
             name: (identifier) @function.name
             parameters: (formal_parameters) @function.params
             body: (statement_block)? @function.body) @function.def
 
         ; Methods
-        (method_definition 
+        (method_definition
             name: (property_identifier) @method.name
             parameters: (formal_parameters) @method.params
             body: (statement_block)? @method.body) @method.def
 
         ; Arrow functions in variable declarations
-        (lexical_declaration 
-            (variable_declarator 
-                name: (identifier) @const.name 
+        (lexical_declaration
+            (variable_declarator
+                name: (identifier) @const.name
                 value: (arrow_function) @const.value)) @const.def
 
         ; Object pattern in variable declarations
         (variable_declaration
             (variable_declarator
                 name: (identifier) @var.name)) @var.def
-        
+
         ; Interface declarations (TypeScript)
         (interface_declaration
             name: (type_identifier) @interface.name
@@ -126,12 +126,12 @@ lazy_static! {
     /// PEG-style query for Python code structures
     static ref PYTHON_QUERY: &'static str = r#"
         ; Classes
-        (class_definition 
+        (class_definition
             name: (identifier) @class.name
             body: (block)? @class.body) @class.def
 
         ; Functions
-        (function_definition 
+        (function_definition
             name: (identifier) @function.name
             parameters: (parameters) @function.params
             body: (block)? @function.body) @function.def
@@ -148,13 +148,13 @@ lazy_static! {
             module_name: (dotted_name) @import_from.module) @import_from.def
 
         ; Global variables and constants
-        (assignment 
+        (assignment
             left: (identifier) @assignment.name
             right: (_) @assignment.value) @assignment.def
 
         ; Class attributes
         (class_definition
-            body: (block 
+            body: (block
                 (expression_statement
                     (assignment
                         left: (identifier) @class_attr.name)))) @class_attr.def
@@ -163,20 +163,20 @@ lazy_static! {
     /// PEG-style query for Go code structures
     static ref GO_QUERY: &'static str = r#"
         ; Type declarations
-        (type_declaration 
-            (type_spec 
+        (type_declaration
+            (type_spec
                 name: (type_identifier) @type.name
                 type: (_) @type.value)) @type.def
 
         ; Function declarations
-        (function_declaration 
+        (function_declaration
             name: (identifier) @function.name
             parameters: (parameter_list) @function.params
             result: (_)? @function.result
             body: (block)? @function.body) @function.def
 
         ; Method declarations
-        (method_declaration 
+        (method_declaration
             name: (field_identifier) @method.name
             parameters: (parameter_list) @method.params
             result: (_)? @method.result
@@ -216,7 +216,7 @@ lazy_static! {
         (class_specifier
             name: (type_identifier) @class.name
             body: (field_declaration_list) @class.body) @class.def
-        
+
         ; Struct specifiers
         (struct_specifier
             name: (type_identifier) @struct.name

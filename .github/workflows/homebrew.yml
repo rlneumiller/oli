@@ -40,7 +40,7 @@ jobs:
           download-url: https://github.com/amrit110/oli/archive/refs/tags/${{ steps.extract-version.outputs.tag-name }}.tar.gz
           commit-message: |
             oli ${{ steps.extract-version.outputs.version }}
-            
+
             Created by https://github.com/amrit110/oli/actions/runs/${{ github.run_id }}
         env:
           COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TOKEN }}

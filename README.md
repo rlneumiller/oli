@@ -48,6 +48,27 @@ cd oli
 
 ## Environment Setup
 
+### Development Setup
+
+```bash
+# Install Python dependencies (for pre-commit)
+python -m pip install uv
+uv venv
+uv pip install -e .
+
+# Install pre-commit hooks
+pre-commit install
+
+# Run Rust linting and formatting
+cargo fmt
+cargo clippy
+
+# Run TypeScript checks in the UI directory
+cd ui
+npm run lint
+npm run format
+```
+
 ### Cloud API Models
 
 For API-based features, set up your environment variables:
@@ -86,7 +107,7 @@ oli supports local models through Ollama:
    # Examples of compatible models
    ollama pull qwen2.5-coder:14b
    ollama pull qwen2.5-coder:3b
-   ollama pull llama3:8b  
+   ollama pull llama3:8b
    ```
 4. Start oli and select the Ollama model from the model selection menu
 

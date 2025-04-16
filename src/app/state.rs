@@ -196,12 +196,12 @@ impl App {
             command_processor: AsyncProcessor::default(),
         }
     }
-    
+
     /// Check if there are any active tasks
     pub fn has_active_tasks(&self) -> bool {
         self.tasks.iter().any(|task| task.is_in_progress())
     }
-    
+
     /// Get the task statuses for all tasks
     pub fn get_task_statuses(&self) -> Vec<serde_json::Value> {
         self.tasks.iter().map(|task| {
@@ -210,7 +210,7 @@ impl App {
                 TaskStatus::Completed { .. } => "completed",
                 TaskStatus::Failed(_) => "failed",
             };
-            
+
             serde_json::json!({
                 "id": task.id,
                 "description": task.description,

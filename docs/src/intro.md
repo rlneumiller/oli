@@ -82,7 +82,7 @@ oli supports local models through Ollama:
    # Examples of compatible models
    ollama pull qwen2.5-coder:14b
    ollama pull qwen2.5-coder:3b
-   ollama pull llama3:8b  
+   ollama pull llama3:8b
    ```
 4. Start oli and select the Ollama model from the model selection menu
 

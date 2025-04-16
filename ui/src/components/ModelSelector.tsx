@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { Box, Text, useInput } from 'ink';
-import Spinner from 'ink-spinner';
-import theme from '../styles/gruvbox.js';
+import React, { useState, useEffect } from "react";
+import { Box, Text, useInput } from "ink";
+import Spinner from "ink-spinner";
+import theme from "../styles/gruvbox.js";
 
 // Model interface
 interface Model {
@@ -21,12 +21,7 @@ interface ModelSelectorProps {
 
 // Simple welcome box component
 const WelcomeBox = ({ children }: { children: React.ReactNode }) => (
-  <Box
-    width="100%"
-    height="100%"
-    alignItems="center"
-    justifyContent="center"
-  >
+  <Box width="100%" height="100%" alignItems="center" justifyContent="center">
     <Box
       borderStyle="round"
       borderColor={theme.colors.dark.green}
@@ -35,7 +30,9 @@ const WelcomeBox = ({ children }: { children: React.ReactNode }) => (
       width={60}
     >
       <Box flexDirection="column">
-        <Text color={theme.colors.dark.green} bold>✻ Welcome to oli!</Text>
+        <Text color={theme.colors.dark.green} bold>
+          ✻ Welcome to oli!
+        </Text>
         <Box marginY={1} />
         {children}
         <Box marginY={1} />
@@ -46,7 +43,13 @@ const WelcomeBox = ({ children }: { children: React.ReactNode }) => (
 );
 
 // Model selector with minimal UI
-const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedIndex, onSelect, onConfirm, isLoading }) => {
+const ModelSelector: React.FC<ModelSelectorProps> = ({
+  models,
+  selectedIndex,
+  onSelect,
+  onConfirm,
+  isLoading,
+}) => {
   // Track local selected index
   const [index, setIndex] = useState(selectedIndex);
 
@@ -60,13 +63,13 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedIndex, on
   // Handle keyboard input for selection and confirmation
   useInput((input, key) => {
     if (isLoading || models.length === 0) return;
-    
+
     if (key.return) {
       onConfirm();
     } else if (key.upArrow && index > 0) {
-      setIndex(prev => prev - 1);
+      setIndex((prev) => prev - 1);
     } else if (key.downArrow && index < models.length - 1) {
-      setIndex(prev => prev + 1);
+      setIndex((prev) => prev + 1);
     }
   });
 
@@ -97,25 +100,28 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ models, selectedIndex, on
     <WelcomeBox>
       <>
         <Text color={theme.colors.dark.yellow}>Select a model:</Text>
-        
+
         <Box marginY={1} flexDirection="column">
           {models.map((model, i) => (
-            <Text 
+            <Text
               key={`model-${i}`}
-              color={i === index ? theme.colors.dark.green : theme.colors.dark.fg}
+              color={
+                i === index ? theme.colors.dark.green : theme.colors.dark.fg
+              }
               bold={i === index}
             >
-              {i === index ? '● ' : '○ '}{model.name}
+              {i === index ? "● " : "○ "}
+              {model.name}
             </Text>
           ))}
         </Box>
-        
+
         {models[index]?.description && (
           <Text color={theme.colors.dark.fg4} wrap="wrap" dimColor>
             {models[index].description}
           </Text>
         )}
-        
+
         <Text color={theme.colors.dark.fg4}>
           Use arrow keys ↑↓ to select, Enter to confirm
         </Text>

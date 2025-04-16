@@ -1,0 +1,58 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0  # Use the ref you want to point at
+    hooks:
+    - id: trailing-whitespace
+    - id: check-ast
+    - id: check-builtin-literals
+    - id: check-docstring-first
+    - id: check-executables-have-shebangs
+    - id: debug-statements
+    - id: end-of-file-fixer
+    - id: mixed-line-ending
+      args: [--fix=lf]
+    - id: check-byte-order-marker
+    - id: check-merge-conflict
+    - id: check-symlinks
+    - id: detect-private-key
+    - id: check-yaml
+      args: [--unsafe]
+    - id: check-toml
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        description: Format Rust code
+        entry: cargo fmt --
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy
+        description: Run clippy linter on Rust code
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: eslint
+        name: eslint
+        description: Run ESLint on TypeScript files
+        entry: bash -c 'cd ui && npm run lint'
+        language: system
+        files: \.(ts|tsx)$
+        exclude: ^(?!ui/)
+        pass_filenames: false
+
+      - id: prettier
+        name: prettier
+        description: Format TypeScript files with Prettier
+        entry: bash -c 'cd ui && npm run format'
+        language: system
+        files: \.(ts|tsx)$
+        exclude: ^(?!ui/)
+        pass_filenames: false

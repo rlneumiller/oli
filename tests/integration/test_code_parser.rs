@@ -78,12 +78,12 @@ struct CodeParser {
 
 impl CodeParser {
     pub fn new() -> Result<Self> {
-        Ok(Self { 
+        Ok(Self {
             languages: HashMap::new(),
             parser: Parser::new(),
         })
     }
-    
+
     pub fn parse_file(&mut self, path: &Path) -> Result<CodeAST> {
         // Implementation...
         todo!()

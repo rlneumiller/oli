@@ -353,13 +353,13 @@ fn is_tool_message(msg: &str) -> bool {
     msg.contains("\x1b[31m⏺\x1b[0m") || // Legacy red circle for errors
     msg.starts_with("⏺ [completed]") || // Completed tool
     msg.starts_with("⏺ [error]") || // Error tool
-    (msg.starts_with("⏺ ") && 
-     (msg.contains("LS(") || 
-      msg.contains("View(") || 
-      msg.contains("Glob") || 
-      msg.contains("Grep") || 
-      msg.contains("Edit") || 
-      msg.contains("Replace") || 
+    (msg.starts_with("⏺ ") &&
+     (msg.contains("LS(") ||
+      msg.contains("View(") ||
+      msg.contains("Glob") ||
+      msg.contains("Grep") ||
+      msg.contains("Edit") ||
+      msg.contains("Replace") ||
       msg.contains("Bash")))
 }
 

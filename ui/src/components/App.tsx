@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from 'react';
-import { Box, Text } from 'ink';
-import { BackendService } from '../services/backend.js';
-import ChatInterface from './ChatInterface.js';
-import ModelSelector from './ModelSelector.js';
-import StatusBar from './StatusBar.js';
-import theme from '../styles/gruvbox.js';
+import React, { useEffect, useState } from "react";
+import { Box, Text } from "ink";
+import { BackendService } from "../services/backend.js";
+import ChatInterface from "./ChatInterface.js";
+import ModelSelector from "./ModelSelector.js";
+import StatusBar from "./StatusBar.js";
+import theme from "../styles/gruvbox.js";
 
 // App props interface
 interface AppProps {
@@ -13,20 +13,33 @@ interface AppProps {
 
 // App state interface
 interface AppState {
-  models: any[];
+  models: Model[];
   selectedModel: number;
   messages: Message[];
-  tasks: any[];
+  tasks: Task[];
   isProcessing: boolean;
   error: string | null;
   backendConnected: boolean;
-  appMode: 'setup' | 'chat';  // Add a mode to switch between setup and chat
+  appMode: "setup" | "chat"; // Add a mode to switch between setup and chat
+}
+
+// Model interface
+interface Model {
+  name: string;
+  id: string;
+}
+
+// Task interface
+interface Task {
+  id: string;
+  name: string;
+  status: "pending" | "running" | "complete" | "error";
 }
 
 // Message interface
 interface Message {
   id: string;
-  role: 'user' | 'assistant' | 'system' | 'tool';
+  role: "user" | "assistant" | "system" | "tool";
   content: string;
   timestamp: number;
 }
@@ -42,87 +55,99 @@ const App: React.FC<AppProps> = ({ backend }) => {
     isProcessing: false,
     error: null,
     backendConnected: false,
-    appMode: 'setup'  // Start in setup mode
+    appMode: "setup", // Start in setup mode
   });
 
   // Load initial data
   useEffect(() => {
     // Listen for backend connection events
-    backend.on('backend_connected', (params) => {
-      setState(prev => ({
+    backend.on("backend_connected", (params) => {
+      setState((prev) => ({
         ...prev,
         models: params.models || [],
         backendConnected: true,
-        messages: [...prev.messages, {
-          id: `system-${Date.now()}`,
-          role: 'system',
-          content: 'Connected to backend successfully',
-          timestamp: Date.now()
-        }]
+        messages: [
+          ...prev.messages,
+          {
+            id: `system-${Date.now()}`,
+            role: "system",
+            content: "Connected to backend successfully",
+            timestamp: Date.now(),
+          },
+        ],
       }));
     });
-    
-    backend.on('backend_connection_error', (params) => {
-      setState(prev => ({
+
+    backend.on("backend_connection_error", (params) => {
+      setState((prev) => ({
         ...prev,
         error: params.error,
         backendConnected: false,
-        messages: [...prev.messages, {
-          id: `system-${Date.now()}`,
-          role: 'system',
-          content: `Failed to connect to backend: ${params.error}`,
-          timestamp: Date.now()
-        }]
+        messages: [
+          ...prev.messages,
+          {
+            id: `system-${Date.now()}`,
+            role: "system",
+            content: `Failed to connect to backend: ${params.error}`,
+            timestamp: Date.now(),
+          },
+        ],
       }));
     });
 
     // Register event listeners for backend notifications
-    backend.on('processing_started', (params) => {
-      setState(prev => ({
+    backend.on("processing_started", () => {
+      setState((prev) => ({
         ...prev,
-        isProcessing: true
+        isProcessing: true,
       }));
     });
 
-    backend.on('processing_progress', (params) => {
+    backend.on("processing_progress", (params) => {
       // Add progress message if it's not already in the list
-      setState(prev => {
+      setState((prev) => {
         // Only add the message if it's not a duplicate
-        if (!prev.messages.some(m => m.content === params.message)) {
+        if (!prev.messages.some((m) => m.content === params.message)) {
           return {
             ...prev,
-            messages: [...prev.messages, {
-              id: `progress-${Date.now()}`,
-              role: 'system',
-              content: params.message,
-              timestamp: Date.now()
-            }]
+            messages: [
+              ...prev.messages,
+              {
+                id: `progress-${Date.now()}`,
+                role: "system",
+                content: params.message,
+                timestamp: Date.now(),
+              },
+            ],
           };
         }
         return prev;
       });
     });
 
-    backend.on('processing_complete', (params) => {
-      setState(prev => ({
+    backend.on("processing_complete", () => {
+      setState((prev) => ({
         ...prev,
-        isProcessing: false
+        isProcessing: false,
       }));
     });
 
-    backend.on('tool_execution', (params) => {
-      setState(prev => ({
+    backend.on("tool_execution", (params) => {
+      setState((prev) => ({
         ...prev,
-        messages: [...prev.messages, {
-          id: `tool-${Date.now()}`,
-          role: 'tool',
-          content: `[${params.tool}] ${params.message}`,
-          timestamp: Date.now()
-        }]
+        messages: [
+          ...prev.messages,
+          {
+            id: `tool-${Date.now()}`,
+            role: "tool",
+            content: `[${params.tool}] ${params.message}`,
+            timestamp: Date.now(),
+          },
+        ],
       }));
     });
 
-    backend.on('log_message', (params) => {
+    backend.on("log_message", () => {
       // Silent log handling
     });
 
@@ -137,70 +162,71 @@ const App: React.FC<AppProps> = ({ backend }) => {
     // Add user message to message list
     const userMessage: Message = {
       id: `user-${Date.now()}`,
-      role: 'user',
+      role: "user",
       content: input,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     };
 
-    setState(prev => ({
+    setState((prev) => ({
       ...prev,
       messages: [...prev.messages, userMessage],
-      isProcessing: true
+      isProcessing: true,
     }));
 
     try {
       // Send the query to the backend
-      const result = await backend.call('query_model', {
+      const result = await backend.call("query_model", {
         prompt: input,
-        model_index: state.selectedModel
+        model_index: state.selectedModel,
       });
 
       // Add assistant response to message list
       const assistantMessage: Message = {
         id: `assistant-${Date.now()}`,
-        role: 'assistant',
+        role: "assistant",
         content: result.response,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       };
 
-      setState(prev => ({
+      setState((prev) => ({
         ...prev,
         messages: [...prev.messages, assistantMessage],
-        isProcessing: false
+        isProcessing: false,
       }));
-    } catch (err: any) {
-      setState(prev => ({
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      setState((prev) => ({
         ...prev,
         isProcessing: false,
-        error: `Error: ${err.message}`
+        error: `Error: ${errorMessage}`,
       }));
     }
   };
 
   // Handle model selection
   const handleModelSelect = (index: number) => {
-    setState(prev => ({
+    setState((prev) => ({
       ...prev,
-      selectedModel: index
+      selectedModel: index,
     }));
   };
-  
+
   // Handle model confirmation and switch to chat mode
   const handleModelConfirm = () => {
     // Only proceed if we have models and backend is connected
     if (state.models.length > 0 && state.backendConnected) {
-      setState(prev => ({
+      setState((prev) => ({
         ...prev,
-        appMode: 'chat',
+        appMode: "chat",
         messages: [
           ...prev.messages,
           {
             id: `system-${Date.now()}`,
-            role: 'system',
+            role: "system",
             content: `Using model: ${state.models[state.selectedModel]?.name}. Type a message to begin.`,
-            timestamp: Date.now()
-          }
-        ]
+            timestamp: Date.now(),
+          },
+        ],
       }));
     }
   };
@@ -208,10 +234,10 @@ const App: React.FC<AppProps> = ({ backend }) => {
   // Simple UI with no unnecessary attributes that could cause rendering issues
   return (
     <>
-      {state.appMode === 'setup' ? (
-        <ModelSelector 
-          models={state.models} 
-          selectedIndex={state.selectedModel} 
+      {state.appMode === "setup" ? (
+        <ModelSelector
+          models={state.models}
+          selectedIndex={state.selectedModel}
           onSelect={handleModelSelect}
           onConfirm={handleModelConfirm}
           isLoading={!state.backendConnected || state.models.length === 0}
@@ -219,7 +245,7 @@ const App: React.FC<AppProps> = ({ backend }) => {
       ) : (
         <Box flexDirection="column">
           {/* Header */}
-          <Box 
+          <Box
             borderStyle={theme.styles.box.header.borderStyle}
             borderColor={theme.colors.dark.green}
             paddingX={theme.styles.box.header.paddingX}
@@ -227,22 +253,24 @@ const App: React.FC<AppProps> = ({ backend }) => {
             marginBottom={1}
           >
             <Text {...theme.styles.text.heading}>
-              oli • {state.models[state.selectedModel]?.name || 'AI Assistant'}
+              oli • {state.models[state.selectedModel]?.name || "AI Assistant"}
             </Text>
           </Box>
 
           {/* Chat interface */}
           <Box flexGrow={1} flexDirection="column">
-            <ChatInterface 
-              messages={state.messages} 
+            <ChatInterface
+              messages={state.messages}
               isProcessing={state.isProcessing}
               onSubmit={handleUserInput}
             />
           </Box>
 
           {/* Status bar */}
-          <StatusBar 
-            modelName={state.models[state.selectedModel]?.name || 'AI Assistant'}
+          <StatusBar
+            modelName={
+              state.models[state.selectedModel]?.name || "AI Assistant"
+            }
             isProcessing={state.isProcessing}
             backendConnected={state.backendConnected}
           />
