@@ -1,6 +1,6 @@
 {
-  "name": "oli-cli",
-  "version": "0.1.3",
+  "name": "oli-tui",
+  "version": "0.1.4",
   "description": "A simple, blazingly fast TUI based AI coding assistant",
   "bin": {
     "oli": "./bin/oli"
