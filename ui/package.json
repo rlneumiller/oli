@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "start": "node --loader tsx dist/cli.js",
+    "start": "node --import tsx dist/cli.js",
     "dev": "tsx watch src/cli.ts",
     "lint": "eslint . --ext .ts,.tsx --no-error-on-unmatched-pattern",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",

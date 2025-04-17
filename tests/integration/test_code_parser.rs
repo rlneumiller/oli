@@ -1,4 +1,4 @@
-use oli_tui::tools::code::parser::CodeParser;
+use oli_server::tools::code::parser::CodeParser;
 use std::fs;
 use tempfile::tempdir;
 

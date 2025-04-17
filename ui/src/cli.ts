@@ -12,7 +12,28 @@ import { spawnBackend } from "./services/backend.js";
 // Setup environment for the app
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const backendPath = path.resolve(__dirname, "../../target/release/oli");
+console.log(`Current directory: ${process.cwd()}`);
+console.log(`Script directory: ${__dirname}`);
+// Try multiple potential backend paths
+const potentialPaths = [
+  path.resolve(__dirname, "../../oli-server"),
+  path.resolve(process.cwd(), "../oli-server"),
+  path.resolve(process.cwd(), "oli-server"),
+  "/Users/amritkrishnan/src/oli/target/release/oli-server",
+];
+let backendPath = potentialPaths[0];
+for (const p of potentialPaths) {
+  console.log(`Checking backend path: ${p}`);
+  try {
+    const { accessSync, constants } = await import("fs");
+    accessSync(p, constants.X_OK);
+    backendPath = p;
+    console.log(`Using backend at: ${backendPath}`);
+    break;
+  } catch {
+    console.log(`Backend not found at: ${p}`);
+  }
+}
 
 // Launch the Rust backend as a child process
 const backend = spawnBackend(backendPath);

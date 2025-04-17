@@ -1,4 +1,4 @@
-use oli_tui::tools::code::parser::{CodeAST, CodeParser};
+use oli_server::tools::code::parser::{CodeAST, CodeParser};
 use std::path::Path;
 
 #[test]

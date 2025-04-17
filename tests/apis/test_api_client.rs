@@ -1,6 +1,6 @@
 //! Unit tests for the API client module
 
-use oli_tui::apis::api_client::{
+use oli_server::apis::api_client::{
     CompletionOptions, Message, SessionManager, ToolCall, ToolDefinition, ToolResult,
 };
 use serde_json::json;
