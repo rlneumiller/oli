@@ -1,6 +1,6 @@
 {
   "name": "oli-tui",
-  "version": "0.1.4",
+  "version": "0.1.4-post1",
   "description": "A simple, blazingly fast TUI based AI coding assistant",
   "bin": {
     "oli": "./bin/oli"
