@@ -479,7 +479,56 @@ impl App {
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async {
                     while let Some(message) = progress_rx_receiver.recv().await {
-                        // Process tool execution events
+                        // Special detection for View tool output
+                        let is_view_output = message.lines().next()
+                            .map(|first_line|
+                                first_line.contains(" | ") &&
+                                first_line.trim().chars().take(5).all(|c| c.is_ascii_digit() || c.is_whitespace() || c == '|')
+                            )
+                            .unwrap_or(false);
+
+                        if is_view_output {
+                            if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
+                                // Count the number of lines in the output
+                                let line_count = message.lines().count();
+
+                                // Create a unique ID for this View tool execution
+                                let tool_id = format!("{}.view-{}", task_id, std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis());
+
+                                // Send tool status notification for View
+                                let tool_status = serde_json::json!({
+                                    "type": "updated",
+                                    "execution": {
+                                        "id": tool_id,
+                                        "task_id": task_id,
+                                        "name": "View",
+                                        "status": "success",
+                                        "startTime": std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis(),
+                                        "endTime": std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis() + 100, // Add 100ms to ensure endTime > startTime
+                                        "message": format!("Read {} lines", line_count),
+                                        "metadata": {
+                                            "lines": line_count,
+                                            "description": format!("Read {} lines", line_count),
+                                            "file_path": "view-result", // Add a placeholder file path
+                                        }
+                                    }
+                                });
+
+                                // Send the notification
+                                rpc_server.send_notification("tool_status", tool_status).ok();
+                            }
+                        }
+
+                        // Process standard tool execution events
                         if message.starts_with('[') && message.contains(']') {
                             if let Some(rpc_server) =
                                 crate::communication::rpc::get_global_rpc_server()
@@ -489,12 +538,18 @@ impl App {
                                     let tool_name = parts[0].trim_start_matches('[').trim();
                                     let tool_message = parts[1].trim();
 
+                                    // Log tool detection for debugging
+                                    eprintln!("Detected tool message: [{}] {}", tool_name, tool_message);
+
                                     // Determine tool execution status - default to running
                                     let status = if message.contains("[error]")
                                         || message.contains("ERROR")
                                     {
                                         "error"
-                                    } else if message.contains("[completed]") {
+                                    } else if message.contains("[completed]")
+                                        || message.contains("completed")
+                                        || message.contains("success")
+                                    {
                                         "success"
                                     } else {
                                         "running"
@@ -639,10 +694,14 @@ impl App {
                                         },
                                     };
 
-                                    // Log the tool execution
+                                    // Log the tool execution with detailed information
                                     eprintln!(
-                                        "Created tool execution: {} ({})",
-                                        tool_execution.id, tool_execution.name
+                                        "Created tool execution: {} ({}) - task_id={}, status={:?}, message={}",
+                                        tool_execution.id,
+                                        tool_execution.name,
+                                        tool_execution.task_id,
+                                        tool_execution.status,
+                                        tool_execution.message
                                     );
 
                                     // Send as a tool_status notification directly

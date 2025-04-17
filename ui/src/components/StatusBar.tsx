@@ -46,38 +46,48 @@ const StatusBar: React.FC<StatusBarProps> = ({
       paddingX={2}
       paddingY={1}
       flexDirection="row"
-      justifyContent="space-between"
       alignItems="center"
       width="100%"
     >
-      {/* Left side: Model info */}
-      <Box flexGrow={1} flexDirection="row" alignItems="center">
-        <Text {...theme.styles.text.dimmed}>Model:</Text>
-        <Text {...theme.styles.text.highlight}> {modelName}</Text>
+      {/* Status and model info aligned to the left */}
+      <Box flexDirection="row" alignItems="center">
+        {/* Status indicator */}
+        <Box marginRight={2}>
+          <Text>
+            <Text color={status.color}>{status.icon}</Text>
+            <Text {...theme.styles.text.dimmed}> {status.text}</Text>
+          </Text>
+        </Box>
+
+        {/* Model info */}
+        <Box marginRight={2} flexDirection="row" alignItems="center">
+          <Text {...theme.styles.text.dimmed}>Model:</Text>
+          <Text {...theme.styles.text.highlight}> {modelName}</Text>
+        </Box>
+
+        {/* Separator */}
+        <Box marginRight={2}>
+          <Text {...theme.styles.text.dimmed}>|</Text>
+        </Box>
+
+        {/* Shortcuts */}
+        <Box flexDirection="row" alignItems="center">
+          <Text
+            {...theme.styles.text.dimmed}
+            color={
+              showShortcuts ? theme.colors.dark.yellow : theme.colors.dark.gray
+            }
+            bold={showShortcuts}
+          >
+            ? shortcuts
+          </Text>
+          <Text {...theme.styles.text.dimmed}> | </Text>
+          <Text {...theme.styles.text.dimmed}>Ctrl+C to exit</Text>
+        </Box>
       </Box>
 
-      {/* Middle: Status indicator */}
-      <Box>
-        <Text>
-          <Text color={status.color}>{status.icon}</Text>
-          <Text {...theme.styles.text.dimmed}> {status.text}</Text>
-        </Text>
-      </Box>
-
-      {/* Right side: Shortcuts and hints */}
-      <Box marginLeft={2} flexDirection="row" alignItems="center">
-        <Text
-          {...theme.styles.text.dimmed}
-          color={
-            showShortcuts ? theme.colors.dark.yellow : theme.colors.dark.gray
-          }
-          bold={showShortcuts}
-        >
-          ? shortcuts
-        </Text>
-        <Text {...theme.styles.text.dimmed}> | </Text>
-        <Text {...theme.styles.text.dimmed}>Ctrl+C to exit</Text>
-      </Box>
+      {/* Empty box to maintain full width */}
+      <Box flexGrow={1} />
     </Box>
   );
 };

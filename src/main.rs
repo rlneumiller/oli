@@ -186,7 +186,17 @@ fn main() -> Result<()> {
     rpc_server.register_method("get_version", move |_| Ok(json!({ "version": VERSION })));
 
     // Register subscription handlers for real-time event streaming
+    // This must happen before the RPC server starts running
     rpc_server.register_subscription_handlers();
+
+    // Log that we've registered subscription handlers
+    eprintln!(
+        "{}",
+        format_log_with_color(
+            LogLevel::Info,
+            "Registered subscription handlers for real-time event streaming"
+        )
+    );
 
     // Register clear_conversation method to clear the conversation history
     {

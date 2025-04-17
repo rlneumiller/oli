@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useCallback, useMemo } from "react";
-import { Box, Text } from "ink";
+import { Box } from "ink";
 import { BackendService } from "../services/backend.js";
 import ChatInterface from "./ChatInterface.js";
 import ModelSelector from "./ModelSelector.js";
 import StatusBar from "./StatusBar.js";
-import theme from "../styles/gruvbox.js";
+import HeaderBox from "./HeaderBox.js";
+// Theme is used by imported components
 
 import { AppState, ToolExecution, ToolStatusUpdate } from "../types/index.js";
 import { isCommand } from "../utils/commandUtils.js";
@@ -16,16 +17,16 @@ import {
 // App props interface
 interface AppProps {
   backend: BackendService;
+  noHeader?: boolean; // Flag to disable the header rendering
 }
 
 // Main app component
-const App: React.FC<AppProps> = ({ backend }) => {
+const App: React.FC<AppProps> = ({ backend, noHeader = false }) => {
   // App state
   const [state, setState] = useState<AppState>({
     models: [],
     selectedModel: 0,
     messages: [],
-    tasks: [],
     isProcessing: false,
     error: null,
     backendConnected: false,
@@ -47,7 +48,7 @@ const App: React.FC<AppProps> = ({ backend }) => {
     const setupToolStatusSubscription = async () => {
       try {
         await backend.subscribe("tool_status");
-        console.log("Subscribed to tool status updates");
+        // Subscribed successfully
       } catch (error) {
         console.error("Failed to subscribe to tool status updates:", error);
       }
@@ -55,9 +56,6 @@ const App: React.FC<AppProps> = ({ backend }) => {
 
     // Handle tool status events
     const handleToolStatus = (params: ToolStatusUpdate) => {
-      // Log tool status events for debugging
-      console.log(`Tool status update received: ${JSON.stringify(params)}`);
-
       const { type, execution } = params;
 
       setToolExecutions((prev) => {
@@ -65,32 +63,54 @@ const App: React.FC<AppProps> = ({ backend }) => {
         const newMap = new Map(prev);
 
         if (type === "started") {
-          // Add new tool execution
-          console.log(
-            `Adding new tool execution: ${execution.id} (${execution.name})`,
-          );
+          // Add new tool execution to the map
           newMap.set(execution.id, execution);
         } else if (type === "updated") {
-          // Update existing tool execution
-          console.log(
-            `Updating tool execution: ${execution.id} (${execution.status})`,
-          );
+          // Update existing tool in the map
           newMap.set(execution.id, execution);
 
-          // Clean up completed/errored tools after 30 seconds
+          // When a tool completes, add a message to the chat history
           if (execution.status !== "running" && execution.endTime) {
+            setState((prev) => {
+              // Add a tool result message to the messages array
+              return {
+                ...prev,
+                messages: [
+                  ...prev.messages,
+                  {
+                    id: `tool-result-${execution.id}`,
+                    role: "tool",
+                    content: `[${execution.name}] ${execution.message}`,
+                    timestamp: Date.now(),
+                    task_id: execution.task_id,
+                    tool: execution.name,
+                    tool_status:
+                      execution.status === "success" ? "success" : "error",
+                    tool_data: {
+                      name: execution.name,
+                      file_path: execution.metadata.file_path as
+                        | string
+                        | undefined,
+                      lines: execution.metadata.lines as number | undefined,
+                      description:
+                        execution.message ||
+                        (execution.metadata.description as string | undefined),
+                    },
+                  },
+                ],
+              };
+            });
+
+            // Remove completed tool from the map after a short delay
             setTimeout(() => {
               setToolExecutions((current) => {
                 const updatedMap = new Map(current);
                 updatedMap.delete(execution.id);
                 return updatedMap;
               });
-            }, 30000);
+            }, 3000);
           }
         }
-
-        // Log the state of tool executions after update
-        console.log(`Tool executions count: ${newMap.size}`);
 
         return newMap;
       });
@@ -197,42 +217,21 @@ const App: React.FC<AppProps> = ({ backend }) => {
       }));
     });
 
+    // Handle legacy tool execution events by converting them to the new format
     backend.on("tool_execution", (params) => {
       // Generate a unique identifier for this tool execution
       const toolId = `tool-${params.tool}-${Date.now()}`;
 
-      // Extract tool data from the enhanced tool execution event
-      const toolData = {
-        name: params.tool,
-        file_path: params.file_path || undefined,
-        lines: params.lines || undefined,
-        description: params.description || undefined,
-      };
-
-      // Use the status provided by the backend, or fall back to our own detection
-      const toolStatus: "running" | "success" | "error" =
-        params.status || "running";
-
-      // For running tools, check if we already have a message for this tool and update it
-      if (toolStatus === "running") {
-        console.log(`Tool running: ${params.tool} - ${params.message}`);
-      } else if (toolStatus === "success") {
-        console.log(`Tool completed: ${params.tool} - ${params.message}`);
-      } else if (toolStatus === "error") {
-        console.log(`Tool error: ${params.tool} - ${params.message}`);
-      }
-
       // Bridge old tool_execution events to the new tool_status system
-      // This allows legacy events to appear in the ToolStatusPanel
       setToolExecutions((prev) => {
         const newMap = new Map(prev);
         const execution: ToolExecution = {
           id: toolId,
           task_id: params.task_id || "",
           name: params.tool,
-          status: toolStatus,
+          status: params.status || "running",
           startTime: Date.now(),
-          endTime: toolStatus !== "running" ? Date.now() : undefined,
+          endTime: params.status !== "running" ? Date.now() : undefined,
           message: params.message,
           metadata: {
             file_path: params.file_path,
@@ -243,18 +242,12 @@ const App: React.FC<AppProps> = ({ backend }) => {
 
         // Add to tool executions map
         newMap.set(toolId, execution);
-        console.log(
-          `Added legacy tool execution to map: ${toolId}, total=${newMap.size}`,
-        );
 
         return newMap;
       });
 
+      // Add a message to the state for the tool execution
       setState((prev) => {
-        // Check if we already have a tool message for this specific tool execution
-        // If we need to update existing tools, we can implement this logic here
-        // For now, just add a new message for each tool event
-
         return {
           ...prev,
           messages: [
@@ -266,18 +259,29 @@ const App: React.FC<AppProps> = ({ backend }) => {
               timestamp: Date.now(),
               task_id: params.task_id,
               tool: params.tool,
-              tool_status: toolStatus,
-              tool_data: toolData,
+              tool_status: params.status || "running",
+              tool_data: {
+                name: params.tool,
+                file_path: params.file_path,
+                lines: params.lines,
+                description: params.description,
+              },
             },
           ],
-          // Update task information if we have task_id
-          tasks: prev.tasks.map((task) =>
-            task.id === params.task_id
-              ? { ...task, tool_count: (task.tool_count || 0) + 1 }
-              : task,
-          ),
+          // Task tracking is now handled through toolExecutions Map
         };
       });
+
+      // If the tool is now complete, remove it from active tools after a delay
+      if (params.status && params.status !== "running") {
+        setTimeout(() => {
+          setToolExecutions((current) => {
+            const updatedMap = new Map(current);
+            updatedMap.delete(toolId);
+            return updatedMap;
+          });
+        }, 3000);
+      }
     });
 
     backend.on("log_message", () => {
@@ -426,10 +430,37 @@ const App: React.FC<AppProps> = ({ backend }) => {
     }
   }, [state.isProcessing, backend]);
 
+  // Clean up message history to prevent duplicates
+  const filteredMessages = useMemo(() => {
+    // Track seen user messages to remove duplicates
+    const seenUserMessages = new Set<string>();
+
+    // Filter for a clean chat history
+    return state.messages.filter((msg) => {
+      // Keep all assistant messages
+      if (msg.role === "assistant") return true;
+
+      // For user messages, check for duplicates
+      if (msg.role === "user") {
+        // Skip duplicates based on content
+        if (seenUserMessages.has(msg.content)) {
+          return false;
+        }
+
+        // Mark as seen and keep
+        seenUserMessages.add(msg.content);
+        return true;
+      }
+
+      // For tools and system messages, keep them all
+      return true;
+    });
+  }, [state.messages]);
+
   const chatInterfaceComponent = useMemo(
     () => (
       <ChatInterface
-        messages={state.messages}
+        messages={filteredMessages}
         isProcessing={state.isProcessing}
         onSubmit={handleUserInput}
         onInterrupt={handleInterrupt}
@@ -437,14 +468,12 @@ const App: React.FC<AppProps> = ({ backend }) => {
         onToggleShortcuts={handleToggleShortcuts}
         onClearHistory={handleClearHistory}
         onExecuteCommand={handleExecuteCommand}
-        tasks={state.tasks}
         toolExecutions={toolExecutions}
       />
     ),
     [
-      state.messages,
+      filteredMessages,
       state.isProcessing,
-      state.tasks,
       toolExecutions,
       handleUserInput,
       handleInterrupt,
@@ -479,25 +508,21 @@ const App: React.FC<AppProps> = ({ backend }) => {
     return modelSelectorComponent;
   }
 
-  // Chat mode - header, chat interface, status bar
+  // Get the current model name
+  const modelName = state.models[state.selectedModel]?.name || "AI Assistant";
+
+  // Single column layout with component-based architecture
   return (
     <Box flexDirection="column" width="100%" height="100%">
-      {/* Header - no margin to avoid double borders */}
-      <Box
-        paddingX={theme.styles.box.header.paddingX}
-        paddingY={theme.styles.box.header.paddingY}
-      >
-        <Text {...theme.styles.text.heading}>
-          oli • {state.models[state.selectedModel]?.name || "AI Assistant"}
-        </Text>
-      </Box>
+      {/* Only render header if not disabled */}
+      {!noHeader && <HeaderBox modelName={modelName} />}
 
-      {/* Chat interface - flex grow to fill available space */}
-      <Box flexGrow={1} flexDirection="column">
+      {/* Chat area with extra margin when header is disabled */}
+      <Box flexGrow={1} flexDirection="column" marginTop={noHeader ? 1 : 0}>
         {chatInterfaceComponent}
       </Box>
 
-      {/* Status bar - fixed at bottom */}
+      {/* Status bar */}
       {statusBarComponent}
     </Box>
   );

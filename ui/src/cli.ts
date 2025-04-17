@@ -68,12 +68,42 @@ if (!backendFound) {
 // Launch the Rust backend as a child process
 const backend = spawnBackend(backendPath);
 
-// Create the app element
-const app = React.createElement(App, { backend: backend });
+// When dealing with raw terminal UIs it's helpful to completely
+// disable the default React development warnings
+process.env.NODE_ENV = "production";
 
-// Render the React app with custom options to avoid border rendering issues
+// Create the app element without a header - we'll draw it manually
+const app = React.createElement(App, {
+  backend: backend,
+  noHeader: true, // Pass prop to disable header in App component
+});
+
+// Clear the terminal before rendering anything
+process.stdout.write("\x1B[2J\x1B[H\x1B[J");
+
+// Render fixed header outside of React/Ink's render cycle
+const modelName = "Claude 3.7 Sonnet"; // Hardcoded for now - will be updated once loaded
+
+// Variables for precise box drawing with exact character counts
+const totalWidth = 36; // Total width including borders
+const innerWidth = totalWidth - 2; // Inner width (accounting for side borders)
+const content = ` oli • ${modelName}`; // Add leading space for padding from left border
+const paddingNeeded = innerWidth - content.length;
+const padding = " ".repeat(paddingNeeded);
+
+// Draw the perfectly aligned header
+// The box-drawing is precisely calculated for alignment
+const topBorder = "┌" + "─".repeat(innerWidth) + "┐";
+const contentLine = "│" + content + padding + "│";
+const bottomBorder = "└" + "─".repeat(innerWidth) + "┘";
+
+console.log(
+  "\x1B[32m" + topBorder + "\n" + contentLine + "\n" + bottomBorder + "\x1B[0m",
+);
+
+// Render the React app with custom options
 const { waitUntilExit } = render(app, {
-  // Disable console patching
+  // Disable console patching to avoid interference
   patchConsole: false,
   // Use standard IO
   stdin: process.stdin,

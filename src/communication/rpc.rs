@@ -192,6 +192,7 @@ impl RpcServer {
         // First, check if anyone is subscribed to this event
         let has_subscribers = {
             let manager = self.subscription_manager.lock().unwrap();
+            // No need to log every notification
             manager.has_subscribers(method)
         };
 
@@ -199,8 +200,12 @@ impl RpcServer {
         self.event_sender
             .send((method.to_string(), params.clone()))?;
 
+        // IMPORTANT: For now, always send notifications directly to ensure delivery
+        // This is a temporary fix to ensure notifications reach the UI
+        let always_send = true;
+
         // If this is not a subscribed event or there are no subscribers, we're done
-        if !has_subscribers {
+        if !has_subscribers && !always_send {
             return Ok(());
         }
 

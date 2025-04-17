@@ -7,19 +7,17 @@ import AnimatedSpinner from "./AnimatedSpinner.js";
 interface ToolStatusIndicatorProps {
   status: ToolStatus;
   data?: ToolData;
+  compact?: boolean;
 }
 
 const ToolStatusIndicator: React.FC<ToolStatusIndicatorProps> = ({
   status,
   data,
+  compact = false,
 }) => {
   if (!data) {
-    console.log("ToolStatusIndicator: Missing data prop");
     return null;
   }
-
-  // Log props for debugging
-  console.log(`ToolStatusIndicator: ${data.name}, status=${status}`);
 
   // Get the appropriate status indicator and color - memoized to prevent rerenders
   const statusIndicator = useMemo(() => {
@@ -39,12 +37,18 @@ const ToolStatusIndicator: React.FC<ToolStatusIndicatorProps> = ({
   const toolTitle = useMemo(() => {
     let title = data.name || "Unknown Tool";
 
-    // Add file path if available
-    if (data.file_path) {
+    // Extract file path from data or metadata
+    const filePath = data.file_path
+      ? data.file_path
+      : (data as unknown as { metadata?: { file_path?: string } }).metadata
+          ?.file_path;
+
+    if (filePath) {
       // Shorten file path if it's too long
-      const path = data.file_path;
       const displayPath =
-        path.length > 30 ? `...${path.substring(path.length - 30)}` : path;
+        filePath.length > 30
+          ? `...${filePath.substring(filePath.length - 30)}`
+          : filePath;
 
       title += ` (${displayPath})`;
     }
@@ -59,16 +63,30 @@ const ToolStatusIndicator: React.FC<ToolStatusIndicatorProps> = ({
 
   // Format details based on tool type - memoized to prevent recalculation
   const details = useMemo(() => {
-    if (data.lines) {
-      return `Read ${data.lines} lines (ctrl+r to expand)`;
+    if (compact) return null;
+
+    // Safely access lines - check both direct property and metadata
+    const lines = data.lines
+      ? data.lines
+      : (data as unknown as { metadata?: { lines?: number } }).metadata?.lines;
+
+    if (lines) {
+      return `Read ${lines} lines`;
     }
 
-    if (data.description) {
-      return data.description;
+    // Safely access description - check both direct property and metadata
+    const description = data.description
+      ? data.description
+      : (data as unknown as { message?: string }).message ||
+        (data as unknown as { metadata?: { description?: string } }).metadata
+          ?.description;
+
+    if (description) {
+      return description;
     }
 
     return null;
-  }, [data.lines, data.description]);
+  }, [data, compact]);
 
   // Get appropriate color for status
   const statusColor = useMemo(() => {

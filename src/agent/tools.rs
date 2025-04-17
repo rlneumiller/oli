@@ -87,11 +87,129 @@ impl ToolCall {
     pub fn execute(&self) -> Result<String> {
         match self {
             ToolCall::View(params) => {
-                let path = PathBuf::from(&params.file_path);
-                if let (Some(offset), Some(limit)) = (params.offset, params.limit) {
-                    FileOps::read_file_lines(&path, offset, Some(limit))
+                // Get the global RPC server to send notification
+                if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
+                    // Generate a unique ID for this execution
+                    let tool_id = format!(
+                        "view-direct-{}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis()
+                    );
+
+                    // First, send a "started" notification
+                    let start_notification = serde_json::json!({
+                        "type": "started",
+                        "execution": {
+                            "id": tool_id,
+                            "task_id": "direct-task",
+                            "name": "View",
+                            "status": "running",
+                            "startTime": std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis(),
+                            "message": format!("Reading file: {}", params.file_path),
+                            "metadata": {
+                                "file_path": params.file_path,
+                                "description": format!("Reading file: {}", params.file_path),
+                            }
+                        }
+                    });
+
+                    // Send start notification
+                    rpc_server
+                        .send_notification("tool_status", start_notification)
+                        .ok();
+
+                    // Add a brief delay to ensure the running state is visible
+                    // This simulates a longer-running tool operation
+                    std::thread::sleep(std::time::Duration::from_millis(1000));
+
+                    // Read the file
+                    let path = PathBuf::from(&params.file_path);
+                    let result = if let (Some(offset), Some(limit)) = (params.offset, params.limit)
+                    {
+                        FileOps::read_file_lines(&path, offset, Some(limit))
+                    } else {
+                        FileOps::read_file_with_line_numbers(&path)
+                    };
+
+                    // For successful reads, send a completion notification
+                    if let Ok(ref content) = result {
+                        // Count the number of lines
+                        let line_count = content.lines().count();
+
+                        // Send completion notification
+                        let complete_notification = serde_json::json!({
+                            "type": "updated",
+                            "execution": {
+                                "id": tool_id,
+                                "task_id": "direct-task",
+                                "name": "View",
+                                "status": "success",
+                                "startTime": std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() - 1000, // 1 second ago
+                                "endTime": std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis(),
+                                "message": format!("Read {} lines from file", line_count),
+                                "metadata": {
+                                    "file_path": params.file_path,
+                                    "lines": line_count,
+                                    "description": format!("Read {} lines from file", line_count),
+                                }
+                            }
+                        });
+
+                        // Send completion notification
+                        rpc_server
+                            .send_notification("tool_status", complete_notification)
+                            .ok();
+                    } else if let Err(ref e) = result {
+                        // Send error notification for failed reads
+                        let error_notification = serde_json::json!({
+                            "type": "updated",
+                            "execution": {
+                                "id": tool_id,
+                                "task_id": "direct-task",
+                                "name": "View",
+                                "status": "error",
+                                "startTime": std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() - 1000, // 1 second ago
+                                "endTime": std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis(),
+                                "message": format!("Error reading file: {}", e),
+                                "metadata": {
+                                    "file_path": params.file_path,
+                                    "description": format!("Error reading file: {}", e),
+                                }
+                            }
+                        });
+
+                        // Send error notification
+                        rpc_server
+                            .send_notification("tool_status", error_notification)
+                            .ok();
+                    }
+
+                    result
                 } else {
-                    FileOps::read_file_with_line_numbers(&path)
+                    // No RPC server available, just read the file
+                    let path = PathBuf::from(&params.file_path);
+                    if let (Some(offset), Some(limit)) = (params.offset, params.limit) {
+                        FileOps::read_file_lines(&path, offset, Some(limit))
+                    } else {
+                        FileOps::read_file_with_line_numbers(&path)
+                    }
                 }
             }
             ToolCall::GlobTool(params) => {

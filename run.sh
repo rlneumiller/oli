@@ -43,8 +43,13 @@ fi
 
 echo -e "${GREEN}Using backend at:${NC} $BACKEND_PATH"
 
-# Start the server in the background
-"$BACKEND_PATH" &
+# Create logs directory if it doesn't exist
+mkdir -p "$SCRIPT_DIR/logs"
+LOG_FILE="$SCRIPT_DIR/logs/backend-$(date +%Y%m%d-%H%M%S).log"
+echo -e "${YELLOW}Backend logs will be saved to:${NC} $LOG_FILE"
+
+# Start the server in the background with logging
+"$BACKEND_PATH" > "$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 
 # Give server a moment to start

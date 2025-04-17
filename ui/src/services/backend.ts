@@ -65,6 +65,10 @@ export class BackendService extends EventEmitter {
         // Handle JSON-RPC notification
         else if ("method" in message) {
           const notification = message as JsonRpcNotification;
+          console.log(
+            `Received notification: ${notification.method}`,
+            notification.params,
+          );
           this.emit(notification.method, notification.params);
         }
       } catch {

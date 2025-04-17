@@ -151,4 +151,4 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
   );
 };
 
-export default CommandPalette;
+export default React.memo(CommandPalette);

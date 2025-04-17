@@ -79,9 +79,14 @@ cat > dist/oli/oli << 'EOF'
 # Find the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
-# Start the server in the background
+# Create logs directory if it doesn't exist
+mkdir -p "$SCRIPT_DIR/logs"
+LOG_FILE="$SCRIPT_DIR/logs/backend-$(date +%Y%m%d-%H%M%S).log"
+echo "Backend logs will be saved to: $LOG_FILE"
+
+# Start the server in the background with logging
 if [ -f "$SCRIPT_DIR/oli-server" ]; then
-  "$SCRIPT_DIR/oli-server" &
+  "$SCRIPT_DIR/oli-server" > "$LOG_FILE" 2>&1 &
   SERVER_PID=$!
 
   # Give server a moment to start

@@ -65,7 +65,6 @@ export interface AppState {
   models: Model[];
   selectedModel: number;
   messages: Message[];
-  tasks: Task[];
   isProcessing: boolean;
   error: string | null;
   backendConnected: boolean;
