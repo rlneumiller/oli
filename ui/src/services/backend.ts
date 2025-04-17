@@ -24,7 +24,7 @@ export class BackendService extends EventEmitter {
       reject: (reason: Error) => void;
     }
   >;
-  
+
   // Track active subscriptions
   private subscriptions: Map<string, SubscriptionId> = new Map();
 
@@ -117,18 +117,18 @@ export class BackendService extends EventEmitter {
   emitEvent(event: string, data: Record<string, unknown> = {}) {
     return super.emit(event, data);
   }
-  
+
   // Subscribe to an event type
   async subscribe(eventType: string): Promise<SubscriptionId> {
     // Only subscribe once per event type
     if (this.subscriptions.has(eventType)) {
       return this.subscriptions.get(eventType) as SubscriptionId;
     }
-    
+
     try {
       const result = await this.call("subscribe", { event_type: eventType });
       const subId = result.subscription_id as SubscriptionId;
-      
+
       // Save subscription
       this.subscriptions.set(eventType, subId);
       console.log(`Subscribed to ${eventType} events with ID ${subId}`);
@@ -138,27 +138,27 @@ export class BackendService extends EventEmitter {
       throw error;
     }
   }
-  
+
   // Unsubscribe from an event type
   async unsubscribe(eventType: string): Promise<boolean> {
     if (!this.subscriptions.has(eventType)) {
       console.log(`Not subscribed to ${eventType}, nothing to unsubscribe`);
       return false; // Not subscribed
     }
-    
+
     const subId = this.subscriptions.get(eventType) as SubscriptionId;
     try {
-      const result = await this.call("unsubscribe", { 
-        event_type: eventType, 
-        subscription_id: subId 
+      const result = await this.call("unsubscribe", {
+        event_type: eventType,
+        subscription_id: subId,
       });
-      
+
       const success = result.success as boolean;
       if (success) {
         this.subscriptions.delete(eventType);
         console.log(`Successfully unsubscribed from ${eventType}`);
       }
-      
+
       return success;
     } catch (error) {
       console.error(`Failed to unsubscribe from ${eventType}:`, error);

@@ -14,10 +14,14 @@ const ToolStatusPanel: React.FC<ToolStatusPanelProps> = ({
 }) => {
   // Debug log on mount and update
   useEffect(() => {
-    console.log(`ToolStatusPanel updated: toolExecutions.size=${toolExecutions.size}`);
+    console.log(
+      `ToolStatusPanel updated: toolExecutions.size=${toolExecutions.size}`,
+    );
     if (toolExecutions.size > 0) {
       const tools = Array.from(toolExecutions.entries());
-      console.log(`First tool: ${tools[0][0]} - ${tools[0][1].name} (${tools[0][1].status})`);
+      console.log(
+        `First tool: ${tools[0][0]} - ${tools[0][1].name} (${tools[0][1].status})`,
+      );
     }
   }, [toolExecutions]);
 
@@ -25,15 +29,15 @@ const ToolStatusPanel: React.FC<ToolStatusPanelProps> = ({
   const { runningTools, recentTools } = useMemo(() => {
     // Convert map to array for easier filtering
     const tools = Array.from(toolExecutions.values());
-    
+
     // Get running tools (sorted most recent first)
     const running = tools
-      .filter(tool => tool.status === "running")
+      .filter((tool) => tool.status === "running")
       .sort((a, b) => b.startTime - a.startTime);
-    
+
     // Get recently completed/failed tools
     const recent = tools
-      .filter(tool => tool.status !== "running")
+      .filter((tool) => tool.status !== "running")
       .sort((a, b) => {
         // Sort by end time if available, otherwise by start time
         const aTime = a.endTime || a.startTime;
@@ -42,19 +46,21 @@ const ToolStatusPanel: React.FC<ToolStatusPanelProps> = ({
       })
       // Limit to 3 recent tools to avoid cluttering
       .slice(0, 3);
-    
+
     return {
       runningTools: running,
-      recentTools: recent
+      recentTools: recent,
     };
   }, [toolExecutions]);
-  
+
   // Detailed logging for debugging
-  console.log(`ToolStatusPanel render: toolExecutions.size=${toolExecutions.size}, running=${runningTools.length}, recent=${recentTools.length}`);
-  
+  console.log(
+    `ToolStatusPanel render: toolExecutions.size=${toolExecutions.size}, running=${runningTools.length}, recent=${recentTools.length}`,
+  );
+
   // Don't render if no active or recent tools
   if (runningTools.length === 0 && recentTools.length === 0) return null;
-  
+
   return (
     <Box flexDirection="column" marginY={1} marginX={1}>
       {/* Header for tool status section */}
@@ -63,7 +69,7 @@ const ToolStatusPanel: React.FC<ToolStatusPanelProps> = ({
           Tool Status:
         </Text>
       </Box>
-      
+
       {/* Running tools first */}
       {runningTools.map((tool) => (
         <Box key={tool.id} paddingLeft={2} marginBottom={1}>
@@ -78,7 +84,7 @@ const ToolStatusPanel: React.FC<ToolStatusPanelProps> = ({
           />
         </Box>
       ))}
-      
+
       {/* Recently completed tools */}
       {recentTools.length > 0 && (
         <>
@@ -87,7 +93,7 @@ const ToolStatusPanel: React.FC<ToolStatusPanelProps> = ({
               Recent:
             </Text>
           </Box>
-          
+
           {recentTools.map((tool) => (
             <Box key={tool.id} paddingLeft={2} marginBottom={1}>
               <ToolStatusIndicator

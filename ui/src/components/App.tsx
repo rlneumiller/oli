@@ -32,9 +32,11 @@ const App: React.FC<AppProps> = ({ backend }) => {
     appMode: "setup", // Start in setup mode
     useAgent: true, // Agent mode is always enabled
   });
-  
+
   // Tool executions state - separate to avoid re-rendering the entire app on tool updates
-  const [toolExecutions, setToolExecutions] = useState<Map<string, ToolExecution>>(new Map());
+  const [toolExecutions, setToolExecutions] = useState<
+    Map<string, ToolExecution>
+  >(new Map());
 
   // UI state
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -50,31 +52,35 @@ const App: React.FC<AppProps> = ({ backend }) => {
         console.error("Failed to subscribe to tool status updates:", error);
       }
     };
-    
+
     // Handle tool status events
     const handleToolStatus = (params: ToolStatusUpdate) => {
       // Log tool status events for debugging
       console.log(`Tool status update received: ${JSON.stringify(params)}`);
-      
+
       const { type, execution } = params;
-      
-      setToolExecutions(prev => {
+
+      setToolExecutions((prev) => {
         // Create a new Map to avoid mutating state
         const newMap = new Map(prev);
-        
+
         if (type === "started") {
           // Add new tool execution
-          console.log(`Adding new tool execution: ${execution.id} (${execution.name})`);
+          console.log(
+            `Adding new tool execution: ${execution.id} (${execution.name})`,
+          );
           newMap.set(execution.id, execution);
         } else if (type === "updated") {
           // Update existing tool execution
-          console.log(`Updating tool execution: ${execution.id} (${execution.status})`);
+          console.log(
+            `Updating tool execution: ${execution.id} (${execution.status})`,
+          );
           newMap.set(execution.id, execution);
-          
+
           // Clean up completed/errored tools after 30 seconds
           if (execution.status !== "running" && execution.endTime) {
             setTimeout(() => {
-              setToolExecutions(current => {
+              setToolExecutions((current) => {
                 const updatedMap = new Map(current);
                 updatedMap.delete(execution.id);
                 return updatedMap;
@@ -82,18 +88,18 @@ const App: React.FC<AppProps> = ({ backend }) => {
             }, 30000);
           }
         }
-        
+
         // Log the state of tool executions after update
         console.log(`Tool executions count: ${newMap.size}`);
-        
+
         return newMap;
       });
     };
-    
+
     // Subscribe when component mounts
     backend.on("tool_status", handleToolStatus);
     setupToolStatusSubscription();
-    
+
     // Unsubscribe when component unmounts
     return () => {
       backend.off("tool_status", handleToolStatus);
@@ -218,7 +224,7 @@ const App: React.FC<AppProps> = ({ backend }) => {
 
       // Bridge old tool_execution events to the new tool_status system
       // This allows legacy events to appear in the ToolStatusPanel
-      setToolExecutions(prev => {
+      setToolExecutions((prev) => {
         const newMap = new Map(prev);
         const execution: ToolExecution = {
           id: toolId,
@@ -231,14 +237,16 @@ const App: React.FC<AppProps> = ({ backend }) => {
           metadata: {
             file_path: params.file_path,
             lines: params.lines,
-            description: params.description
-          }
+            description: params.description,
+          },
         };
-        
+
         // Add to tool executions map
         newMap.set(toolId, execution);
-        console.log(`Added legacy tool execution to map: ${toolId}, total=${newMap.size}`);
-        
+        console.log(
+          `Added legacy tool execution to map: ${toolId}, total=${newMap.size}`,
+        );
+
         return newMap;
       });
 
@@ -470,12 +478,12 @@ const App: React.FC<AppProps> = ({ backend }) => {
     // Setup mode - directly render the model selector without any container
     return modelSelectorComponent;
   }
-  
+
   // Chat mode - header, chat interface, status bar
   return (
     <Box flexDirection="column" width="100%" height="100%">
       {/* Header - no margin to avoid double borders */}
-      <Box 
+      <Box
         paddingX={theme.styles.box.header.paddingX}
         paddingY={theme.styles.box.header.paddingY}
       >

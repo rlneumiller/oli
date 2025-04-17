@@ -35,7 +35,7 @@ export interface ToolExecution {
   startTime: number;
   endTime?: number;
   message: string;
-  metadata: Record<string, any>;
+  metadata: Record<string, unknown>;
 }
 
 // Tool status update interface

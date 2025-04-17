@@ -184,7 +184,7 @@ fn main() -> Result<()> {
 
     // Register get_version method to expose the Rust backend version
     rpc_server.register_method("get_version", move |_| Ok(json!({ "version": VERSION })));
-    
+
     // Register subscription handlers for real-time event streaming
     rpc_server.register_subscription_handlers();
 

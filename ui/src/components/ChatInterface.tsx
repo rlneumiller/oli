@@ -37,6 +37,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   onToggleShortcuts,
   onClearHistory,
   onExecuteCommand,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   tasks = [],
   toolExecutions = new Map(),
 }) => {

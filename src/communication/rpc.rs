@@ -52,19 +52,25 @@ pub struct SubscriptionManager {
     subscription_counter: AtomicU64,
 }
 
-impl SubscriptionManager {
-    pub fn new() -> Self {
+impl Default for SubscriptionManager {
+    fn default() -> Self {
         Self {
             subscribers: HashMap::new(),
             subscription_counter: AtomicU64::new(1),
         }
+    }
+}
+
+impl SubscriptionManager {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn subscribe(&mut self, event_type: &str) -> u64 {
         let sub_id = self.subscription_counter.fetch_add(1, Ordering::SeqCst);
         self.subscribers
             .entry(event_type.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(sub_id);
         sub_id
     }
@@ -81,11 +87,16 @@ impl SubscriptionManager {
     }
 
     pub fn has_subscribers(&self, event_type: &str) -> bool {
-        self.subscribers.get(event_type).map_or(false, |subs| !subs.is_empty())
+        self.subscribers
+            .get(event_type)
+            .is_some_and(|subs| !subs.is_empty())
     }
 
     pub fn get_subscribers(&self, event_type: &str) -> Vec<u64> {
-        self.subscribers.get(event_type).cloned().unwrap_or_default()
+        self.subscribers
+            .get(event_type)
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -183,61 +194,65 @@ impl RpcServer {
             let manager = self.subscription_manager.lock().unwrap();
             manager.has_subscribers(method)
         };
-        
+
         // Always send through the event channel for internal event processing
-        self.event_sender.send((method.to_string(), params.clone()))?;
-        
+        self.event_sender
+            .send((method.to_string(), params.clone()))?;
+
         // If this is not a subscribed event or there are no subscribers, we're done
         if !has_subscribers {
             return Ok(());
         }
-        
+
         // For events with subscribers, we'll immediately send a notification through stdout
         let notification = Notification {
             jsonrpc: "2.0".to_string(),
             method: method.to_string(),
             params,
         };
-        
+
         // Send directly to stdout to ensure immediate delivery
         let stdout = std::io::stdout();
         let mut stdout = stdout.lock();
         serde_json::to_writer(&mut stdout, &notification)?;
         stdout.write_all(b"\n")?;
         stdout.flush()?;
-        
+
         Ok(())
     }
-    
+
     /// Register subscription method handlers
     pub fn register_subscription_handlers(&mut self) {
         // Handle subscribe requests
         let sub_manager = self.subscription_manager.clone();
         self.register_method("subscribe", move |params| {
-            let event_type = params.get("event_type")
+            let event_type = params
+                .get("event_type")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Missing event_type parameter"))?;
-                
+
             let mut manager = sub_manager.lock().unwrap();
             let sub_id = manager.subscribe(event_type);
-            
+
             Ok(serde_json::json!({ "subscription_id": sub_id }))
         });
-        
+
         // Handle unsubscribe requests
         let sub_manager = self.subscription_manager.clone();
         self.register_method("unsubscribe", move |params| {
-            let event_type = params.get("event_type")
+            let event_type = params
+                .get("event_type")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Missing event_type parameter"))?;
-                
-            let sub_id = params.get("subscription_id")
+
+            let sub_id = params
+                .get("subscription_id")
                 .and_then(|v| v.as_u64())
                 .ok_or_else(|| anyhow::anyhow!("Missing subscription_id parameter"))?;
-                
+
             let mut manager = sub_manager.lock().unwrap();
             let success = manager.unsubscribe(event_type, sub_id);
-            
+
             Ok(serde_json::json!({ "success": success }))
         });
     }

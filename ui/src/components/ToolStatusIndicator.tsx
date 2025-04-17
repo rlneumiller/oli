@@ -17,7 +17,7 @@ const ToolStatusIndicator: React.FC<ToolStatusIndicatorProps> = ({
     console.log("ToolStatusIndicator: Missing data prop");
     return null;
   }
-  
+
   // Log props for debugging
   console.log(`ToolStatusIndicator: ${data.name}, status=${status}`);
 
@@ -43,10 +43,9 @@ const ToolStatusIndicator: React.FC<ToolStatusIndicatorProps> = ({
     if (data.file_path) {
       // Shorten file path if it's too long
       const path = data.file_path;
-      const displayPath = path.length > 30 
-        ? `...${path.substring(path.length - 30)}` 
-        : path;
-        
+      const displayPath =
+        path.length > 30 ? `...${path.substring(path.length - 30)}` : path;
+
       title += ` (${displayPath})`;
     }
 

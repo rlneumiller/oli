@@ -139,13 +139,13 @@ pub enum ToolExecutionStatus {
 /// Represents a tool execution with status updates
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolExecution {
-    pub id: String,                             // Unique ID for this tool execution
-    pub task_id: String,                        // ID of the parent task
-    pub name: String,                           // Tool name (View, GlobTool, etc.)
-    pub status: ToolExecutionStatus,            // Running, Success, Error
-    pub start_time: u64,                        // Start timestamp (milliseconds)
-    pub end_time: Option<u64>,                  // End timestamp (milliseconds), None if still running
-    pub message: String,                        // Current status message
+    pub id: String,                                   // Unique ID for this tool execution
+    pub task_id: String,                              // ID of the parent task
+    pub name: String,                                 // Tool name (View, GlobTool, etc.)
+    pub status: ToolExecutionStatus,                  // Running, Success, Error
+    pub start_time: u64,                              // Start timestamp (milliseconds)
+    pub end_time: Option<u64>, // End timestamp (milliseconds), None if still running
+    pub message: String,       // Current status message
     pub metadata: HashMap<String, serde_json::Value>, // Additional metadata: file paths, line counts, etc.
 }
 
@@ -584,14 +584,19 @@ impl App {
                                     };
 
                                     // Generate a unique ID for this tool execution
-                                    let tool_id = format!("tool-{}-{}", tool_name, uuid::Uuid::new_v4().simple());
-                                    
+                                    let tool_id = format!(
+                                        "tool-{}-{}",
+                                        tool_name,
+                                        uuid::Uuid::new_v4().simple()
+                                    );
+
                                     // Create timestamp
                                     let now = std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .unwrap_or_default()
-                                        .as_millis() as u64;
-                                        
+                                        .as_millis()
+                                        as u64;
+
                                     // Create a ToolExecution structure
                                     let tool_execution = ToolExecution {
                                         id: tool_id.clone(),
@@ -604,33 +609,51 @@ impl App {
                                             _ => ToolExecutionStatus::Running,
                                         },
                                         start_time: now,
-                                        end_time: if status != "running" { Some(now) } else { None },
+                                        end_time: if status != "running" {
+                                            Some(now)
+                                        } else {
+                                            None
+                                        },
                                         message: tool_message.to_string(),
                                         metadata: {
                                             let mut meta = std::collections::HashMap::new();
                                             if let Some(path) = &file_path {
-                                                meta.insert("file_path".to_string(), serde_json::Value::String(path.clone()));
+                                                meta.insert(
+                                                    "file_path".to_string(),
+                                                    serde_json::Value::String(path.clone()),
+                                                );
                                             }
                                             if let Some(line_count) = lines {
-                                                meta.insert("lines".to_string(), serde_json::Value::Number(serde_json::Number::from(line_count)));
+                                                meta.insert(
+                                                    "lines".to_string(),
+                                                    serde_json::Value::Number(
+                                                        serde_json::Number::from(line_count),
+                                                    ),
+                                                );
                                             }
-                                            meta.insert("description".to_string(), serde_json::Value::String(description.clone()));
+                                            meta.insert(
+                                                "description".to_string(),
+                                                serde_json::Value::String(description.clone()),
+                                            );
                                             meta
                                         },
                                     };
-                                    
+
                                     // Log the tool execution
-                                    eprintln!("Created tool execution: {} ({})", tool_execution.id, tool_execution.name);
+                                    eprintln!(
+                                        "Created tool execution: {} ({})",
+                                        tool_execution.id, tool_execution.name
+                                    );
 
                                     // Send as a tool_status notification directly
                                     let _ = rpc_server.send_notification(
-                                        "tool_status", 
+                                        "tool_status",
                                         serde_json::json!({
                                             "type": "started",
                                             "execution": tool_execution
-                                        })
+                                        }),
                                     );
-                                    
+
                                     // Also send the legacy tool_execution event for backward compatibility
                                     let _ = rpc_server.event_sender().send((
                                         "tool_execution".to_string(),
@@ -856,7 +879,7 @@ impl App {
         }
         self.current_task_id = None;
     }
-    
+
     /// Start a new tool execution
     pub fn start_tool_execution(&mut self, name: &str) -> Option<String> {
         // Need a current task to track tool executions
@@ -864,32 +887,35 @@ impl App {
             // Create a new tool execution
             let tool_execution = ToolExecution::new(task_id, name);
             let tool_id = tool_execution.id.clone();
-            
+
             // Store the tool execution
             self.tool_executions.insert(tool_id.clone(), tool_execution);
-            
+
             // Increment the task's tool count
             if let Some(task) = self.current_task_mut() {
                 task.add_tool_use();
             }
-            
+
             // Send tool started notification
             if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
                 // More detailed logging
-                eprintln!("Sending tool_status started notification for tool {}: {}", name, tool_id);
-                
+                eprintln!(
+                    "Sending tool_status started notification for tool {}: {}",
+                    name, tool_id
+                );
+
                 // Get the tool execution to send
                 let tool_exec = self.tool_executions.get(&tool_id).cloned();
-                
+
                 if let Some(exec) = tool_exec {
                     let result = rpc_server.send_notification(
-                        "tool_status", 
+                        "tool_status",
                         serde_json::json!({
                             "type": "started",
                             "execution": exec
-                        })
+                        }),
                     );
-                    
+
                     if let Err(e) = result {
                         eprintln!("Error sending tool_status notification: {}", e);
                     }
@@ -899,92 +925,103 @@ impl App {
             } else {
                 eprintln!("No RPC server available to send tool_status notification");
             }
-            
+
             Some(tool_id)
         } else {
             None
         }
     }
-    
+
     /// Update tool execution progress
-    pub fn update_tool_progress(&mut self, tool_id: &str, message: &str, metadata: Option<HashMap<String, serde_json::Value>>) {
+    pub fn update_tool_progress(
+        &mut self,
+        tool_id: &str,
+        message: &str,
+        metadata: Option<HashMap<String, serde_json::Value>>,
+    ) {
         if let Some(tool) = self.tool_executions.get_mut(tool_id) {
             tool.update_progress(message);
-            
+
             // Add any metadata if provided
             if let Some(meta) = metadata {
                 for (key, value) in meta {
                     tool.add_metadata(&key, value);
                 }
             }
-            
+
             // Send progress notification
             if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
                 let _ = rpc_server.send_notification(
-                    "tool_status", 
+                    "tool_status",
                     serde_json::json!({
                         "type": "updated",
                         "execution": tool
-                    })
+                    }),
                 );
             }
         }
     }
-    
+
     /// Complete a tool execution
-    pub fn complete_tool_execution(&mut self, tool_id: &str, message: &str, metadata: Option<HashMap<String, serde_json::Value>>) {
+    pub fn complete_tool_execution(
+        &mut self,
+        tool_id: &str,
+        message: &str,
+        metadata: Option<HashMap<String, serde_json::Value>>,
+    ) {
         if let Some(tool) = self.tool_executions.get_mut(tool_id) {
             tool.complete(message);
-            
+
             // Add any metadata if provided
             if let Some(meta) = metadata {
                 for (key, value) in meta {
                     tool.add_metadata(&key, value);
                 }
             }
-            
+
             // Send completion notification
             if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
                 let _ = rpc_server.send_notification(
-                    "tool_status", 
+                    "tool_status",
                     serde_json::json!({
                         "type": "updated",
                         "execution": tool
-                    })
+                    }),
                 );
             }
         }
     }
-    
+
     /// Mark a tool execution as failed
     pub fn fail_tool_execution(&mut self, tool_id: &str, error: &str) {
         if let Some(tool) = self.tool_executions.get_mut(tool_id) {
             tool.fail(error);
-            
+
             // Send failure notification
             if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
                 let _ = rpc_server.send_notification(
-                    "tool_status", 
+                    "tool_status",
                     serde_json::json!({
                         "type": "updated",
                         "execution": tool
-                    })
+                    }),
                 );
             }
         }
     }
-    
+
     /// Clean up old completed tool executions (older than 10 minutes)
     pub fn cleanup_old_tool_executions(&mut self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-            
+
         let ten_minutes_ms = 10 * 60 * 1000;
-        
+
         // Collect IDs of old completed tool executions
-        let old_tool_ids: Vec<String> = self.tool_executions
+        let old_tool_ids: Vec<String> = self
+            .tool_executions
             .iter()
             .filter(|(_, tool)| {
                 if let Some(end_time) = tool.end_time {
@@ -999,7 +1036,7 @@ impl App {
             })
             .map(|(id, _)| id.clone())
             .collect();
-            
+
         // Remove old tool executions
         for id in old_tool_ids {
             self.tool_executions.remove(&id);
