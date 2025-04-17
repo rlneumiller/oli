@@ -14,17 +14,56 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Extract version
         id: extract-version
         run: |
           echo "tag-name=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
-      - name: Build and create tarball
+      - name: Build full application
         run: |
-          cargo build --release --bin oli
-          mkdir -p dist
-          tar -czf dist/oli-${{ steps.extract-version.outputs.version }}.tar.gz -C target/release oli
+          # Build Rust backend
+          cargo build --release
+
+          # Build UI
+          cd ui
+          npm ci
+          npm run build
+          cd ..
+
+          # Package everything
+          mkdir -p dist/oli
+          cp target/release/oli-server dist/oli/
+          cp -r ui/dist dist/oli/ui
+
+          # Create startup script
+          cat > dist/oli/oli << 'EOF'
+          #!/bin/bash
+
+          # Find the directory where this script is located
+          SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
+          # Start the server in the background
+          "$SCRIPT_DIR/oli-server" &
+          SERVER_PID=$!
+
+          # Start the UI
+          cd "$SCRIPT_DIR"
+          node --import tsx ui/cli.js "$@"
+
+          # Kill the server when the UI exits
+          kill $SERVER_PID
+          EOF
+
+          chmod +x dist/oli/oli
+
+          # Create tarball
+          tar -czf dist/oli-${{ steps.extract-version.outputs.version }}.tar.gz -C dist oli
 
       - name: Calculate SHA256
         id: calculate-sha

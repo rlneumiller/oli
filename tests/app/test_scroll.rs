@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod scroll_tests {
-    use oli_tui::app::utils::ScrollState;
+    use oli_server::app::utils::ScrollState;
 
     #[test]
     fn test_scroll_state_creation() {

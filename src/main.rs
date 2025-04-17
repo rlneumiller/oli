@@ -1,7 +1,7 @@
 use anyhow::Result;
-use oli_tui::app::logger::{format_log_with_color, LogLevel};
-use oli_tui::communication::rpc::RpcServer;
-use oli_tui::App;
+use oli_server::app::logger::{format_log_with_color, LogLevel};
+use oli_server::communication::rpc::RpcServer;
+use oli_server::App;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 

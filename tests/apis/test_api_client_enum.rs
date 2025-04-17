@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 // Removed unused imports
-use oli_tui::apis::anthropic::AnthropicClient;
-use oli_tui::apis::api_client::ApiClientEnum;
-use oli_tui::apis::openai::OpenAIClient;
+use oli_server::apis::anthropic::AnthropicClient;
+use oli_server::apis::api_client::ApiClientEnum;
+use oli_server::apis::openai::OpenAIClient;
 
 // MockApiClient implementation removed to eliminate dead code warning
 

@@ -1,20 +1,20 @@
 [package]
-name = "oli-tui"
+name = "oli-server"
 version = "0.1.3"
 edition = "2021"
 license = "Apache-2.0"
-description = "A simple, blazingly fast TUI based AI coding assistant"
+description = "A simple, blazingly fast AI coding assistant server"
 repository = "https://github.com/amrit110/oli"
-documentation = "https://docs.rs/oli-cli"
+documentation = "https://docs.rs/oli-server"
 readme = "README.md"
-keywords = ["tui", "assistant", "smart"]
+keywords = ["assistant", "ai", "server"]
 
 [lib]
-name = "oli_tui"
+name = "oli_server"
 path = "src/lib.rs"
 
 [[bin]]
-name = "oli"
+name = "oli-server"
 path = "src/main.rs"
 
 [dependencies]

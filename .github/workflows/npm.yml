@@ -1,0 +1,43 @@
+name: Publish to npm
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish-npm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org/'
+
+      - name: Verify package version matches release
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          RELEASE_VERSION=${GITHUB_REF#refs/tags/v}
+          if [ "$PACKAGE_VERSION" != "$RELEASE_VERSION" ]; then
+            echo "Error: package.json version ($PACKAGE_VERSION) does not match release version ($RELEASE_VERSION)"
+            exit 1
+          fi
+
+      - name: Create bin directory
+        run: mkdir -p bin
+
+      - name: Create placeholder files
+        run: |
+          # Create a placeholder script that will be replaced during installation
+          echo '#!/bin/bash
+          echo "This is a placeholder. The actual binary will be downloaded during installation."
+          ' > bin/oli
+          chmod +x bin/oli
+
+      - name: Publish to npm
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

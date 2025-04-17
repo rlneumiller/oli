@@ -1,0 +1,40 @@
+# Rust project files
+src/
+target/
+Cargo.toml
+Cargo.lock
+build.rs
+.cargo/
+.rustfmt.toml
+rust-toolchain.toml
+
+# UI source files (we only need the build)
+ui/src/
+ui/node_modules/
+ui/package-lock.json
+ui/package.json
+ui/tsconfig.json
+ui/eslint.config.js
+
+# GitHub workflows
+.github/
+
+# Documentation and misc files
+docs/
+*.md
+!README.md
+LICENSE
+
+# Build and test files
+build.sh
+run.sh
+tests/
+codecov.yml
+Formula/
+
+# Temporary and system files
+.DS_Store
+.vscode/
+.idea/
+*.log
+tmp/

@@ -1085,7 +1085,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "oli-tui"
+name = "oli-server"
 version = "0.1.3"
 dependencies = [
  "anyhow",

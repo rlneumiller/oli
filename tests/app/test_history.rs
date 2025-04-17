@@ -1,5 +1,5 @@
-use oli_tui::app::core::{App, AppState};
-use oli_tui::app::history::{ContextCompressor, ConversationSummary};
+use oli_server::app::core::{App, AppState};
+use oli_server::app::history::{ContextCompressor, ConversationSummary};
 
 #[test]
 fn test_conversation_char_count() {
