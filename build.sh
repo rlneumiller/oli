@@ -1,55 +1,78 @@
 #!/bin/bash
 set -e
 
+# Color codes
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
 # Build script for oli (Rust backend + React/Ink frontend)
-echo "Building oli (Hybrid Rust/React Application)"
+echo -e "${BLUE}======================================${NC}"
+echo -e "${GREEN}Building oli (Hybrid Rust/React Application)${NC}"
+echo -e "${BLUE}======================================${NC}"
 
 # Check for required tools
-command -v cargo >/dev/null 2>&1 || { echo "Error: cargo is not installed. Please install Rust."; exit 1; }
-command -v npm >/dev/null 2>&1 || { echo "Error: npm is not installed. Please install Node.js."; exit 1; }
+command -v cargo >/dev/null 2>&1 || { echo -e "${RED}Error: cargo is not installed. Please install Rust.${NC}"; exit 1; }
+command -v npm >/dev/null 2>&1 || { echo -e "${RED}Error: npm is not installed. Please install Node.js.${NC}"; exit 1; }
+
+# Get the script directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
+# Clean previous build
+echo -e "\n${BLUE}=== Cleaning previous build ===${NC}"
+if [ -d "dist" ]; then
+  echo -e "${YELLOW}Removing previous build in dist/ directory...${NC}"
+  rm -rf dist/
+fi
+echo -e "${GREEN}Clean complete!${NC}"
 
 # Build the Rust backend
-echo "=== Building Rust backend ==="
+echo -e "\n${BLUE}=== Building Rust backend ===${NC}"
 cargo build --release
 
 # Build the React/Ink frontend
-echo "=== Building React frontend ==="
+echo -e "\n${BLUE}=== Building React frontend ===${NC}"
 
-# Get the current directory name
-CURRENT_DIR=$(basename "$PWD")
-
-# Check if we're already in the UI directory or need to navigate to it
-if [ "$CURRENT_DIR" = "ui" ]; then
-  # Already in the UI directory
-  npm install
-  npm run build
-elif [ -d "ui" ]; then
-  # Navigate to the UI directory
-  cd ui || exit 1
-  npm install
-  npm run build
-  cd ..
-else
-  echo "Error: UI directory not found"
+if [ ! -d "$SCRIPT_DIR/ui" ]; then
+  echo -e "${RED}Error: UI directory not found${NC}"
   exit 1
 fi
 
+# Navigate to the UI directory
+cd "$SCRIPT_DIR/ui" || exit 1
+echo -e "${YELLOW}Installing npm dependencies...${NC}"
+npm install
+echo -e "${YELLOW}Building UI...${NC}"
+npm run build
+cd "$SCRIPT_DIR" || exit 1
+
 # Create the single executable that combines both
-echo "=== Creating combined cli package ==="
+echo -e "\n${BLUE}=== Creating combined cli package ===${NC}"
 
 # Create the package directory
 mkdir -p dist/oli
 
 # Copy the binaries and UI files
-cp target/release/oli-server dist/oli/
-cp target/release/oli dist/oli/oli-bin
-mkdir -p dist/oli/ui
-cp -r ui/dist/* dist/oli/ui/ 2>/dev/null || echo "Warning: UI dist files not found"
+cp target/release/oli-server dist/oli/ 2>/dev/null || echo -e "${YELLOW}Warning: oli-server binary not found${NC}"
+# We don't have an oli binary, we'll create it in the wrapper script
+# No need to copy it: cp target/release/oli dist/oli/oli-bin
+mkdir -p dist/oli/ui/dist
+
+# Copy UI build output
+if [ -d "ui/dist" ]; then
+  cp -r ui/dist/* dist/oli/ui/dist/ 2>/dev/null || echo -e "${YELLOW}Warning: UI dist files not found${NC}"
+else
+  echo -e "${YELLOW}Warning: UI dist directory not found${NC}"
+fi
+
 # Copy node_modules for dependencies
 mkdir -p dist/oli/ui/node_modules
-cp -r ui/node_modules dist/oli/ui/ 2>/dev/null || echo "Warning: UI node_modules not found"
+cp -r ui/node_modules dist/oli/ui/ 2>/dev/null || echo -e "${YELLOW}Warning: UI node_modules not found${NC}"
 
 # Create the wrapper script
+echo -e "${YELLOW}Creating wrapper script...${NC}"
 cat > dist/oli/oli << 'EOF'
 #!/bin/bash
 
@@ -61,20 +84,25 @@ if [ -f "$SCRIPT_DIR/oli-server" ]; then
   "$SCRIPT_DIR/oli-server" &
   SERVER_PID=$!
 
+  # Give server a moment to start
+  sleep 1
+
   # Start the UI
   cd "$SCRIPT_DIR/ui"
-  NODE_PATH="$SCRIPT_DIR/ui/node_modules" node cli.js "$@"
+  NODE_PATH="$SCRIPT_DIR/ui/node_modules" node dist/cli.js "$@"
 
   # Kill the server when the UI exits
   kill $SERVER_PID 2>/dev/null
 else
-  # Fallback to the binary version if server isn't available
-  "$SCRIPT_DIR/oli-bin" "$@"
+  echo "Error: oli-server binary not found!"
+  exit 1
 fi
 EOF
 
 chmod +x dist/oli/oli
 
-echo "=== Build complete ==="
-echo "Binary is available at: ./dist/oli/oli"
-echo "To run the application, use: './dist/oli/oli'"
+echo -e "\n${BLUE}======================================${NC}"
+echo -e "${GREEN}=== Build complete! ===${NC}"
+echo -e "${BLUE}======================================${NC}"
+echo -e "${GREEN}Binary is available at:${NC} ./dist/oli/oli"
+echo -e "${GREEN}To run the application, use:${NC} './dist/oli/oli'"

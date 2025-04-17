@@ -2,8 +2,9 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 
 /// JSON-RPC 2.0 request structure
 #[derive(Debug, Deserialize)]
@@ -45,22 +46,115 @@ struct Notification {
 type MethodHandler =
     Box<dyn Fn(serde_json::Value) -> Result<serde_json::Value, anyhow::Error> + Send + Sync>;
 
+/// Subscription manager for event-based communication
+pub struct SubscriptionManager {
+    subscribers: HashMap<String, Vec<u64>>, // event_type -> list of subscription IDs
+    subscription_counter: AtomicU64,
+}
+
+impl SubscriptionManager {
+    pub fn new() -> Self {
+        Self {
+            subscribers: HashMap::new(),
+            subscription_counter: AtomicU64::new(1),
+        }
+    }
+
+    pub fn subscribe(&mut self, event_type: &str) -> u64 {
+        let sub_id = self.subscription_counter.fetch_add(1, Ordering::SeqCst);
+        self.subscribers
+            .entry(event_type.to_string())
+            .or_insert_with(Vec::new)
+            .push(sub_id);
+        sub_id
+    }
+
+    pub fn unsubscribe(&mut self, event_type: &str, sub_id: u64) -> bool {
+        if let Some(subs) = self.subscribers.get_mut(event_type) {
+            let pos = subs.iter().position(|&id| id == sub_id);
+            if let Some(idx) = pos {
+                subs.remove(idx);
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn has_subscribers(&self, event_type: &str) -> bool {
+        self.subscribers.get(event_type).map_or(false, |subs| !subs.is_empty())
+    }
+
+    pub fn get_subscribers(&self, event_type: &str) -> Vec<u64> {
+        self.subscribers.get(event_type).cloned().unwrap_or_default()
+    }
+}
+
 /// JSON-RPC server over stdio
 pub struct RpcServer {
     methods: Arc<Mutex<HashMap<String, MethodHandler>>>,
     event_sender: Sender<(String, serde_json::Value)>,
-    event_receiver: Receiver<(String, serde_json::Value)>,
+    // Replace the standard mpsc::Receiver with an Arc<Mutex<>> wrapper to make it thread-safe
+    event_receiver: Arc<Mutex<Receiver<(String, serde_json::Value)>>>,
+    is_running: Arc<AtomicBool>,
+    // Add subscription manager for real-time event streaming
+    subscription_manager: Arc<Mutex<SubscriptionManager>>,
+}
+
+// Global RPC server instance
+static mut GLOBAL_RPC_SERVER: Option<Arc<RpcServer>> = None;
+static INIT: Once = Once::new();
+
+// Clone implementation for RpcServer
+impl Clone for RpcServer {
+    fn clone(&self) -> Self {
+        // Create a new channel for the cloned instance
+        let (event_sender, event_receiver) = channel();
+
+        Self {
+            methods: self.methods.clone(),
+            event_sender,
+            event_receiver: Arc::new(Mutex::new(event_receiver)),
+            is_running: self.is_running.clone(),
+            subscription_manager: self.subscription_manager.clone(),
+        }
+    }
+}
+
+/// Get global RPC server instance
+#[allow(static_mut_refs)]
+pub fn get_global_rpc_server() -> Option<Arc<RpcServer>> {
+    unsafe { GLOBAL_RPC_SERVER.clone() }
+}
+
+/// Set global RPC server instance
+fn set_global_rpc_server(server: Arc<RpcServer>) {
+    INIT.call_once(|| unsafe {
+        GLOBAL_RPC_SERVER = Some(server);
+    });
 }
 
 impl RpcServer {
     /// Create a new RPC server
     pub fn new() -> Self {
         let (event_sender, event_receiver) = channel();
-        Self {
+        let server = Self {
             methods: Arc::new(Mutex::new(HashMap::new())),
             event_sender,
-            event_receiver,
-        }
+            event_receiver: Arc::new(Mutex::new(event_receiver)),
+            is_running: Arc::new(AtomicBool::new(false)),
+            subscription_manager: Arc::new(Mutex::new(SubscriptionManager::new())),
+        };
+
+        // Create a clone for global registration
+        let server_clone = server.clone();
+
+        // Register as global RPC server
+        #[allow(clippy::arc_with_non_send_sync)]
+        let server_arc = Arc::new(server_clone);
+        set_global_rpc_server(server_arc);
+
+        // Return the original server
+        server
     }
 
     /// Register a method handler
@@ -82,8 +176,82 @@ impl RpcServer {
         self.event_sender.clone()
     }
 
+    /// Send a notification event - will send to all subscribers of this event type
+    pub fn send_notification(&self, method: &str, params: serde_json::Value) -> Result<()> {
+        // First, check if anyone is subscribed to this event
+        let has_subscribers = {
+            let manager = self.subscription_manager.lock().unwrap();
+            manager.has_subscribers(method)
+        };
+        
+        // Always send through the event channel for internal event processing
+        self.event_sender.send((method.to_string(), params.clone()))?;
+        
+        // If this is not a subscribed event or there are no subscribers, we're done
+        if !has_subscribers {
+            return Ok(());
+        }
+        
+        // For events with subscribers, we'll immediately send a notification through stdout
+        let notification = Notification {
+            jsonrpc: "2.0".to_string(),
+            method: method.to_string(),
+            params,
+        };
+        
+        // Send directly to stdout to ensure immediate delivery
+        let stdout = std::io::stdout();
+        let mut stdout = stdout.lock();
+        serde_json::to_writer(&mut stdout, &notification)?;
+        stdout.write_all(b"\n")?;
+        stdout.flush()?;
+        
+        Ok(())
+    }
+    
+    /// Register subscription method handlers
+    pub fn register_subscription_handlers(&mut self) {
+        // Handle subscribe requests
+        let sub_manager = self.subscription_manager.clone();
+        self.register_method("subscribe", move |params| {
+            let event_type = params.get("event_type")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing event_type parameter"))?;
+                
+            let mut manager = sub_manager.lock().unwrap();
+            let sub_id = manager.subscribe(event_type);
+            
+            Ok(serde_json::json!({ "subscription_id": sub_id }))
+        });
+        
+        // Handle unsubscribe requests
+        let sub_manager = self.subscription_manager.clone();
+        self.register_method("unsubscribe", move |params| {
+            let event_type = params.get("event_type")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("Missing event_type parameter"))?;
+                
+            let sub_id = params.get("subscription_id")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| anyhow::anyhow!("Missing subscription_id parameter"))?;
+                
+            let mut manager = sub_manager.lock().unwrap();
+            let success = manager.unsubscribe(event_type, sub_id);
+            
+            Ok(serde_json::json!({ "success": success }))
+        });
+    }
+
+    /// Check if the server is running
+    pub fn is_running(&self) -> bool {
+        self.is_running.load(Ordering::SeqCst)
+    }
+
     /// Run the RPC server, processing stdin and writing to stdout
     pub fn run(&self) -> Result<()> {
+        // Set running state
+        self.is_running.store(true, Ordering::SeqCst);
+
         let stdin = std::io::stdin();
         let stdout = std::io::stdout();
         let mut stdout = stdout.lock();
@@ -176,17 +344,22 @@ impl RpcServer {
             };
 
             // Check for any events to send
-            while let Ok((method, params)) = self.event_receiver.try_recv() {
-                let notification = Notification {
-                    jsonrpc: "2.0".to_string(),
-                    method,
-                    params,
-                };
-                serde_json::to_writer(&mut stdout, &notification)?;
-                stdout.write_all(b"\n")?;
-                stdout.flush()?;
+            if let Ok(receiver) = self.event_receiver.try_lock() {
+                while let Ok((method, params)) = receiver.try_recv() {
+                    let notification = Notification {
+                        jsonrpc: "2.0".to_string(),
+                        method,
+                        params,
+                    };
+                    serde_json::to_writer(&mut stdout, &notification)?;
+                    stdout.write_all(b"\n")?;
+                    stdout.flush()?;
+                }
             }
         }
+
+        // Set running state to false
+        self.is_running.store(false, Ordering::SeqCst);
 
         Ok(())
     }

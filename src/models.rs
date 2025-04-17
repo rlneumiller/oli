@@ -54,9 +54,9 @@ pub fn get_available_models() -> Vec<ModelConfig> {
                 format!("{} - Running locally via Ollama", model_info.name)
             };
 
-            // Add the model to the list
+            // Add the model to the list with "(local)" suffix
             models.push(ModelConfig {
-                name: format!("{} - Local", model_info.name),
+                name: format!("{} (local)", model_info.name),
                 file_name: model_info.name.clone(),
                 description,
                 recommended_for: "Local code tasks, requires Ollama to be running".into(),

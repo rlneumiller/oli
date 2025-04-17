@@ -2,10 +2,12 @@ import React, { useState, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
 import Spinner from "ink-spinner";
 import theme from "../styles/gruvbox.js";
+import WelcomeBox from "./WelcomeBox.js";
 
 // Model interface
 interface Model {
   name: string;
+  id: string;
   description: string;
   supports_agent: boolean;
 }
@@ -19,28 +21,7 @@ interface ModelSelectorProps {
   isLoading: boolean;
 }
 
-// Simple welcome box component
-const WelcomeBox = ({ children }: { children: React.ReactNode }) => (
-  <Box width="100%" height="100%" alignItems="center" justifyContent="center">
-    <Box
-      borderStyle="round"
-      borderColor={theme.colors.dark.green}
-      paddingX={4}
-      paddingY={2}
-      width={60}
-    >
-      <Box flexDirection="column">
-        <Text color={theme.colors.dark.green} bold>
-          ✻ Welcome to oli!
-        </Text>
-        <Box marginY={1} />
-        {children}
-        <Box marginY={1} />
-        <Text color={theme.colors.dark.fg4}>cwd: {process.cwd()}</Text>
-      </Box>
-    </Box>
-  </Box>
-);
+// Model selector component uses the extracted WelcomeBox component
 
 // Model selector with minimal UI
 const ModelSelector: React.FC<ModelSelectorProps> = ({
@@ -102,24 +83,38 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         <Text color={theme.colors.dark.yellow}>Select a model:</Text>
 
         <Box marginY={1} flexDirection="column">
-          {models.map((model, i) => (
-            <Text
-              key={`model-${i}`}
-              color={
-                i === index ? theme.colors.dark.green : theme.colors.dark.fg
-              }
-              bold={i === index}
-            >
-              {i === index ? "● " : "○ "}
-              {model.name}
-            </Text>
-          ))}
+          {models.map((model, i) => {
+            // Check if model is local based on the "(local)" suffix in the name
+            const isLocal = model.name.includes("(local)");
+
+            // The backend now provides the formatted model name directly
+            // We just use it as-is, with appropriate styling
+
+            return (
+              <Text
+                key={`model-${i}`}
+                color={
+                  i === index
+                    ? theme.colors.dark.green
+                    : isLocal
+                      ? theme.colors.dark.aqua
+                      : theme.colors.dark.fg
+                }
+                bold={i === index}
+              >
+                {i === index ? "● " : "○ "}
+                {model.name}
+              </Text>
+            );
+          })}
         </Box>
 
         {models[index]?.description && (
-          <Text color={theme.colors.dark.fg4} wrap="wrap" dimColor>
-            {models[index].description}
-          </Text>
+          <Box flexDirection="column" marginY={1}>
+            <Text color={theme.colors.dark.fg4} wrap="wrap" dimColor>
+              {models[index].description}
+            </Text>
+          </Box>
         )}
 
         <Text color={theme.colors.dark.fg4}>

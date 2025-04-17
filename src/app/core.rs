@@ -6,7 +6,8 @@ use crate::models;
 use crate::models::ModelConfig;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::time::Instant;
+use std::collections::HashMap;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
@@ -124,6 +125,85 @@ impl Task {
     }
 }
 
+/// Tool execution status enum
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ToolExecutionStatus {
+    /// Tool execution is in progress
+    Running,
+    /// Tool execution completed successfully
+    Success,
+    /// Tool execution failed
+    Error,
+}
+
+/// Represents a tool execution with status updates
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolExecution {
+    pub id: String,                             // Unique ID for this tool execution
+    pub task_id: String,                        // ID of the parent task
+    pub name: String,                           // Tool name (View, GlobTool, etc.)
+    pub status: ToolExecutionStatus,            // Running, Success, Error
+    pub start_time: u64,                        // Start timestamp (milliseconds)
+    pub end_time: Option<u64>,                  // End timestamp (milliseconds), None if still running
+    pub message: String,                        // Current status message
+    pub metadata: HashMap<String, serde_json::Value>, // Additional metadata: file paths, line counts, etc.
+}
+
+impl ToolExecution {
+    /// Create a new running tool execution
+    pub fn new(task_id: &str, name: &str) -> Self {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        Self {
+            id: format!("tool-{}-{}", name, Uuid::new_v4().simple()),
+            task_id: task_id.to_string(),
+            name: name.to_string(),
+            status: ToolExecutionStatus::Running,
+            start_time: now,
+            end_time: None,
+            message: format!("Starting {}", name),
+            metadata: HashMap::new(),
+        }
+    }
+
+    /// Mark tool execution as completed successfully
+    pub fn complete(&mut self, message: &str) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        self.status = ToolExecutionStatus::Success;
+        self.end_time = Some(now);
+        self.message = message.to_string();
+    }
+
+    /// Mark tool execution as failed
+    pub fn fail(&mut self, error: &str) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        self.status = ToolExecutionStatus::Error;
+        self.end_time = Some(now);
+        self.message = format!("Error: {}", error);
+    }
+
+    /// Update tool execution with a progress message
+    pub fn update_progress(&mut self, message: &str) {
+        self.message = message.to_string();
+    }
+
+    /// Add metadata to the tool execution
+    pub fn add_metadata(&mut self, key: &str, value: serde_json::Value) {
+        self.metadata.insert(key.to_string(), value);
+    }
+}
+
 /// Main backend application state
 pub struct App {
     pub state: AppState,
@@ -142,6 +222,8 @@ pub struct App {
     pub conversation_summaries: Vec<ConversationSummary>,
     pub session_manager: Option<SessionManager>,
     pub session_id: String,
+    // Add tracking for tool executions
+    pub tool_executions: HashMap<String, ToolExecution>,
 }
 
 impl App {
@@ -184,6 +266,7 @@ impl App {
             conversation_summaries: Vec::new(),
             session_manager,
             session_id,
+            tool_executions: HashMap::new(),
         }
     }
 
@@ -199,7 +282,7 @@ impl App {
         // First gather all the info we need
 
         // Create a task for this query
-        let _task_id = self.create_task(prompt);
+        let task_id = self.create_task(prompt);
 
         // Add processing message to logs
         eprintln!(
@@ -229,6 +312,7 @@ impl App {
 
         let model_name = model.name.clone();
         let model_file_name = model.file_name.clone();
+        let supports_agent = model.has_agent_support();
 
         // Log model info
         eprintln!(
@@ -288,63 +372,402 @@ impl App {
             ..Default::default()
         };
 
-        // Execute the appropriate API call
-        let response = if model_name_lower.contains("claude") {
-            // Use Anthropic API for Claude models
-            runtime.block_on(async {
-                let client = crate::apis::anthropic::AnthropicClient::with_api_key(
-                    api_key.clone(),
-                    Some(model_file_name.clone()),
-                )?;
+        // Channel for sending progress updates
+        let (progress_tx, progress_rx) = std::sync::mpsc::channel();
 
-                client.complete(messages.clone(), options).await
-            })?
-        } else if model_name_lower.contains("gpt") {
-            // Use OpenAI API for GPT models
-            runtime.block_on(async {
-                let client = crate::apis::openai::OpenAIClient::with_api_key(
-                    api_key.clone(),
-                    Some(model_file_name.clone()),
-                )?;
+        // Progress tracking thread for UI notifications
+        let task_id_clone = task_id.clone();
+        std::thread::spawn(move || {
+            while let Ok(message) = progress_rx.recv() {
+                // Emit progress events for the UI to pick up
+                if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
+                    let _ = rpc_server.event_sender().send((
+                        "processing_progress".to_string(),
+                        serde_json::json!({
+                            "task_id": task_id_clone,
+                            "message": message
+                        }),
+                    ));
+                }
+            }
+        });
 
-                client.complete(messages.clone(), options).await
-            })?
-        } else if model_name_lower.contains("local") {
-            // Use Ollama API for local models
-            runtime.block_on(async {
-                let client = crate::apis::ollama::OllamaClient::new(Some(model_file_name.clone()))?;
+        // Initialize agent if model supports it and use_agent is set
+        if supports_agent && self.use_agent {
+            // Working directory no longer needed for the simplified implementation
+            let _working_dir = self.current_working_dir.clone().unwrap_or_else(|| {
+                std::env::current_dir()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| ".".to_string())
+            });
 
-                client.complete(messages.clone(), options).await
-            })?
-        } else {
-            // Fallback to a default message if the model is not recognized
-            format!("I couldn't send your message to a language model. The model '{}' is not currently supported.", model_name)
-        };
+            // Determine provider from model name
+            let has_anthropic_key =
+                !api_key.is_empty() && std::env::var("ANTHROPIC_API_KEY").is_ok();
+            let has_openai_key = !api_key.is_empty() && std::env::var("OPENAI_API_KEY").is_ok();
 
-        // Add the assistant response to the session
-        if let Some(session) = &mut self.session_manager {
-            session.add_assistant_message(response.clone());
-        }
+            // Import agent provider enum
+            use crate::agent::core::LLMProvider;
 
-        // Add the response to the message history
-        self.messages.push(format!("[assistant] {}", response));
+            // Determine the provider based on model name
+            let provider = match model_name_lower.as_str() {
+                name if name.contains("claude") => {
+                    if has_anthropic_key {
+                        Some(LLMProvider::Anthropic)
+                    } else {
+                        None
+                    }
+                }
+                name if name.contains("gpt") => {
+                    if has_openai_key {
+                        Some(LLMProvider::OpenAI)
+                    } else {
+                        None
+                    }
+                }
+                name if name.contains("local") => Some(LLMProvider::Ollama),
+                _ => {
+                    if has_anthropic_key {
+                        Some(LLMProvider::Anthropic)
+                    } else if has_openai_key {
+                        Some(LLMProvider::OpenAI)
+                    } else {
+                        None
+                    }
+                }
+            }
+            .ok_or_else(|| anyhow::anyhow!("Could not determine provider for agent"))?;
 
-        // Complete the task (with an estimate of output tokens)
-        let estimated_tokens = (response.len() as f64 / 4.0).ceil() as u32;
-        self.complete_current_task(estimated_tokens);
+            // Determine the agent model
+            let agent_model = match model_name_lower.as_str() {
+                name if name.contains("claude") => {
+                    if has_anthropic_key {
+                        Some("claude-3-7-sonnet-20250219".to_string())
+                    } else {
+                        None
+                    }
+                }
+                name if name.contains("gpt") => {
+                    if has_openai_key {
+                        Some("gpt-4o".to_string())
+                    } else {
+                        None
+                    }
+                }
+                name if name.contains("local") => Some(model_file_name.clone()),
+                _ => None,
+            }
+            .ok_or_else(|| anyhow::anyhow!("Could not determine model for agent"))?;
 
-        eprintln!(
-            "{}",
-            format_log_with_color(
-                LogLevel::Info,
-                &format!(
-                    "Query completed, received approximately {} tokens",
-                    estimated_tokens
+            // Create and configure the agent with builder methods
+            let mut agent = crate::agent::core::Agent::new(provider);
+            agent = agent.with_model(agent_model);
+
+            // Create Tokio channel for progress
+            let (progress_tx_sender, mut progress_rx_receiver) =
+                tokio::sync::mpsc::channel::<String>(100);
+
+            // Add progress sender to agent
+            agent = agent.with_progress_sender(progress_tx_sender);
+
+            // Set up a task for processing progress messages
+            let progress_tx_clone = progress_tx.clone();
+            let task_id_clone2 = task_id.clone();
+
+            // Spawn a thread to handle agent progress messages
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    while let Some(message) = progress_rx_receiver.recv().await {
+                        // Process tool execution events
+                        if message.starts_with('[') && message.contains(']') {
+                            if let Some(rpc_server) =
+                                crate::communication::rpc::get_global_rpc_server()
+                            {
+                                let parts: Vec<&str> = message.splitn(2, ']').collect();
+                                if parts.len() == 2 {
+                                    let tool_name = parts[0].trim_start_matches('[').trim();
+                                    let tool_message = parts[1].trim();
+
+                                    // Determine tool execution status - default to running
+                                    let status = if message.contains("[error]")
+                                        || message.contains("ERROR")
+                                    {
+                                        "error"
+                                    } else if message.contains("[completed]") {
+                                        "success"
+                                    } else {
+                                        "running"
+                                    };
+
+                                    // Extract additional metadata for the tool operation
+                                    let file_path = if tool_message.contains("file_path:") {
+                                        let path_parts: Vec<&str> =
+                                            tool_message.split("file_path:").collect();
+                                        if path_parts.len() > 1 {
+                                            let path_with_quotes = path_parts[1].trim();
+                                            // Extract the path from quotes if present
+                                            if path_with_quotes.starts_with('"')
+                                                && path_with_quotes.contains('"')
+                                            {
+                                                let end_quote_pos = path_with_quotes[1..]
+                                                    .find('"')
+                                                    .map(|pos| pos + 1);
+                                                end_quote_pos
+                                                    .map(|pos| path_with_quotes[1..pos].to_string())
+                                            } else {
+                                                Some(
+                                                    path_with_quotes
+                                                        .split_whitespace()
+                                                        .next()
+                                                        .unwrap_or("")
+                                                        .to_string(),
+                                                )
+                                            }
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    };
+
+                                    // Extract line count if available - improved detection
+                                    let lines = if tool_message.contains("lines") {
+                                        let line_parts: Vec<&str> =
+                                            tool_message.split("lines").collect();
+                                        if line_parts.len() > 1 {
+                                            // Look for number right before or after "lines"
+                                            let numbers: Vec<&str> = line_parts[0]
+                                                .split_whitespace()
+                                                .chain(line_parts[1].split_whitespace())
+                                                .filter(|word| word.parse::<usize>().is_ok())
+                                                .collect();
+
+                                            numbers
+                                                .first()
+                                                .and_then(|num| num.parse::<usize>().ok())
+                                        } else {
+                                            // Fallback to original implementation
+                                            tool_message
+                                                .split_whitespace()
+                                                .find(|word| word.parse::<usize>().is_ok())
+                                                .and_then(|num| num.parse::<usize>().ok())
+                                        }
+                                    } else {
+                                        None
+                                    };
+
+                                    // Description based on tool type
+                                    let description = match tool_name {
+                                        "View" => {
+                                            if let Some(_path) = &file_path {
+                                                if let Some(line_count) = lines {
+                                                    format!(
+                                                        "Read {} lines (ctrl+r to expand)",
+                                                        line_count
+                                                    )
+                                                } else {
+                                                    "Reading file contents (ctrl+r to expand)"
+                                                        .to_string()
+                                                }
+                                            } else {
+                                                "Reading file".to_string()
+                                            }
+                                        }
+                                        "GlobTool" => "Finding files by pattern".to_string(),
+                                        "GrepTool" => "Searching code for pattern".to_string(),
+                                        "LS" => "Listing directory contents".to_string(),
+                                        "Edit" => "Modifying file".to_string(),
+                                        "Replace" => "Replacing file contents".to_string(),
+                                        "Bash" => "Executing command".to_string(),
+                                        _ => "Executing tool".to_string(),
+                                    };
+
+                                    // Generate a unique ID for this tool execution
+                                    let tool_id = format!("tool-{}-{}", tool_name, uuid::Uuid::new_v4().simple());
+                                    
+                                    // Create timestamp
+                                    let now = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis() as u64;
+                                        
+                                    // Create a ToolExecution structure
+                                    let tool_execution = ToolExecution {
+                                        id: tool_id.clone(),
+                                        task_id: task_id_clone2.clone(),
+                                        name: tool_name.to_string(),
+                                        status: match status {
+                                            "running" => ToolExecutionStatus::Running,
+                                            "success" => ToolExecutionStatus::Success,
+                                            "error" => ToolExecutionStatus::Error,
+                                            _ => ToolExecutionStatus::Running,
+                                        },
+                                        start_time: now,
+                                        end_time: if status != "running" { Some(now) } else { None },
+                                        message: tool_message.to_string(),
+                                        metadata: {
+                                            let mut meta = std::collections::HashMap::new();
+                                            if let Some(path) = &file_path {
+                                                meta.insert("file_path".to_string(), serde_json::Value::String(path.clone()));
+                                            }
+                                            if let Some(line_count) = lines {
+                                                meta.insert("lines".to_string(), serde_json::Value::Number(serde_json::Number::from(line_count)));
+                                            }
+                                            meta.insert("description".to_string(), serde_json::Value::String(description.clone()));
+                                            meta
+                                        },
+                                    };
+                                    
+                                    // Log the tool execution
+                                    eprintln!("Created tool execution: {} ({})", tool_execution.id, tool_execution.name);
+
+                                    // Send as a tool_status notification directly
+                                    let _ = rpc_server.send_notification(
+                                        "tool_status", 
+                                        serde_json::json!({
+                                            "type": "started",
+                                            "execution": tool_execution
+                                        })
+                                    );
+                                    
+                                    // Also send the legacy tool_execution event for backward compatibility
+                                    let _ = rpc_server.event_sender().send((
+                                        "tool_execution".to_string(),
+                                        serde_json::json!({
+                                            "task_id": task_id_clone2,
+                                            "tool": tool_name,
+                                            "message": tool_message,
+                                            "status": status,
+                                            "description": description,
+                                            "file_path": file_path,
+                                            "lines": lines,
+                                            "timestamp": now
+                                        }),
+                                    ));
+                                }
+                            }
+                        }
+
+                        // Forward to main progress handler
+                        let _ = progress_tx_clone.send(message.to_string());
+
+                        // Log to stderr for debugging
+                        eprintln!(
+                            "{}",
+                            format_log_with_color(LogLevel::Debug, &format!("Agent: {}", message))
+                        );
+                    }
+                });
+            });
+
+            // Initialize the agent
+            runtime.block_on(async { agent.initialize_with_api_key(api_key.clone()).await })?;
+
+            // Execute the agent with the prompt
+            let response = runtime.block_on(async { agent.execute(prompt).await })?;
+
+            // Use a fixed tool count for now
+            if let Some(task) = self.current_task_mut() {
+                task.tool_count = 1; // Set a default tool count
+            }
+
+            // Add the assistant response to the session
+            if let Some(session) = &mut self.session_manager {
+                session.add_assistant_message(response.clone());
+            }
+
+            // Add the response to the message history
+            self.messages.push(format!("[assistant] {}", response));
+
+            // Complete the task (with an estimate of output tokens)
+            let estimated_tokens = (response.len() as f64 / 4.0).ceil() as u32;
+            self.complete_current_task(estimated_tokens);
+
+            eprintln!(
+                "{}",
+                format_log_with_color(
+                    LogLevel::Info,
+                    &format!(
+                        "Agent query completed, received approximately {} tokens",
+                        estimated_tokens
+                    )
                 )
-            )
-        );
+            );
 
-        Ok(response)
+            Ok(response)
+        } else {
+            // Execute the appropriate API call for non-agent mode
+            let response = if model_name_lower.contains("claude") {
+                // Use Anthropic API for Claude models
+                runtime.block_on(async {
+                    let client = crate::apis::anthropic::AnthropicClient::with_api_key(
+                        api_key.clone(),
+                        Some(model_file_name.clone()),
+                    )?;
+
+                    // Send progress update
+                    let _ = progress_tx.send(format!("Sending request to {}", model_name));
+
+                    client.complete(messages.clone(), options).await
+                })?
+            } else if model_name_lower.contains("gpt") {
+                // Use OpenAI API for GPT models
+                runtime.block_on(async {
+                    let client = crate::apis::openai::OpenAIClient::with_api_key(
+                        api_key.clone(),
+                        Some(model_file_name.clone()),
+                    )?;
+
+                    // Send progress update
+                    let _ = progress_tx.send(format!("Sending request to {}", model_name));
+
+                    client.complete(messages.clone(), options).await
+                })?
+            } else if model_name_lower.contains("local") {
+                // Use Ollama API for local models
+                runtime.block_on(async {
+                    let client =
+                        crate::apis::ollama::OllamaClient::new(Some(model_file_name.clone()))?;
+
+                    // Send progress update
+                    let _ = progress_tx.send(format!(
+                        "Sending request to local model {}",
+                        model_file_name
+                    ));
+
+                    client.complete(messages.clone(), options).await
+                })?
+            } else {
+                // Fallback to a default message if the model is not recognized
+                format!("I couldn't send your message to a language model. The model '{}' is not currently supported.", model_name)
+            };
+
+            // Add the assistant response to the session
+            if let Some(session) = &mut self.session_manager {
+                session.add_assistant_message(response.clone());
+            }
+
+            // Add the response to the message history
+            self.messages.push(format!("[assistant] {}", response));
+
+            // Complete the task (with an estimate of output tokens)
+            let estimated_tokens = (response.len() as f64 / 4.0).ceil() as u32;
+            self.complete_current_task(estimated_tokens);
+
+            eprintln!(
+                "{}",
+                format_log_with_color(
+                    LogLevel::Info,
+                    &format!(
+                        "Query completed, received approximately {} tokens",
+                        estimated_tokens
+                    )
+                )
+            );
+
+            Ok(response)
+        }
     }
 
     /// Check if there are any active tasks
@@ -432,6 +855,155 @@ impl App {
             task.fail(error);
         }
         self.current_task_id = None;
+    }
+    
+    /// Start a new tool execution
+    pub fn start_tool_execution(&mut self, name: &str) -> Option<String> {
+        // Need a current task to track tool executions
+        if let Some(task_id) = &self.current_task_id {
+            // Create a new tool execution
+            let tool_execution = ToolExecution::new(task_id, name);
+            let tool_id = tool_execution.id.clone();
+            
+            // Store the tool execution
+            self.tool_executions.insert(tool_id.clone(), tool_execution);
+            
+            // Increment the task's tool count
+            if let Some(task) = self.current_task_mut() {
+                task.add_tool_use();
+            }
+            
+            // Send tool started notification
+            if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
+                // More detailed logging
+                eprintln!("Sending tool_status started notification for tool {}: {}", name, tool_id);
+                
+                // Get the tool execution to send
+                let tool_exec = self.tool_executions.get(&tool_id).cloned();
+                
+                if let Some(exec) = tool_exec {
+                    let result = rpc_server.send_notification(
+                        "tool_status", 
+                        serde_json::json!({
+                            "type": "started",
+                            "execution": exec
+                        })
+                    );
+                    
+                    if let Err(e) = result {
+                        eprintln!("Error sending tool_status notification: {}", e);
+                    }
+                } else {
+                    eprintln!("Tool execution not found for ID: {}", tool_id);
+                }
+            } else {
+                eprintln!("No RPC server available to send tool_status notification");
+            }
+            
+            Some(tool_id)
+        } else {
+            None
+        }
+    }
+    
+    /// Update tool execution progress
+    pub fn update_tool_progress(&mut self, tool_id: &str, message: &str, metadata: Option<HashMap<String, serde_json::Value>>) {
+        if let Some(tool) = self.tool_executions.get_mut(tool_id) {
+            tool.update_progress(message);
+            
+            // Add any metadata if provided
+            if let Some(meta) = metadata {
+                for (key, value) in meta {
+                    tool.add_metadata(&key, value);
+                }
+            }
+            
+            // Send progress notification
+            if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
+                let _ = rpc_server.send_notification(
+                    "tool_status", 
+                    serde_json::json!({
+                        "type": "updated",
+                        "execution": tool
+                    })
+                );
+            }
+        }
+    }
+    
+    /// Complete a tool execution
+    pub fn complete_tool_execution(&mut self, tool_id: &str, message: &str, metadata: Option<HashMap<String, serde_json::Value>>) {
+        if let Some(tool) = self.tool_executions.get_mut(tool_id) {
+            tool.complete(message);
+            
+            // Add any metadata if provided
+            if let Some(meta) = metadata {
+                for (key, value) in meta {
+                    tool.add_metadata(&key, value);
+                }
+            }
+            
+            // Send completion notification
+            if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
+                let _ = rpc_server.send_notification(
+                    "tool_status", 
+                    serde_json::json!({
+                        "type": "updated",
+                        "execution": tool
+                    })
+                );
+            }
+        }
+    }
+    
+    /// Mark a tool execution as failed
+    pub fn fail_tool_execution(&mut self, tool_id: &str, error: &str) {
+        if let Some(tool) = self.tool_executions.get_mut(tool_id) {
+            tool.fail(error);
+            
+            // Send failure notification
+            if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
+                let _ = rpc_server.send_notification(
+                    "tool_status", 
+                    serde_json::json!({
+                        "type": "updated",
+                        "execution": tool
+                    })
+                );
+            }
+        }
+    }
+    
+    /// Clean up old completed tool executions (older than 10 minutes)
+    pub fn cleanup_old_tool_executions(&mut self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+            
+        let ten_minutes_ms = 10 * 60 * 1000;
+        
+        // Collect IDs of old completed tool executions
+        let old_tool_ids: Vec<String> = self.tool_executions
+            .iter()
+            .filter(|(_, tool)| {
+                if let Some(end_time) = tool.end_time {
+                    // Keep if still running or completed less than 10 minutes ago
+                    match tool.status {
+                        ToolExecutionStatus::Running => false,
+                        _ => now - end_time > ten_minutes_ms,
+                    }
+                } else {
+                    false
+                }
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+            
+        // Remove old tool executions
+        for id in old_tool_ids {
+            self.tool_executions.remove(&id);
+        }
     }
 
     /// Add a log message (now deprecated in favor of direct eprintln calls)

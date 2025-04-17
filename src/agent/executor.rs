@@ -378,6 +378,14 @@ impl AgentExecutor {
 
                         // Format successful tool result with detailed output
                         if let Some(sender) = &self.progress_sender {
+                            // Send a separate explicit success status notification
+                            let _ = sender
+                                .send(format!(
+                                    "[completed] Tool {} executed successfully",
+                                    call.name
+                                ))
+                                .await;
+
                             // Create a preview of the output
                             let preview = if output.len() > 200 {
                                 format!(
@@ -624,6 +632,11 @@ impl AgentExecutor {
                     Err(e) => {
                         let error_msg = format!("Tool execution failed: {}", e);
                         if let Some(sender) = &self.progress_sender {
+                            // Send an explicit error notification that the UI can detect
+                            let _ = sender
+                                .send("[error] Tool execution failed".to_string())
+                                .await;
+                            // Then send the detailed error message
                             let _ = sender.send(format!("⏺ [error] {}", error_msg)).await;
                         }
 

@@ -1,36 +1,17 @@
 import { spawn, ChildProcess } from "child_process";
 import readline from "readline";
 import { EventEmitter } from "events";
+import {
+  JsonRpcRequest,
+  JsonRpcResponse,
+  JsonRpcNotification,
+} from "../types/index.js";
+
+// Subscription tracking
+type SubscriptionId = number;
 
 // JSON-RPC request ID counter
 let requestId = 1;
-
-// Interface for JSON-RPC request
-interface JsonRpcRequest {
-  jsonrpc: string;
-  id: number;
-  method: string;
-  params: Record<string, unknown>;
-}
-
-// Interface for JSON-RPC response
-interface JsonRpcResponse {
-  jsonrpc: string;
-  id: number;
-  result?: Record<string, unknown>;
-  error?: {
-    code: number;
-    message: string;
-    data?: unknown;
-  };
-}
-
-// Interface for JSON-RPC notification
-interface JsonRpcNotification {
-  jsonrpc: string;
-  method: string;
-  params: Record<string, unknown>;
-}
 
 // Backend service for communication with the Rust backend
 export class BackendService extends EventEmitter {
@@ -43,6 +24,9 @@ export class BackendService extends EventEmitter {
       reject: (reason: Error) => void;
     }
   >;
+  
+  // Track active subscriptions
+  private subscriptions: Map<string, SubscriptionId> = new Map();
 
   constructor(process: ChildProcess) {
     super();
@@ -133,6 +117,54 @@ export class BackendService extends EventEmitter {
   emitEvent(event: string, data: Record<string, unknown> = {}) {
     return super.emit(event, data);
   }
+  
+  // Subscribe to an event type
+  async subscribe(eventType: string): Promise<SubscriptionId> {
+    // Only subscribe once per event type
+    if (this.subscriptions.has(eventType)) {
+      return this.subscriptions.get(eventType) as SubscriptionId;
+    }
+    
+    try {
+      const result = await this.call("subscribe", { event_type: eventType });
+      const subId = result.subscription_id as SubscriptionId;
+      
+      // Save subscription
+      this.subscriptions.set(eventType, subId);
+      console.log(`Subscribed to ${eventType} events with ID ${subId}`);
+      return subId;
+    } catch (error) {
+      console.error(`Failed to subscribe to ${eventType}:`, error);
+      throw error;
+    }
+  }
+  
+  // Unsubscribe from an event type
+  async unsubscribe(eventType: string): Promise<boolean> {
+    if (!this.subscriptions.has(eventType)) {
+      console.log(`Not subscribed to ${eventType}, nothing to unsubscribe`);
+      return false; // Not subscribed
+    }
+    
+    const subId = this.subscriptions.get(eventType) as SubscriptionId;
+    try {
+      const result = await this.call("unsubscribe", { 
+        event_type: eventType, 
+        subscription_id: subId 
+      });
+      
+      const success = result.success as boolean;
+      if (success) {
+        this.subscriptions.delete(eventType);
+        console.log(`Successfully unsubscribed from ${eventType}`);
+      }
+      
+      return success;
+    } catch (error) {
+      console.error(`Failed to unsubscribe from ${eventType}:`, error);
+      throw error;
+    }
+  }
 }
 
 // Spawn a new backend process
@@ -151,11 +183,22 @@ export function spawnBackend(path: string): BackendService {
       // Try to call a simple method on the backend
       const result = await backend.call("get_available_models");
 
+      // Get the version from the backend
+      let version;
+      try {
+        const versionResult = await backend.call("get_version");
+        version = versionResult.version as string;
+      } catch {
+        // Don't set version if we can't get it from backend
+        console.error("Failed to get version from backend");
+      }
+
       // Success event
       backend.emitEvent("backend_connected", {
         success: true,
         message: "Successfully connected to backend",
         models: result.models,
+        version,
       });
     } catch (error) {
       // Failure event
