@@ -41,6 +41,11 @@ jobs:
           cp target/release/oli-server dist/oli/
           cp -r ui/dist dist/oli/ui
 
+          # Install tsx as runtime dependency
+          cd dist/oli
+          npm install tsx@4.19.3
+          cd ../..
+
           # Create startup script
           cat > dist/oli/oli << 'EOF'
           #!/bin/bash
@@ -54,7 +59,7 @@ jobs:
 
           # Start the UI
           cd "$SCRIPT_DIR"
-          node --import tsx ui/cli.js "$@"
+          NODE_PATH="$SCRIPT_DIR/node_modules" node --import "$SCRIPT_DIR/node_modules/tsx" ui/cli.js "$@"
 
           # Kill the server when the UI exits
           kill $SERVER_PID

@@ -35,7 +35,9 @@ async function install() {
     }
 
     // Download URL for the tarball
-    const downloadUrl = `https://github.com/${GITHUB_REPO}/releases/download/v${PKG_VERSION}/oli-${PKG_VERSION}.tar.gz`;
+    const platform_suffix = platform === 'darwin' ? 'macos' : 'linux';
+    const arch_suffix = arch === 'x64' ? 'x86_64' : 'aarch64';
+    const downloadUrl = `https://github.com/${GITHUB_REPO}/releases/download/v${PKG_VERSION}/oli-${PKG_VERSION}-${platform_suffix}-${arch_suffix}.tar.gz`;
     console.log(`Downloading from: ${downloadUrl}`);
 
     // Create temp directory

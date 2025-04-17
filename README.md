@@ -19,18 +19,21 @@ oli is an open-source alternative to Claude Code with powerful agentic capabilit
 
 ## Installation
 
-### Using Cargo
+### Using npm
 
 ```bash
-cargo install oli-tui
+npm install -g oli-tui
 ```
+
+This will install the latest version from npm and handle all dependencies automatically.
 
 ### Using Homebrew (macOS)
 
 ```bash
-brew tap amrit110/oli
-brew install oli
+brew install amrit110/oli/oli
 ```
+
+Homebrew will download and install the latest version directly.
 
 ### From Source
 
