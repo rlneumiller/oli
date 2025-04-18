@@ -189,7 +189,7 @@ pub trait ApiClient: Send + Sync {
 #[derive(Clone)]
 pub enum ApiClientEnum {
     Anthropic(Arc<crate::apis::anthropic::AnthropicClient>),
-    OpenAi(Arc<crate::apis::openai::OpenAIClient>),
+    OpenAI(Arc<crate::apis::openai::OpenAIClient>),
     Ollama(Arc<crate::apis::ollama::OllamaClient>),
     Gemini(Arc<crate::apis::gemini::GeminiClient>),
 }
@@ -203,7 +203,7 @@ impl ApiClientEnum {
     ) -> Result<String> {
         match self {
             Self::Anthropic(client) => client.complete(messages, options).await,
-            Self::OpenAi(client) => client.complete(messages, options).await,
+            Self::OpenAI(client) => client.complete(messages, options).await,
             Self::Ollama(client) => client.complete(messages, options).await,
             Self::Gemini(client) => client.complete(messages, options).await,
         }
@@ -221,7 +221,7 @@ impl ApiClientEnum {
                     .complete_with_tools(messages, options, tool_results)
                     .await
             }
-            Self::OpenAi(client) => {
+            Self::OpenAI(client) => {
                 client
                     .complete_with_tools(messages, options, tool_results)
                     .await

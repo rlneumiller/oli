@@ -86,7 +86,7 @@ impl Agent {
             }
             LLMProvider::OpenAI => {
                 let client = OpenAIClient::new(self.model.clone())?;
-                ApiClientEnum::OpenAi(Arc::new(client))
+                ApiClientEnum::OpenAI(Arc::new(client))
             }
             LLMProvider::Ollama => {
                 let client = OllamaClient::new(self.model.clone())?;
@@ -114,7 +114,7 @@ impl Agent {
             }
             LLMProvider::OpenAI => {
                 let client = OpenAIClient::with_api_key(api_key, self.model.clone())?;
-                ApiClientEnum::OpenAi(Arc::new(client))
+                ApiClientEnum::OpenAI(Arc::new(client))
             }
             LLMProvider::Ollama => {
                 // For Ollama, we'll use the api_key as the base URL if provided

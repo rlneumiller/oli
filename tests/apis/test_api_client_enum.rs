@@ -30,7 +30,7 @@ fn create_mock_openai_enum() -> ApiClientEnum {
     let client =
         OpenAIClient::with_api_key("test_key".to_string(), Some("test-model".to_string())).unwrap();
 
-    ApiClientEnum::OpenAi(Arc::new(client))
+    ApiClientEnum::OpenAI(Arc::new(client))
 }
 
 /// Test helper to create a mock Gemini client enum
@@ -78,7 +78,7 @@ fn test_enum_variant_matching() {
     }
 
     match openai_enum {
-        ApiClientEnum::OpenAi(_) => {
+        ApiClientEnum::OpenAI(_) => {
             // Expected case
         }
         _ => {
