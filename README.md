@@ -15,9 +15,9 @@ oli is an open-source alternative to Claude Code with powerful agentic capabilit
 - A modern hybrid architecture:
   - Rust backend for performance and core functionality
   - React/Ink frontend for a beautiful, interactive terminal UI
-- Support for both cloud APIs (Anthropic Claude Sonnet 3.7 and OpenAI GPT4o) and local LLMs (via Ollama)
+- Support for both cloud APIs (Anthropic Claude Sonnet 3.7, OpenAI GPT4o and Google Gemini) and local LLMs (via Ollama)
 - Strong agentic capabilities including file search, edit, and command execution
-- Tool use support across all model providers (Anthropic, OpenAI, and Ollama)
+- Tool use support across all model providers (Anthropic, OpenAI, Google and Ollama)
 
 ⚠️ This project is in a very early stage and is prone to bugs and issues! Please post your issues as you encounter them.
 
@@ -69,6 +69,8 @@ For API-based features, set up your environment variables:
 echo "ANTHROPIC_API_KEY=your_key_here" > .env
 # OR
 echo "OPENAI_API_KEY=your_key_here" > .env
+# OR
+echo "GEMINI_API_KEY=your_key_here" > .env
 ```
 
 ### Using Anthropic Claude 3.7 Sonnet (Recommended)
@@ -112,7 +114,7 @@ Note: For best results with tool use and agent capabilities, use models like Qwe
 ```
 
 2. Select a model:
-   - Cloud models (Claude 3 Sonnet, GPT-4o) for full agent capabilities
+   - Cloud models (Claude 3 Sonnet, GPT-4o, Gemini 2.5) for full agent capabilities
    - Local models via Ollama (Qwen, Llama, etc.)
 
 3. Make your coding query in the chat interface:

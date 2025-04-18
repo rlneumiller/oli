@@ -37,6 +37,14 @@ pub fn get_available_models() -> Vec<ModelConfig> {
             recommended_for: "Professional code tasks, requires OPENAI_API_KEY".into(),
             supports_agent: true,
         },
+        // Gemini 2.5 Pro - Google model supporting tool use
+        ModelConfig {
+            name: "Gemini 2.5 Pro".into(),
+            file_name: "gemini-2.5-pro-exp-03-25".into(),
+            description: "Google's latest Gemini model with advanced code capabilities".into(),
+            recommended_for: "Professional code tasks, requires GEMINI_API_KEY".into(),
+            supports_agent: true,
+        },
     ];
 
     // Try to fetch available models from Ollama

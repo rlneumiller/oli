@@ -324,11 +324,12 @@ impl App {
         let api_key = self.api_key.clone().unwrap_or_else(|| {
             std::env::var("ANTHROPIC_API_KEY")
                 .or_else(|_| std::env::var("OPENAI_API_KEY"))
+                .or_else(|_| std::env::var("GEMINI_API_KEY"))
                 .unwrap_or_default()
         });
 
         if api_key.is_empty() {
-            return Err(anyhow::anyhow!("No API key available. Please set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable."));
+            return Err(anyhow::anyhow!("No API key available. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY environment variable."));
         }
 
         // Session management
@@ -351,7 +352,8 @@ impl App {
         let model_name_lower = model_name.to_lowercase();
         let unrecognized = !model_name_lower.contains("claude")
             && !model_name_lower.contains("gpt")
-            && !model_name_lower.contains("local");
+            && !model_name_lower.contains("local")
+            && !model_name_lower.contains("gemini");
 
         if unrecognized {
             eprintln!(
@@ -405,6 +407,7 @@ impl App {
             let has_anthropic_key =
                 !api_key.is_empty() && std::env::var("ANTHROPIC_API_KEY").is_ok();
             let has_openai_key = !api_key.is_empty() && std::env::var("OPENAI_API_KEY").is_ok();
+            let has_gemini_key = !api_key.is_empty() && std::env::var("GEMINI_API_KEY").is_ok();
 
             // Import agent provider enum
             use crate::agent::core::LLMProvider;
@@ -425,12 +428,21 @@ impl App {
                         None
                     }
                 }
+                name if name.contains("gemini") => {
+                    if has_gemini_key {
+                        Some(LLMProvider::Gemini)
+                    } else {
+                        None
+                    }
+                }
                 name if name.contains("local") => Some(LLMProvider::Ollama),
                 _ => {
                     if has_anthropic_key {
                         Some(LLMProvider::Anthropic)
                     } else if has_openai_key {
                         Some(LLMProvider::OpenAI)
+                    } else if has_gemini_key {
+                        Some(LLMProvider::Gemini)
                     } else {
                         None
                     }
@@ -450,6 +462,13 @@ impl App {
                 name if name.contains("gpt") => {
                     if has_openai_key {
                         Some("gpt-4o".to_string())
+                    } else {
+                        None
+                    }
+                }
+                name if name.contains("gemini") => {
+                    if has_gemini_key {
+                        Some("gemini-2.5-pro-exp-03-25".to_string())
                     } else {
                         None
                     }
@@ -797,6 +816,19 @@ impl App {
                 // Use OpenAI API for GPT models
                 runtime.block_on(async {
                     let client = crate::apis::openai::OpenAIClient::with_api_key(
+                        api_key.clone(),
+                        Some(model_file_name.clone()),
+                    )?;
+
+                    // Send progress update
+                    let _ = progress_tx.send(format!("Sending request to {}", model_name));
+
+                    client.complete(messages.clone(), options).await
+                })?
+            } else if model_name_lower.contains("gemini") {
+                // Use Gemini API for Gemini models
+                runtime.block_on(async {
+                    let client = crate::apis::gemini::GeminiClient::with_api_key(
                         api_key.clone(),
                         Some(model_file_name.clone()),
                     )?;
