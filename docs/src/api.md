@@ -1,10 +1,14 @@
-# Oli Server API Reference
+# oli Server API Reference
 
-This document provides comprehensive documentation for the Oli server JSON-RPC API. The Oli server can be integrated with any client that supports JSON-RPC 2.0 over stdio, enabling it to be used as a coding agent, language server, or even an MCP server.
+This document provides comprehensive documentation for the oli server JSON-RPC API.
+The oli server can be integrated with any client that supports JSON-RPC 2.0 over stdio.
+The API allows for interaction with various language models, task management, and event
+notifications.
 
 ## API Overview
 
-The Oli server implements a JSON-RPC 2.0 API over stdio. All communication follows the JSON-RPC standard with method calls and event notifications.
+The oli server implements a JSON-RPC 2.0 API over stdio. All communication follows the
+JSON-RPC standard with method calls and event notifications.
 
 ### Connection and Communication
 
@@ -451,7 +455,7 @@ Emitted when a tool's status changes (started, updated, completed).
 import { spawn } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 
-class OliClient {
+class oliClient {
   private process;
   private messageCallbacks = new Map();
   private eventListeners = new Map();
@@ -544,7 +548,7 @@ class OliClient {
 
 // Example usage
 async function main() {
-  const client = new OliClient();
+  const client = new oliClient();
 
   // Listen for events
   client.on('processing_progress', (params) => {
@@ -588,11 +592,11 @@ The server follows the JSON-RPC 2.0 specification for error handling. Errors are
 
 ## Security Considerations
 
-- The Oli server should be treated as a trusted component in your application architecture
+- The oli server should be treated as a trusted component in your application architecture
 - No built-in authentication is provided; the client is responsible for security
 - Consider running the server in a sandboxed environment for additional security
 - API keys for language models are passed via environment variables
 
 ## Extending the API
 
-The Oli server can be extended with additional methods by modifying the main.rs file and registering new API methods. This allows for customization to support specific use cases like language server protocol integration or MCP server capabilities.
+The oli server can be extended with additional methods by modifying the main.rs file and registering new API methods. This allows for customization to support specific use cases like language server protocol integration or MCP server capabilities.
