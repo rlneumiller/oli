@@ -8,6 +8,7 @@
 
 ![demo](https://github.com/user-attachments/assets/c55b7a01-6046-4893-85d3-0a7aa6a0467d)
 
+---
 
 oli is an open-source alternative to Claude Code with powerful agentic capabilities for coding assistance. Features:
 
@@ -21,22 +22,6 @@ oli is an open-source alternative to Claude Code with powerful agentic capabilit
 ⚠️ This project is in a very early stage and is prone to bugs and issues! Please post your issues as you encounter them.
 
 ## Installation
-
-### Using npm
-
-```bash
-npm install -g oli-tui
-```
-
-This will install the latest version from npm and handle all dependencies automatically.
-
-### Using Homebrew (macOS)
-
-```bash
-brew install amrit110/oli/oli
-```
-
-Homebrew will download and install the latest version directly.
 
 ### From Source
 
