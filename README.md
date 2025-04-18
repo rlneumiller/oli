@@ -6,6 +6,9 @@
 
 # oli - Open Local Intelligent assistant
 
+![demo](https://github.com/user-attachments/assets/c55b7a01-6046-4893-85d3-0a7aa6a0467d)
+
+
 oli is an open-source alternative to Claude Code with powerful agentic capabilities for coding assistance. Features:
 
 - A modern hybrid architecture:
