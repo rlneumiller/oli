@@ -191,6 +191,7 @@ pub enum ApiClientEnum {
     Anthropic(Arc<crate::apis::anthropic::AnthropicClient>),
     OpenAi(Arc<crate::apis::openai::OpenAIClient>),
     Ollama(Arc<crate::apis::ollama::OllamaClient>),
+    Gemini(Arc<crate::apis::gemini::GeminiClient>),
 }
 
 impl ApiClientEnum {
@@ -204,6 +205,7 @@ impl ApiClientEnum {
             Self::Anthropic(client) => client.complete(messages, options).await,
             Self::OpenAi(client) => client.complete(messages, options).await,
             Self::Ollama(client) => client.complete(messages, options).await,
+            Self::Gemini(client) => client.complete(messages, options).await,
         }
     }
 
@@ -225,6 +227,11 @@ impl ApiClientEnum {
                     .await
             }
             Self::Ollama(client) => {
+                client
+                    .complete_with_tools(messages, options, tool_results)
+                    .await
+            }
+            Self::Gemini(client) => {
                 client
                     .complete_with_tools(messages, options, tool_results)
                     .await

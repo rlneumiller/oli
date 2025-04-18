@@ -1,6 +1,7 @@
 use crate::agent::executor::AgentExecutor;
 use crate::apis::anthropic::AnthropicClient;
 use crate::apis::api_client::{ApiClientEnum, DynApiClient, Message};
+use crate::apis::gemini::GeminiClient;
 use crate::apis::ollama::OllamaClient;
 use crate::apis::openai::OpenAIClient;
 use crate::prompts::DEFAULT_AGENT_PROMPT;
@@ -14,6 +15,7 @@ pub enum LLMProvider {
     Anthropic,
     OpenAI,
     Ollama,
+    Gemini,
 }
 
 #[derive(Clone)]
@@ -90,6 +92,10 @@ impl Agent {
                 let client = OllamaClient::new(self.model.clone())?;
                 ApiClientEnum::Ollama(Arc::new(client))
             }
+            LLMProvider::Gemini => {
+                let client = GeminiClient::new(self.model.clone())?;
+                ApiClientEnum::Gemini(Arc::new(client))
+            }
         });
 
         // Initialize the code parser
@@ -124,6 +130,10 @@ impl Agent {
                     OllamaClient::with_base_url(model, api_key)?
                 };
                 ApiClientEnum::Ollama(Arc::new(client))
+            }
+            LLMProvider::Gemini => {
+                let client = GeminiClient::with_api_key(api_key, self.model.clone())?;
+                ApiClientEnum::Gemini(Arc::new(client))
             }
         });
 
