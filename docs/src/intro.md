@@ -1,14 +1,20 @@
-[![Crates.io](https://img.shields.io/crates/v/oli-tui?style=flat-square)](https://crates.io/crates/oli-tui)
-[![Docs.rs](https://img.shields.io/badge/docs.rs-latest-blue?style=flat-square)](https://docs.rs/oli-tui)
+[![Crates.io](https://img.shields.io/crates/v/oli-server?style=flat-square)](https://crates.io/crates/oli-server)
+[![Docs.rs](https://img.shields.io/badge/docs.rs-latest-blue?style=flat-square)](https://docs.rs/oli-server)
 [![License](https://img.shields.io/badge/license-Apache_2.0-blue?style=flat-square)](https://opensource.org/license/apache-2-0)
 [![Codecov](https://img.shields.io/codecov/c/github/amrit110/oli?style=flat-square)](https://codecov.io/github/amrit110/oli)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg?logo=rust&style=flat-square)](https://www.rust-lang.org)
 
 # oli - Open Local Intelligent assistant
 
-oli is an open-source alternative to Claude Code, built in Rust to provide powerful agentic capabilities for coding assistance. It features:
+![demo](https://github.com/user-attachments/assets/c55b7a01-6046-4893-85d3-0a7aa6a0467d)
 
-- A flexible TUI interface for working with code
+---
+
+oli is an open-source alternative to Claude Code with powerful agentic capabilities for coding assistance. Features:
+
+- A modern hybrid architecture:
+  - Rust backend for performance and core functionality
+  - React/Ink frontend for a beautiful, interactive terminal UI
 - Support for both cloud APIs (Anthropic Claude Sonnet 3.7 and OpenAI GPT4o) and local LLMs (via Ollama)
 - Strong agentic capabilities including file search, edit, and command execution
 - Tool use support across all model providers (Anthropic, OpenAI, and Ollama)
@@ -17,19 +23,6 @@ oli is an open-source alternative to Claude Code, built in Rust to provide power
 
 ## Installation
 
-### Using Cargo
-
-```bash
-cargo install oli-tui
-```
-
-### Using Homebrew (macOS)
-
-```bash
-brew tap amrit110/oli
-brew install oli
-```
-
 ### From Source
 
 ```bash
@@ -37,12 +30,35 @@ brew install oli
 git clone https://github.com/amrit110/oli
 cd oli
 
-# Build and run
-cargo build --release
-cargo run
+# Build both backend and frontend
+./build.sh
+
+# Run the hybrid application
+./run.sh
 ```
 
 ## Environment Setup
+
+### Development Setup
+
+```bash
+# Install Python dependencies (for pre-commit)
+python -m pip install uv
+uv venv
+uv pip install -e .
+
+# Install pre-commit hooks
+pre-commit install
+
+# Run Rust linting and formatting
+cargo fmt
+cargo clippy
+
+# Run TypeScript checks in the UI directory
+cd ui
+npm run lint
+npm run format
+```
 
 ### Cloud API Models
 
@@ -92,7 +108,7 @@ Note: For best results with tool use and agent capabilities, use models like Qwe
 
 1. Start the application:
 ```bash
-cargo run
+./run.sh
 ```
 
 2. Select a model:
@@ -104,6 +120,23 @@ cargo run
    - Request code edits
    - Execute shell commands
    - Get explanations of code
+
+## Architecture
+
+The application uses a hybrid architecture:
+
+```
+┌───────────────┐        ┌───────────────┐
+│ React + Ink UI│◄───────┤ Rust Backend  │
+│               │  JSON  │               │
+│ - UI          │  RPC   │ - Agent       │
+│ - Task Display│        │ - Tool Exec   │
+│ - Loading     │        │ - Code Parse  │
+└───────────────┘        └───────────────┘
+```
+
+- **Rust Backend**: Handles agent functionality, tool execution, and API calls
+- **React/Ink Frontend**: Provides a modern, interactive terminal interface with smooth animations
 
 ## Examples
 
@@ -122,5 +155,6 @@ This project is licensed under the Apache 2.0 License - see the LICENSE file for
 
 - This project is inspired by Claude Code and similar AI assistants
 - Uses Anthropic's Claude 3.7 Sonnet model for optimal agent capabilities
-- Built with Rust and the Ratatui library for terminal UI
-- Special thanks to the Rust community for excellent libraries and tools
+- Backend built with Rust for performance and reliability
+- Frontend built with React and Ink for a modern terminal UI experience
+- Special thanks to the Rust and React communities for excellent libraries and tools
