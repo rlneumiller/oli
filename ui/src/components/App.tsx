@@ -4,7 +4,6 @@ import { BackendService } from "../services/backend.js";
 import ChatInterface from "./ChatInterface.js";
 import ModelSelector from "./ModelSelector.js";
 import StatusBar from "./StatusBar.js";
-import HeaderBox from "./HeaderBox.js";
 // Theme is used by imported components
 
 import { AppState, ToolExecution, ToolStatusUpdate } from "../types/index.js";
@@ -17,11 +16,10 @@ import {
 // App props interface
 interface AppProps {
   backend: BackendService;
-  noHeader?: boolean; // Flag to disable the header rendering
 }
 
 // Main app component
-const App: React.FC<AppProps> = ({ backend, noHeader = false }) => {
+const App: React.FC<AppProps> = ({ backend }) => {
   // App state
   const [state, setState] = useState<AppState>({
     models: [],
@@ -508,17 +506,11 @@ const App: React.FC<AppProps> = ({ backend, noHeader = false }) => {
     return modelSelectorComponent;
   }
 
-  // Get the current model name
-  const modelName = state.models[state.selectedModel]?.name || "AI Assistant";
-
   // Single column layout with component-based architecture
   return (
     <Box flexDirection="column" width="100%" height="100%">
-      {/* Only render header if not disabled */}
-      {!noHeader && <HeaderBox modelName={modelName} />}
-
-      {/* Chat area with extra margin when header is disabled */}
-      <Box flexGrow={1} flexDirection="column" marginTop={noHeader ? 1 : 0}>
+      {/* Chat area */}
+      <Box flexGrow={1} flexDirection="column">
         {chatInterfaceComponent}
       </Box>
 
