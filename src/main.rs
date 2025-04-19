@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 /// Package version from Cargo.toml
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Main function to initialize and run the Oli server
+/// Main function to initialize and run the oli server
 fn main() -> Result<()> {
     // Initialize app state
     let app = Arc::new(Mutex::new(App::new()));
