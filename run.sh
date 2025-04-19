@@ -68,7 +68,7 @@ if [ -n "$SERVER_PID" ]; then
 fi
 
 echo -e "${BLUE}======================================${NC}"
-echo -e "${GREEN}Oli exited with code:${NC} $UI_EXIT_CODE"
+echo -e "${GREEN}oli exited with code:${NC} $UI_EXIT_CODE"
 echo -e "${BLUE}======================================${NC}"
 
 exit $UI_EXIT_CODE
