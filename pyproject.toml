@@ -1,7 +1,7 @@
 [project]
 name = "oli-dev-env"
 version = "0.1.0"
-description = "Development environment for Oli"
+description = "Development environment for oli"
 readme = "README.md"
 authors = [ {name = "Amrit Krishnan", email = "amritk@vectorinstitute.ai"}]
 license = "Apache-2.0"
