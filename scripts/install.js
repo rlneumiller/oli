@@ -14,18 +14,18 @@ const PKG_VERSION = require('../package.json').version;
 
 async function install() {
   try {
-    console.log('Installing Oli...');
+    console.log('Installing oli...');
 
     // Determine OS and architecture
     const platform = os.platform();
     const arch = os.arch();
 
     if (!(platform === 'darwin' || platform === 'linux')) {
-      throw new Error(`Unsupported platform: ${platform}. Oli supports macOS and Linux.`);
+      throw new Error(`Unsupported platform: ${platform}. oli supports macOS and Linux.`);
     }
 
     if (!(arch === 'x64' || arch === 'arm64')) {
-      throw new Error(`Unsupported architecture: ${arch}. Oli supports x64 and arm64.`);
+      throw new Error(`Unsupported architecture: ${arch}. oli supports x64 and arm64.`);
     }
 
     // Create the bin directory if it doesn't exist
@@ -100,7 +100,7 @@ kill $SERVER_PID
     // Clean up
     fs.rmSync(tmpDir, { recursive: true, force: true });
 
-    console.log('Oli has been installed successfully!');
+    console.log('oli has been installed successfully!');
     console.log('You can now run it using the "oli" command.');
 
   } catch (error) {
