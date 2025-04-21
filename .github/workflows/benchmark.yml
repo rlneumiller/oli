@@ -1,0 +1,131 @@
+name: Benchmark
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Model to benchmark'
+        default: 'qwen2.5-coder:7b'
+        required: true
+      prompt:
+        description: 'Test prompt to send'
+        default: 'Write a Python function to validate an email address'
+        required: true
+
+jobs:
+  benchmark:
+    name: Benchmark Ollama Model
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama --version
+      
+      - name: Start Ollama server
+        id: server
+        run: |
+          # Start Ollama in background
+          ollama serve &
+          echo "OLLAMA_PID=$!" >> $GITHUB_ENV
+          
+          # Wait for server to be ready
+          echo "Waiting for Ollama server to start..."
+          start_time=$(date +%s)
+          max_wait=30
+          
+          until curl -s http://localhost:11434/api/tags > /dev/null 2>&1; do
+            sleep 1
+            elapsed=$(($(date +%s) - start_time))
+            if [ $elapsed -ge $max_wait ]; then
+              echo "::error::Timed out waiting for Ollama server to start"
+              exit 1
+            fi
+          done
+          
+          echo "Ollama server started successfully"
+      
+      - name: Pull model
+        run: |
+          ollama pull ${{ github.event.inputs.model }}
+      
+      - name: Run test
+        id: model_test
+        if: success()
+        run: |
+          # Create results directory
+          mkdir -p benchmark_results
+          
+          # Record timestamp
+          timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          
+          # Initialize results structure
+          cat > benchmark_results/result.json << EOF
+          {
+            "metadata": {
+              "timestamp": "$timestamp",
+              "model": "${{ github.event.inputs.model }}",
+              "prompt": "${{ github.event.inputs.prompt }}"
+            },
+            "metrics": {
+              "response_time_ms": 0
+            },
+            "response": ""
+          }
+          EOF
+          
+          # Run benchmark test
+          echo "Running test with model ${{ github.event.inputs.model }}"
+          START=$(date +%s%3N)
+          RESPONSE=$(curl -s -X POST http://localhost:11434/api/generate \
+            -H "Content-Type: application/json" \
+            -d '{
+              "model": "${{ github.event.inputs.model }}",
+              "prompt": "${{ github.event.inputs.prompt }}",
+              "stream": false
+            }')
+          END=$(date +%s%3N)
+          TIME=$((END - START))
+          
+          # Save raw response for debugging
+          echo "$RESPONSE" > benchmark_results/raw_response.json
+          
+          # Check if response is valid
+          if ! echo "$RESPONSE" | jq -e '.response' > /dev/null; then
+            echo "::error::Failed to get valid response from model"
+            cat benchmark_results/raw_response.json
+            exit 1
+          fi
+          
+          # Extract response text
+          RESPONSE_TEXT=$(echo "$RESPONSE" | jq -r '.response')
+          
+          # Update results JSON
+          jq --arg time "$TIME" \
+             --arg response "$RESPONSE_TEXT" \
+             '.metrics.response_time_ms = ($time | tonumber) | 
+              .response = $response' \
+             benchmark_results/result.json > temp.json && mv temp.json benchmark_results/result.json
+          
+          # Output summary
+          echo "Test completed successfully in ${TIME}ms"
+          echo "response_time=${TIME}" >> $GITHUB_OUTPUT
+      
+      - name: Upload results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: benchmark-results
+          path: benchmark_results/
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ -n "$OLLAMA_PID" ]; then
+            echo "Stopping Ollama server (PID: $OLLAMA_PID)"
+            kill $OLLAMA_PID || true
+          fi
