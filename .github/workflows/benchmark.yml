@@ -248,15 +248,36 @@ jobs:
           # Export Ollama API URL as environment variable
           export OLLAMA_API_BASE="http://localhost:11434"
 
-          # Create a properly formatted request with a trailing newline - critical!
-          # Explicitly specify the Ollama model in the request
+          # First, let's get the list of available models to find the correct index
+          echo "Getting available models..."
+          MODELS_RESPONSE=$(printf '{"jsonrpc":"2.0","id":1,"method":"get_available_models","params":{}}\n' | \
+            OLLAMA_API_BASE=http://localhost:11434 ./target/release/oli-server 2>/dev/null | head -n 1)
+
+          # Save models response for debugging
+          echo "$MODELS_RESPONSE" > models_response.json
+
+          # Find our specific model in the response to get its index
+          # First try to match with "(local)" suffix which is how Ollama models are listed
+          MODEL_INDEX=$(echo "$MODELS_RESPONSE" | jq -r --arg MODEL "$OLLAMA_MODEL" '.result.models | map(.name | contains($MODEL) and contains("(local)")) | index(true) // -1')
+
+          # If we didn't find it with (local) suffix, try just the model name
+          if [ "$MODEL_INDEX" = "-1" ]; then
+            MODEL_INDEX=$(echo "$MODELS_RESPONSE" | jq -r --arg MODEL "$OLLAMA_MODEL" '.result.models | map(.name | contains($MODEL) or .id | contains($MODEL)) | index(true) // 3')
+          fi
+          echo "Found model index for $OLLAMA_MODEL: $MODEL_INDEX"
+
+          # Create a properly formatted request with a trailing newline
+          # Use the discovered model index or fallback to 3 (assuming Ollama models start after the cloud models)
           MODEL="${OLLAMA_MODEL}"
-          printf '{"jsonrpc":"2.0","id":1,"method":"query_model","params":{"prompt":"%s","model":"%s","provider":"ollama","use_agent":false}}\n' "$PROMPT" "$MODEL" > request.txt
+          printf '{"jsonrpc":"2.0","id":1,"method":"query_model","params":{"prompt":"%s","model_index":%s,"use_agent":false}}\n' "$PROMPT" "$MODEL_INDEX" > request.txt
 
           # Run the server once with the request with explicit environment variables
+          # Redirect stderr to a temporary log file so we can capture more detailed logs
+          echo "Running oli server with model index $MODEL_INDEX..."
           cat request.txt | OLLAMA_API_BASE=http://localhost:11434 \
                            DEFAULT_MODEL="${MODEL}" \
                            DEFAULT_PROVIDER="ollama" \
+                           RUST_LOG=debug \
                            ./target/release/oli-server 2>oli_server.log | head -n 1
           EOF
 
@@ -281,6 +302,8 @@ jobs:
             echo "::error::Failed to get valid response from oli server"
             echo "Raw response:"
             cat benchmark_results/oli_raw_response.json
+            echo "Models response:"
+            cat models_response.json
             echo "Request sent:"
             cat request.txt
             echo "Server log:"
@@ -288,7 +311,19 @@ jobs:
             # Print environment variables for debugging
             echo "Environment variables:"
             echo "MODEL=${{ env.MODEL }}"
+            echo "MODEL_INDEX=$MODEL_INDEX"
             echo "OLLAMA_API_BASE=$OLLAMA_API_BASE"
+
+            # Additional diagnostic - list ollama models directly
+            echo "Directly checking Ollama models:"
+            curl -s http://localhost:11434/api/tags | jq '.'
+
+            # As a last resort, try to query the directly
+            echo "Trying direct Ollama request as a test:"
+            curl -s -X POST http://localhost:11434/api/generate \
+              -H "Content-Type: application/json" \
+              -d "{\"model\":\"$OLLAMA_MODEL\",\"prompt\":\"test\",\"stream\":false}" | jq '.'
+
             exit 1
           fi
 
