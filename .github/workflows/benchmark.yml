@@ -8,7 +8,7 @@ on:
         required: true
       prompt:
         description: 'Test prompt to send'
-        default: 'Write a Python function to validate an email address'
+        default: 'Hello, how are you today?'
         required: true
   push:
     branches: [main]
@@ -26,25 +26,40 @@ permissions:
 
 jobs:
   benchmark:
-    name: Benchmark Ollama Model
+    name: Benchmark Ollama with oli
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
       - name: Set defaults for non-workflow_dispatch events
         if: github.event_name != 'workflow_dispatch'
         run: |
           echo "MODEL=qwen2.5-coder:7b" >> $GITHUB_ENV
-          echo "PROMPT=Write a Python function to validate an email address" >> $GITHUB_ENV
+          echo "PROMPT=Hello, how are you today?" >> $GITHUB_ENV
 
       - name: Set values from workflow inputs
         if: github.event_name == 'workflow_dispatch'
         run: |
           echo "MODEL=${{ github.event.inputs.model }}" >> $GITHUB_ENV
           echo "PROMPT=${{ github.event.inputs.prompt }}" >> $GITHUB_ENV
+
+      # Cache the Ollama models to avoid redownloading each time
+      - name: Cache Ollama models
+        id: cache-ollama
+        uses: actions/cache@v3
+        with:
+          path: ~/.ollama/models
+          key: ollama-${{ env.MODEL }}-${{ hashFiles('.github/workflows/benchmark.yml') }}
 
       - name: Install Ollama
         run: |
@@ -54,6 +69,9 @@ jobs:
       - name: Start Ollama server
         id: server
         run: |
+          # Create Ollama directories if the cache missed
+          mkdir -p ~/.ollama/models
+
           # Start Ollama in background
           ollama serve &
           echo "OLLAMA_PID=$!" >> $GITHUB_ENV
@@ -76,11 +94,21 @@ jobs:
 
       - name: Pull model
         run: |
+          echo "Pulling model ${{ env.MODEL }}..."
+          if [ "${{ steps.cache-ollama.outputs.cache-hit }}" == "true" ]; then
+            echo "Using cached model"
+          fi
           ollama pull ${{ env.MODEL }}
 
-      - name: Run test
-        id: model_test
-        if: success()
+      - name: Build oli server
+        run: |
+          echo "Building oli server..."
+          # Run faster build for CI
+          cargo build --release --bin oli-server
+          echo "oli server built successfully"
+
+      - name: Run direct Ollama test
+        id: ollama_test
         run: |
           # Create results directory
           mkdir -p benchmark_results
@@ -89,13 +117,13 @@ jobs:
           timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
           # Initialize results structure
-          cat > benchmark_results/result.json << EOF
+          cat > benchmark_results/ollama_result.json << EOF
           {
             "metadata": {
               "timestamp": "$timestamp",
               "model": "${{ env.MODEL }}",
               "prompt": "${{ env.PROMPT }}",
-              "trigger": "${{ github.event_name }}"
+              "type": "direct_ollama_call"
             },
             "metrics": {
               "response_time_ms": 0
@@ -104,8 +132,8 @@ jobs:
           }
           EOF
 
-          # Run benchmark test
-          echo "Running test with model ${{ env.MODEL }}"
+          # Run direct Ollama test
+          echo "Running direct test with model ${{ env.MODEL }}"
           START=$(date +%s%3N)
           RESPONSE=$(curl -s -X POST http://localhost:11434/api/generate \
             -H "Content-Type: application/json" \
@@ -118,12 +146,12 @@ jobs:
           TIME=$((END - START))
 
           # Save raw response for debugging
-          echo "$RESPONSE" > benchmark_results/raw_response.json
+          echo "$RESPONSE" > benchmark_results/ollama_raw_response.json
 
           # Check if response is valid
           if ! echo "$RESPONSE" | jq -e '.response' > /dev/null; then
             echo "::error::Failed to get valid response from model"
-            cat benchmark_results/raw_response.json
+            cat benchmark_results/ollama_raw_response.json
             exit 1
           fi
 
@@ -135,18 +163,120 @@ jobs:
              --arg response "$RESPONSE_TEXT" \
              '.metrics.response_time_ms = ($time | tonumber) |
               .response = $response' \
-             benchmark_results/result.json > temp.json && mv temp.json benchmark_results/result.json
+             benchmark_results/ollama_result.json > temp.json && mv temp.json benchmark_results/ollama_result.json
 
           # Output summary
-          echo "Test completed successfully in ${TIME}ms"
-          echo "response_time=${TIME}" >> $GITHUB_OUTPUT
+          echo "Direct Ollama test completed successfully in ${TIME}ms"
+          echo "ollama_time=${TIME}" >> $GITHUB_OUTPUT
+
+      - name: Run oli server test
+        id: oli_test
+        run: |
+          # Record timestamp
+          timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # Initialize results structure
+          cat > benchmark_results/oli_result.json << EOF
+          {
+            "metadata": {
+              "timestamp": "$timestamp",
+              "model": "${{ env.MODEL }}",
+              "prompt": "${{ env.PROMPT }}",
+              "type": "oli_server_call"
+            },
+            "metrics": {
+              "response_time_ms": 0
+            },
+            "response": ""
+          }
+          EOF
+
+          # Create test request JSON
+          cat > request.json << EOF
+          {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "query_model",
+            "params": {
+              "prompt": "${{ env.PROMPT }}",
+              "model_index": 0,
+              "use_agent": false
+            }
+          }
+          EOF
+
+          # Run the test through oli server (piping the request to stdin and capturing stdout)
+          echo "Running test through oli server with model ${{ env.MODEL }}"
+          START=$(date +%s%3N)
+          RESPONSE=$(cat request.json | ./target/release/oli-server 2>oli_server.log | head -n 1)
+          END=$(date +%s%3N)
+          TIME=$((END - START))
+
+          # Save raw response for debugging
+          echo "$RESPONSE" > benchmark_results/oli_raw_response.json
+
+          # Check if response is valid
+          if ! echo "$RESPONSE" | jq -e '.result.response' > /dev/null; then
+            echo "::error::Failed to get valid response from oli server"
+            cat benchmark_results/oli_raw_response.json
+            cat oli_server.log
+            exit 1
+          fi
+
+          # Extract response text
+          RESPONSE_TEXT=$(echo "$RESPONSE" | jq -r '.result.response')
+
+          # Update results JSON
+          jq --arg time "$TIME" \
+             --arg response "$RESPONSE_TEXT" \
+             '.metrics.response_time_ms = ($time | tonumber) |
+              .response = $response' \
+             benchmark_results/oli_result.json > temp.json && mv temp.json benchmark_results/oli_result.json
+
+          # Output summary
+          echo "oli server test completed successfully in ${TIME}ms"
+          echo "oli_time=${TIME}" >> $GITHUB_OUTPUT
+
+      - name: Compare results
+        run: |
+          # Combine results into a summary
+          OLLAMA_TIME=$(jq '.metrics.response_time_ms' benchmark_results/ollama_result.json)
+          OLI_TIME=$(jq '.metrics.response_time_ms' benchmark_results/oli_result.json)
+
+          # Calculate overhead
+          OVERHEAD=$((OLI_TIME - OLLAMA_TIME))
+          PERCENT_OVERHEAD=$(echo "scale=2; $OVERHEAD * 100 / $OLLAMA_TIME" | bc)
+
+          # Create summary file
+          cat > benchmark_results/summary.json << EOF
+          {
+            "direct_ollama_ms": $OLLAMA_TIME,
+            "oli_server_ms": $OLI_TIME,
+            "overhead_ms": $OVERHEAD,
+            "overhead_percent": $PERCENT_OVERHEAD,
+            "model": "${{ env.MODEL }}",
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          }
+          EOF
+
+          # Output summary to console
+          echo "=== Benchmark Results ==="
+          echo "Direct Ollama time: ${OLLAMA_TIME}ms"
+          echo "oli server time: ${OLI_TIME}ms"
+          echo "Overhead: ${OVERHEAD}ms (${PERCENT_OVERHEAD}%)"
+
+          # Print oli server log for diagnostics
+          echo "=== oli Server Log ==="
+          cat oli_server.log
 
       - name: Upload results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: benchmark-results
-          path: benchmark_results/
+          path: |
+            benchmark_results/
+            oli_server.log
 
       - name: Cleanup
         if: always()
