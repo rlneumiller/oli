@@ -171,22 +171,54 @@ jobs:
 
       - name: Setup oli server communication
         run: |
-          # Create communication script for sending jsonrpc requests to the server
-          cat > send_jsonrpc.sh << 'EOF'
+          # Create a better script for handling oli server communication
+          cat > test_oli.sh << 'EOF'
           #!/bin/bash
           set -e
 
-          # First argument is the server executable, second is the JSON input
+          # Arguments: path_to_oli_server path_to_request log_file
           SERVER="$1"
-          JSON_INPUT="$2"
+          REQUEST="$2"
           LOG_FILE="$3"
 
-          # Execute the server with input/output properly connected
-          echo "$JSON_INPUT" | "$SERVER" 2> "$LOG_FILE" | head -n 1
+          # Create a FIFO for input to the server
+          INPUT_FIFO=$(mktemp -u)
+          mkfifo "$INPUT_FIFO"
+
+          # Create the server process with a background process
+          "$SERVER" < "$INPUT_FIFO" > server_output.txt 2> "$LOG_FILE" &
+          SERVER_PID=$!
+
+          # Wait a moment for the server to initialize
+          sleep 2
+
+          # Send the request to the server's input
+          cat "$REQUEST" > "$INPUT_FIFO" &
+
+          # Wait for the response (max 30 seconds)
+          MAX_WAIT=30
+          for i in $(seq 1 $MAX_WAIT); do
+            if [ -s server_output.txt ]; then
+              # Server has responded, grab the first line
+              head -n 1 server_output.txt
+              break
+            fi
+            sleep 1
+
+            # If we've reached the timeout, exit with error
+            if [ $i -eq $MAX_WAIT ]; then
+              echo "{\"error\":\"Timeout waiting for response\"}"
+              break
+            fi
+          done
+
+          # Clean up
+          kill $SERVER_PID 2>/dev/null || true
+          rm -f "$INPUT_FIFO" 2>/dev/null || true
           EOF
 
           # Make it executable
-          chmod +x send_jsonrpc.sh
+          chmod +x test_oli.sh
 
       - name: Start oli server
         id: oli_server_start
@@ -234,8 +266,8 @@ jobs:
           echo "Running test through oli server with model ${{ env.MODEL }}"
           START=$(date +%s%3N)
 
-          # Run the server with the request
-          RESPONSE=$(./send_jsonrpc.sh ./target/release/oli-server "$(cat request.json)" oli_server.log)
+          # Run our improved test script
+          RESPONSE=$(./test_oli.sh ./target/release/oli-server request.json oli_server.log)
 
           END=$(date +%s%3N)
           TIME=$((END - START))
