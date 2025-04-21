@@ -169,81 +169,16 @@ jobs:
           echo "Direct Ollama test completed successfully in ${TIME}ms"
           echo "ollama_time=${TIME}" >> $GITHUB_OUTPUT
 
-      - name: Setup oli server communication
+      - name: Run oli server test
+        id: oli_test
         run: |
-          # Create a better script for handling oli server communication
-          cat > test_oli.sh << 'EOF'
-          #!/bin/bash
-          set -e
-
-          # Arguments: path_to_oli_server path_to_request log_file
-          SERVER="$1"
-          REQUEST="$2"
-          LOG_FILE="$3"
-
-          # Create a FIFO for input to the server
-          INPUT_FIFO=$(mktemp -u)
-          mkfifo "$INPUT_FIFO"
-
-          # Create the server process with a background process
-          "$SERVER" < "$INPUT_FIFO" > server_output.txt 2> "$LOG_FILE" &
-          SERVER_PID=$!
-
-          # Wait a moment for the server to initialize
-          sleep 2
-
-          # Send the request to the server's input
-          cat "$REQUEST" > "$INPUT_FIFO" &
-
-          # Wait for the response (max 30 seconds)
-          MAX_WAIT=30
-          for i in $(seq 1 $MAX_WAIT); do
-            if [ -s server_output.txt ]; then
-              # Server has responded, grab the first line
-              head -n 1 server_output.txt
-              break
-            fi
-            sleep 1
-
-            # If we've reached the timeout, exit with error
-            if [ $i -eq $MAX_WAIT ]; then
-              echo "{\"error\":\"Timeout waiting for response\"}"
-              break
-            fi
-          done
-
-          # Clean up
-          kill $SERVER_PID 2>/dev/null || true
-          rm -f "$INPUT_FIFO" 2>/dev/null || true
-          EOF
-
-          # Make it executable
-          chmod +x test_oli.sh
-
-      - name: Start oli server
-        id: oli_server_start
-        run: |
-          # Create results directory if it doesn't exist
+          # Create results directory and set up
           mkdir -p benchmark_results
-
-          # Create test request JSON
-          cat > request.json << EOF
-          {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "query_model",
-            "params": {
-              "prompt": "${{ env.PROMPT }}",
-              "model_index": 0,
-              "use_agent": false
-            }
-          }
-          EOF
 
           # Record timestamp
           timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-          # Initialize results structure
+          # Initialize results JSON
           cat > benchmark_results/oli_result.json << EOF
           {
             "metadata": {
@@ -259,15 +194,28 @@ jobs:
           }
           EOF
 
-      - name: Run oli server test
-        id: oli_test
-        run: |
+          # Create a script that ensures proper newline is sent
+          cat > run_oli_test.sh << 'EOF'
+          #!/bin/bash
+          # Takes a prompt and sends a properly formatted JSON-RPC request to oli server
+          PROMPT="$1"
+
+          # Create a properly formatted request with a trailing newline - critical!
+          printf '{"jsonrpc":"2.0","id":1,"method":"query_model","params":{"prompt":"%s","model_index":0,"use_agent":false}}\n' "$PROMPT" > request.txt
+
+          # Run the server once with the request (this is the key: one request per server instance)
+          cat request.txt | ./target/release/oli-server 2>oli_server.log | head -n 1
+          EOF
+
+          # Make it executable
+          chmod +x run_oli_test.sh
+
           # Run the test with timing
           echo "Running test through oli server with model ${{ env.MODEL }}"
           START=$(date +%s%3N)
 
-          # Run our improved test script
-          RESPONSE=$(./test_oli.sh ./target/release/oli-server request.json oli_server.log)
+          # Note: using quotes to ensure prompt is passed correctly
+          RESPONSE=$(./run_oli_test.sh "${{ env.PROMPT }}")
 
           END=$(date +%s%3N)
           TIME=$((END - START))
