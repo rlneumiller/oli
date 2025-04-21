@@ -12,24 +12,70 @@ use serde_json::{self, json, Value};
 use std::env;
 use std::time::Duration;
 
-// Anthropic API models
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AnthropicMessage {
-    role: String,
-    content: Vec<AnthropicContent>,
+// Helper function to log usage information from Anthropic API
+fn log_anthropic_usage(usage: &Value) {
+    let mut input_tokens = usage
+        .get("input_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let output_tokens = usage
+        .get("output_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    // Include cache tokens in the total
+    if let Some(cache_creation) = usage
+        .get("cache_creation_input_tokens")
+        .and_then(|v| v.as_i64())
+    {
+        input_tokens += cache_creation;
+    }
+
+    if let Some(cache_read) = usage
+        .get("cache_read_input_tokens")
+        .and_then(|v| v.as_i64())
+    {
+        input_tokens += cache_read;
+    }
+
+    eprintln!(
+        "{}",
+        format_log_with_color(
+            LogLevel::Info,
+            &format!(
+                "Anthropic API usage: {} input tokens, {} output tokens, {} total tokens",
+                input_tokens,
+                output_tokens,
+                input_tokens + output_tokens
+            )
+        )
+    );
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// Anthropic API models
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AnthropicMessage {
+    pub role: String,
+    pub content: Vec<AnthropicContent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
-enum AnthropicContent {
+pub enum AnthropicContent {
     #[serde(rename = "text")]
-    Text { text: String },
+    Text {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
 
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
         name: String,
         input: Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
     },
 
     #[serde(rename = "tool_result")]
@@ -37,17 +83,27 @@ enum AnthropicContent {
         #[serde(rename = "tool_use_id")]
         tool_call_id: String,
         content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CacheControl {
+    #[serde(rename = "type")]
+    pub cache_type: String,
 }
 
 // The AnthropicToolUse struct is no longer needed as we're using AnthropicContent::ToolUse
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AnthropicTool {
-    name: String,
-    description: Option<String>,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AnthropicTool {
+    pub name: String,
+    pub description: Option<String>,
     #[serde(rename = "input_schema")]
-    schema: Value,
+    pub schema: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,7 +126,7 @@ struct AnthropicRequest {
     messages: Vec<AnthropicMessage>,
     max_tokens: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<String>,
+    system: Option<SystemContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -81,6 +137,22 @@ struct AnthropicRequest {
     tool_choice: Option<AnthropicToolChoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<AnthropicResponseFormat>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum SystemContent {
+    String(String),
+    Array(Vec<SystemBlock>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SystemBlock {
+    #[serde(rename = "type")]
+    pub block_type: String,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,6 +175,25 @@ pub struct AnthropicClient {
     client: ReqwestClient,
     model: String,
     api_base: String,
+}
+
+// Helper methods for testing
+impl AnthropicClient {
+    /// Returns the model name being used by this client
+    ///
+    /// Primarily used for testing purposes.
+    pub fn get_model_name(&self) -> &str {
+        &self.model
+    }
+
+    /// Creates an ephemeral cache control
+    ///
+    /// Helper function used for testing and internal prompt caching
+    pub fn create_ephemeral_cache() -> CacheControl {
+        CacheControl {
+            cache_type: "ephemeral".to_string(),
+        }
+    }
 }
 
 impl AnthropicClient {
@@ -221,57 +312,130 @@ impl AnthropicClient {
         })
     }
 
-    fn extract_system_message(&self, messages: &[Message]) -> Option<String> {
+    /// Extracts system message from the provided messages and formats it with cache control
+    /// for prompt caching.
+    ///
+    /// This method finds the first message with the "system" role and formats it as a `SystemContent`
+    /// with an ephemeral cache_control, allowing Claude to cache the system prompt.
+    pub fn extract_system_message(&self, messages: &[Message]) -> Option<SystemContent> {
         messages
             .iter()
             .find(|msg| msg.role == "system")
-            .map(|system_msg| system_msg.content.clone())
+            .map(|system_msg| {
+                let system_block = SystemBlock {
+                    block_type: "text".to_string(),
+                    text: system_msg.content.clone(),
+                    cache_control: Some(Self::create_ephemeral_cache()),
+                };
+                SystemContent::Array(vec![system_block])
+            })
     }
 
-    fn convert_messages(&self, messages: Vec<Message>) -> Vec<AnthropicMessage> {
-        messages
+    /// Converts internal message format to Anthropic's message format with cache control
+    ///
+    /// This method:
+    /// 1. Filters out system messages (handled separately)
+    /// 2. Formats each message as an AnthropicMessage
+    /// 3. Adds cache_control to the last and second-to-last user messages for prompt caching
+    pub fn convert_messages(&self, messages: Vec<Message>) -> Vec<AnthropicMessage> {
+        let filtered_messages: Vec<Message> = messages
             .into_iter()
             .filter(|msg| msg.role != "system") // Filter out system messages
-            .map(|msg| AnthropicMessage {
-                role: msg.role,
-                content: vec![AnthropicContent::Text { text: msg.content }],
-            })
-            .collect()
+            .collect();
+
+        let mut anthropic_messages = Vec::new();
+
+        // Precompute the indices of user messages
+        let user_indices: Vec<usize> = filtered_messages
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.role == "user")
+            .map(|(i, _)| i)
+            .collect();
+
+        // Get the last and second-to-last user indices for caching optimization
+        let last_user_index = user_indices.last().copied();
+        let second_last_user_index = user_indices
+            .get(user_indices.len().saturating_sub(2))
+            .copied();
+
+        // Use enumerated iterator to track position efficiently
+        for (idx, msg) in filtered_messages.iter().enumerate() {
+            let mut content = vec![AnthropicContent::Text {
+                text: msg.content.clone(),
+                cache_control: None,
+            }];
+
+            // Apply cache control to last and second-to-last user messages
+            if let Some(last_idx) = last_user_index {
+                if let Some(second_last_idx) = second_last_user_index {
+                    if idx == last_idx || idx == second_last_idx {
+                        // Replace the content with cache_control
+                        content = vec![AnthropicContent::Text {
+                            text: msg.content.clone(),
+                            cache_control: Some(Self::create_ephemeral_cache()),
+                        }];
+                    }
+                }
+            }
+
+            anthropic_messages.push(AnthropicMessage {
+                role: msg.role.clone(),
+                content,
+            });
+        }
+
+        anthropic_messages
     }
 
-    fn convert_tool_definitions(
+    /// Converts internal tool definitions to Anthropic's format with cache control
+    ///
+    /// This method:
+    /// 1. Converts each tool definition to Anthropic's format
+    /// 2. Adds cache_control to the last tool definition for prompt caching
+    /// 3. Creates a proper JSON Schema compliant schema for each tool
+    pub fn convert_tool_definitions(
         &self,
         tools: Vec<crate::apis::api_client::ToolDefinition>,
     ) -> Vec<AnthropicTool> {
-        tools
-            .into_iter()
-            .map(|tool| {
-                // Create a proper JSON Schema compliant schema object
-                let mut schema = serde_json::Map::new();
-                schema.insert(
-                    "$schema".to_string(),
-                    json!("https://json-schema.org/draft/2020-12/schema"),
-                );
-                schema.insert("type".to_string(), json!("object"));
+        let mut tool_specs = Vec::new();
 
-                // Add properties and required fields if they exist in the original parameters
-                if let Value::Object(params) = &tool.parameters {
-                    if let Some(props) = params.get("properties") {
-                        schema.insert("properties".to_string(), props.clone());
-                    }
+        for (i, tool) in tools.iter().enumerate() {
+            // Create a proper JSON Schema compliant schema object
+            let mut schema = serde_json::Map::new();
+            schema.insert(
+                "$schema".to_string(),
+                json!("https://json-schema.org/draft/2020-12/schema"),
+            );
+            schema.insert("type".to_string(), json!("object"));
 
-                    if let Some(required) = params.get("required") {
-                        schema.insert("required".to_string(), required.clone());
-                    }
+            // Add properties and required fields if they exist in the original parameters
+            if let Value::Object(params) = &tool.parameters {
+                if let Some(props) = params.get("properties") {
+                    schema.insert("properties".to_string(), props.clone());
                 }
 
-                AnthropicTool {
-                    name: tool.name,
-                    description: Some(tool.description),
-                    schema: Value::Object(schema),
+                if let Some(required) = params.get("required") {
+                    schema.insert("required".to_string(), required.clone());
                 }
-            })
-            .collect()
+            }
+
+            // Add cache_control to the last tool spec
+            let cache_control = if i == tools.len() - 1 {
+                Some(Self::create_ephemeral_cache())
+            } else {
+                None
+            };
+
+            tool_specs.push(AnthropicTool {
+                name: tool.name.clone(),
+                description: Some(tool.description.clone()),
+                schema: Value::Object(schema),
+                cache_control,
+            });
+        }
+
+        tool_specs
     }
 }
 
@@ -352,7 +516,7 @@ impl ApiClient for AnthropicClient {
 
         // Look for text content in the response
         for content_item in &anthropic_response.content {
-            if let AnthropicContent::Text { text } = content_item {
+            if let AnthropicContent::Text { text, .. } = content_item {
                 text_content = text.clone();
                 break;
             }
@@ -363,6 +527,11 @@ impl ApiClient for AnthropicClient {
             let error_msg = "No text content in Anthropic response".to_string();
             eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
             return Err(AppError::LLMError(error_msg).into());
+        }
+
+        // Log usage information if available, including cache-related tokens
+        if let Some(usage) = &anthropic_response.usage {
+            log_anthropic_usage(usage);
         }
 
         let content = text_content;
@@ -399,6 +568,7 @@ impl ApiClient for AnthropicClient {
                         id: tool_call_id.clone(),
                         name: "tool".to_string(), // We don't have the original name
                         input: json!({}),         // We don't need the input for this
+                        cache_control: None,
                     }],
                 };
 
@@ -408,6 +578,7 @@ impl ApiClient for AnthropicClient {
                     content: vec![AnthropicContent::ToolResult {
                         tool_call_id: tool_call_id.clone(),
                         content: result.output.clone(),
+                        cache_control: None,
                     }],
                 };
 
@@ -508,7 +679,7 @@ impl ApiClient for AnthropicClient {
         // Process each content item
         for content_item in &anthropic_response.content {
             match content_item {
-                AnthropicContent::Text { text } => {
+                AnthropicContent::Text { text, .. } => {
                     // If we don't have a text content yet, use this one
                     if text_content.is_empty() {
                         text_content = text.clone();
@@ -526,6 +697,11 @@ impl ApiClient for AnthropicClient {
                     // Tool results are not processed here, they're for the API to recognize tool result responses
                 }
             }
+        }
+
+        // Log usage information if available, including cache-related tokens
+        if let Some(usage) = &anthropic_response.usage {
+            log_anthropic_usage(usage);
         }
 
         // If we didn't find any text content, use an empty string
