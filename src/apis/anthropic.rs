@@ -482,42 +482,7 @@ impl ApiClient for AnthropicClient {
 
         // Log usage information if available, including cache-related tokens
         if let Some(usage) = &anthropic_response.usage {
-            let mut input_tokens = usage
-                .get("input_tokens")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            let output_tokens = usage
-                .get("output_tokens")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-
-            // Include cache tokens in the total
-            if let Some(cache_creation) = usage
-                .get("cache_creation_input_tokens")
-                .and_then(|v| v.as_i64())
-            {
-                input_tokens += cache_creation;
-            }
-
-            if let Some(cache_read) = usage
-                .get("cache_read_input_tokens")
-                .and_then(|v| v.as_i64())
-            {
-                input_tokens += cache_read;
-            }
-
-            eprintln!(
-                "{}",
-                format_log_with_color(
-                    LogLevel::Info,
-                    &format!(
-                        "Anthropic API usage: {} input tokens, {} output tokens, {} total tokens",
-                        input_tokens,
-                        output_tokens,
-                        input_tokens + output_tokens
-                    )
-                )
-            );
+            log_anthropic_usage(usage);
         }
 
         let content = text_content;
