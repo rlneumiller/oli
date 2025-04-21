@@ -368,9 +368,15 @@ impl AnthropicClient {
 
             // Apply cache control to last and second-to-last user messages
             if let Some(last_idx) = last_user_index {
-                if let Some(second_last_idx) = second_last_user_index {
-                    if idx == last_idx || idx == second_last_idx {
-                        // Replace the content with cache_control
+                // Always apply cache to the last user message
+                if idx == last_idx {
+                    content = vec![AnthropicContent::Text {
+                        text: msg.content.clone(),
+                        cache_control: Some(Self::create_ephemeral_cache()),
+                    }];
+                } else if let Some(second_last_idx) = second_last_user_index {
+                    // Apply to second-to-last if it exists
+                    if idx == second_last_idx {
                         content = vec![AnthropicContent::Text {
                             text: msg.content.clone(),
                             cache_control: Some(Self::create_ephemeral_cache()),
