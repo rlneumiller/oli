@@ -175,14 +175,16 @@ jobs:
           # Create directory for config files
           mkdir -p ~/.config/oli
 
-          # Create a minimal config file that uses Ollama
+          # Create a more detailed config file for Ollama that ensures model selection
           cat > ~/.config/oli/config.json << EOF
           {
             "default_provider": "ollama",
+            "default_model": "${{ env.MODEL }}",
             "providers": {
               "ollama": {
                 "base_url": "http://localhost:11434",
                 "api_key": "",
+                "default_model": "${{ env.MODEL }}",
                 "models": [
                   {
                     "name": "${{ env.MODEL }}",
@@ -195,8 +197,21 @@ jobs:
           }
           EOF
 
+          # Also set environment variables directly
+          echo "OLLAMA_API_BASE=http://localhost:11434" >> $GITHUB_ENV
+
           echo "Created oli config at ~/.config/oli/config.json"
           cat ~/.config/oli/config.json
+
+          # Create .env file in the repository directory
+          cat > .env << EOF
+          OLLAMA_API_BASE=http://localhost:11434
+          DEFAULT_MODEL=${{ env.MODEL }}
+          DEFAULT_PROVIDER=ollama
+          EOF
+
+          echo "Created .env file for additional configuration"
+          cat .env
 
       - name: Run oli server test
         id: oli_test
@@ -228,15 +243,21 @@ jobs:
           #!/bin/bash
           # Uses the config file and sends a properly formatted JSON request
           PROMPT="$1"
+          OLLAMA_MODEL="$2"
 
           # Export Ollama API URL as environment variable
           export OLLAMA_API_BASE="http://localhost:11434"
 
           # Create a properly formatted request with a trailing newline - critical!
-          printf '{"jsonrpc":"2.0","id":1,"method":"query_model","params":{"prompt":"%s","use_agent":false}}\n' "$PROMPT" > request.txt
+          # Explicitly specify the Ollama model in the request
+          MODEL="${OLLAMA_MODEL}"
+          printf '{"jsonrpc":"2.0","id":1,"method":"query_model","params":{"prompt":"%s","model":"%s","provider":"ollama","use_agent":false}}\n' "$PROMPT" "$MODEL" > request.txt
 
-          # Run the server once with the request
-          cat request.txt | OLLAMA_API_BASE=http://localhost:11434 ./target/release/oli-server 2>oli_server.log | head -n 1
+          # Run the server once with the request with explicit environment variables
+          cat request.txt | OLLAMA_API_BASE=http://localhost:11434 \
+                           DEFAULT_MODEL="${MODEL}" \
+                           DEFAULT_PROVIDER="ollama" \
+                           ./target/release/oli-server 2>oli_server.log | head -n 1
           EOF
 
           # Make it executable
@@ -247,7 +268,7 @@ jobs:
           START=$(date +%s%3N)
 
           # Note: using quotes to ensure prompt is passed correctly
-          RESPONSE=$(./run_oli_test.sh "${{ env.PROMPT }}")
+          RESPONSE=$(./run_oli_test.sh "${{ env.PROMPT }}" "${{ env.MODEL }}")
 
           END=$(date +%s%3N)
           TIME=$((END - START))
@@ -258,8 +279,16 @@ jobs:
           # Check if response is valid
           if ! echo "$RESPONSE" | jq -e '.result.response' > /dev/null; then
             echo "::error::Failed to get valid response from oli server"
+            echo "Raw response:"
             cat benchmark_results/oli_raw_response.json
+            echo "Request sent:"
+            cat request.txt
+            echo "Server log:"
             cat oli_server.log
+            # Print environment variables for debugging
+            echo "Environment variables:"
+            echo "MODEL=${{ env.MODEL }}"
+            echo "OLLAMA_API_BASE=$OLLAMA_API_BASE"
             exit 1
           fi
 
