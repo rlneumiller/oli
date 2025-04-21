@@ -305,20 +305,19 @@ impl AnthropicClient {
 
         let mut anthropic_messages = Vec::new();
 
+        // Precompute the indices of user messages
+        let user_indices: Vec<usize> = filtered_messages
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.role == "user")
+            .map(|(i, _)| i)
+            .collect();
+
         for msg in filtered_messages.iter() {
             let mut content = vec![AnthropicContent::Text {
                 text: msg.content.clone(),
                 cache_control: None,
             }];
-
-            // Add cache_control to the last and second-to-last user messages
-            let user_indices: Vec<usize> = filtered_messages
-                .iter()
-                .enumerate()
-                .filter(|(_, m)| m.role == "user")
-                .map(|(i, _)| i)
-                .collect();
-
             if let Some(&last_user_index) = user_indices.last() {
                 if let Some(&second_last_user_index) = user_indices.get(user_indices.len().saturating_sub(2)) {
                     let current_index = filtered_messages.iter().position(|m| m == msg).unwrap();
