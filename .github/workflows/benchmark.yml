@@ -169,9 +169,45 @@ jobs:
           echo "Direct Ollama test completed successfully in ${TIME}ms"
           echo "ollama_time=${TIME}" >> $GITHUB_OUTPUT
 
-      - name: Run oli server test
-        id: oli_test
+      - name: Setup oli server communication
         run: |
+          # Create communication script for sending jsonrpc requests to the server
+          cat > send_jsonrpc.sh << 'EOF'
+          #!/bin/bash
+          set -e
+
+          # First argument is the server executable, second is the JSON input
+          SERVER="$1"
+          JSON_INPUT="$2"
+          LOG_FILE="$3"
+
+          # Execute the server with input/output properly connected
+          echo "$JSON_INPUT" | "$SERVER" 2> "$LOG_FILE" | head -n 1
+          EOF
+
+          # Make it executable
+          chmod +x send_jsonrpc.sh
+
+      - name: Start oli server
+        id: oli_server_start
+        run: |
+          # Create results directory if it doesn't exist
+          mkdir -p benchmark_results
+
+          # Create test request JSON
+          cat > request.json << EOF
+          {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "query_model",
+            "params": {
+              "prompt": "${{ env.PROMPT }}",
+              "model_index": 0,
+              "use_agent": false
+            }
+          }
+          EOF
+
           # Record timestamp
           timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
@@ -191,24 +227,16 @@ jobs:
           }
           EOF
 
-          # Create test request JSON
-          cat > request.json << EOF
-          {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "query_model",
-            "params": {
-              "prompt": "${{ env.PROMPT }}",
-              "model_index": 0,
-              "use_agent": false
-            }
-          }
-          EOF
-
-          # Run the test through oli server (piping the request to stdin and capturing stdout)
+      - name: Run oli server test
+        id: oli_test
+        run: |
+          # Run the test with timing
           echo "Running test through oli server with model ${{ env.MODEL }}"
           START=$(date +%s%3N)
-          RESPONSE=$(cat request.json | ./target/release/oli-server 2>oli_server.log | head -n 1)
+
+          # Run the server with the request
+          RESPONSE=$(./send_jsonrpc.sh ./target/release/oli-server "$(cat request.json)" oli_server.log)
+
           END=$(date +%s%3N)
           TIME=$((END - START))
 
