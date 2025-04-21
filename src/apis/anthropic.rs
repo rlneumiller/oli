@@ -353,17 +353,23 @@ impl AnthropicClient {
             .map(|(i, _)| i)
             .collect();
 
-        for msg in filtered_messages.iter() {
+        // Get the last and second-to-last user indices for caching optimization
+        let last_user_index = user_indices.last().copied();
+        let second_last_user_index = user_indices
+            .get(user_indices.len().saturating_sub(2))
+            .copied();
+
+        // Use enumerated iterator to track position efficiently
+        for (idx, msg) in filtered_messages.iter().enumerate() {
             let mut content = vec![AnthropicContent::Text {
                 text: msg.content.clone(),
                 cache_control: None,
             }];
-            if let Some(&last_user_index) = user_indices.last() {
-                if let Some(&second_last_user_index) =
-                    user_indices.get(user_indices.len().saturating_sub(2))
-                {
-                    let current_index = filtered_messages.iter().position(|m| m == msg).unwrap();
-                    if current_index == last_user_index || current_index == second_last_user_index {
+
+            // Apply cache control to last and second-to-last user messages
+            if let Some(last_idx) = last_user_index {
+                if let Some(second_last_idx) = second_last_user_index {
+                    if idx == last_idx || idx == second_last_idx {
                         // Replace the content with cache_control
                         content = vec![AnthropicContent::Text {
                             text: msg.content.clone(),
@@ -695,42 +701,7 @@ impl ApiClient for AnthropicClient {
 
         // Log usage information if available, including cache-related tokens
         if let Some(usage) = &anthropic_response.usage {
-            let mut input_tokens = usage
-                .get("input_tokens")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-            let output_tokens = usage
-                .get("output_tokens")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-
-            // Include cache tokens in the total
-            if let Some(cache_creation) = usage
-                .get("cache_creation_input_tokens")
-                .and_then(|v| v.as_i64())
-            {
-                input_tokens += cache_creation;
-            }
-
-            if let Some(cache_read) = usage
-                .get("cache_read_input_tokens")
-                .and_then(|v| v.as_i64())
-            {
-                input_tokens += cache_read;
-            }
-
-            eprintln!(
-                "{}",
-                format_log_with_color(
-                    LogLevel::Info,
-                    &format!(
-                        "Anthropic API usage: {} input tokens, {} output tokens, {} total tokens",
-                        input_tokens,
-                        output_tokens,
-                        input_tokens + output_tokens
-                    )
-                )
-            );
+            log_anthropic_usage(usage);
         }
 
         // If we didn't find any text content, use an empty string
