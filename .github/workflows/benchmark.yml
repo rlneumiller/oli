@@ -169,6 +169,35 @@ jobs:
           echo "Direct Ollama test completed successfully in ${TIME}ms"
           echo "ollama_time=${TIME}" >> $GITHUB_OUTPUT
 
+      - name: Create config files for oli server
+        id: oli_config
+        run: |
+          # Create directory for config files
+          mkdir -p ~/.config/oli
+
+          # Create a minimal config file that uses Ollama
+          cat > ~/.config/oli/config.json << EOF
+          {
+            "default_provider": "ollama",
+            "providers": {
+              "ollama": {
+                "base_url": "http://localhost:11434",
+                "api_key": "",
+                "models": [
+                  {
+                    "name": "${{ env.MODEL }}",
+                    "id": "${{ env.MODEL }}",
+                    "context_length": 8192
+                  }
+                ]
+              }
+            }
+          }
+          EOF
+
+          echo "Created oli config at ~/.config/oli/config.json"
+          cat ~/.config/oli/config.json
+
       - name: Run oli server test
         id: oli_test
         run: |
@@ -197,14 +226,17 @@ jobs:
           # Create a script that ensures proper newline is sent
           cat > run_oli_test.sh << 'EOF'
           #!/bin/bash
-          # Takes a prompt and sends a properly formatted JSON-RPC request to oli server
+          # Uses the config file and sends a properly formatted JSON request
           PROMPT="$1"
 
-          # Create a properly formatted request with a trailing newline - critical!
-          printf '{"jsonrpc":"2.0","id":1,"method":"query_model","params":{"prompt":"%s","model_index":0,"use_agent":false}}\n' "$PROMPT" > request.txt
+          # Export Ollama API URL as environment variable
+          export OLLAMA_API_BASE="http://localhost:11434"
 
-          # Run the server once with the request (this is the key: one request per server instance)
-          cat request.txt | ./target/release/oli-server 2>oli_server.log | head -n 1
+          # Create a properly formatted request with a trailing newline - critical!
+          printf '{"jsonrpc":"2.0","id":1,"method":"query_model","params":{"prompt":"%s","use_agent":false}}\n' "$PROMPT" > request.txt
+
+          # Run the server once with the request
+          cat request.txt | OLLAMA_API_BASE=http://localhost:11434 ./target/release/oli-server 2>oli_server.log | head -n 1
           EOF
 
           # Make it executable
@@ -285,6 +317,7 @@ jobs:
           path: |
             benchmark_results/
             oli_server.log
+            ~/.config/oli/config.json
 
       - name: Cleanup
         if: always()
