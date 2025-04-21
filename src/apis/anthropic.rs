@@ -312,27 +312,23 @@ impl AnthropicClient {
             }];
 
             // Add cache_control to the last and second-to-last user messages
-            if msg.role == "user" {
-                let is_last_user = filtered_messages
-                    .iter()
-                    .rev()
-                    .find(|m| m.role == "user")
-                    .is_some_and(|m| m.content == msg.content);
-                let is_second_last_user = !is_last_user
-                    && filtered_messages
-                        .iter()
-                        .rev()
-                        .filter(|m| m.role == "user")
-                        .nth(1)
-                        .is_some_and(|m| m.content == msg.content);
+            let user_indices: Vec<usize> = filtered_messages
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.role == "user")
+                .map(|(i, _)| i)
+                .collect();
 
-                if is_last_user || is_second_last_user {
-                    // Replace the content with cache_control
-                    content = vec![AnthropicContent::Text {
-                        text: msg.content.clone(),
-                        cache_control: Some(Self::create_ephemeral_cache()),
-                    }];
-                }
+            if let Some(&last_user_index) = user_indices.last() {
+                if let Some(&second_last_user_index) = user_indices.get(user_indices.len().saturating_sub(2)) {
+                    let current_index = filtered_messages.iter().position(|m| m == msg).unwrap();
+                    if current_index == last_user_index || current_index == second_last_user_index {
+                        // Replace the content with cache_control
+                        content = vec![AnthropicContent::Text {
+                            text: msg.content.clone(),
+                            cache_control: Some(Self::create_ephemeral_cache()),
+                        }];
+                    }
             }
 
             anthropic_messages.push(AnthropicMessage {
