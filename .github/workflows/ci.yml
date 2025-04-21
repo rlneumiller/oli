@@ -1,4 +1,4 @@
-name: code checks
+name: Code checks
 permissions:
   contents: read
   pull-requests: write
