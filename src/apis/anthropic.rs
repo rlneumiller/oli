@@ -12,6 +12,46 @@ use serde_json::{self, json, Value};
 use std::env;
 use std::time::Duration;
 
+// Helper function to log usage information from Anthropic API
+fn log_anthropic_usage(usage: &Value) {
+    let mut input_tokens = usage
+        .get("input_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let output_tokens = usage
+        .get("output_tokens")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    // Include cache tokens in the total
+    if let Some(cache_creation) = usage
+        .get("cache_creation_input_tokens")
+        .and_then(|v| v.as_i64())
+    {
+        input_tokens += cache_creation;
+    }
+
+    if let Some(cache_read) = usage
+        .get("cache_read_input_tokens")
+        .and_then(|v| v.as_i64())
+    {
+        input_tokens += cache_read;
+    }
+
+    eprintln!(
+        "{}",
+        format_log_with_color(
+            LogLevel::Info,
+            &format!(
+                "Anthropic API usage: {} input tokens, {} output tokens, {} total tokens",
+                input_tokens,
+                output_tokens,
+                input_tokens + output_tokens
+            )
+        )
+    );
+}
+
 // Anthropic API models
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AnthropicMessage {
@@ -319,7 +359,9 @@ impl AnthropicClient {
                 cache_control: None,
             }];
             if let Some(&last_user_index) = user_indices.last() {
-                if let Some(&second_last_user_index) = user_indices.get(user_indices.len().saturating_sub(2)) {
+                if let Some(&second_last_user_index) =
+                    user_indices.get(user_indices.len().saturating_sub(2))
+                {
                     let current_index = filtered_messages.iter().position(|m| m == msg).unwrap();
                     if current_index == last_user_index || current_index == second_last_user_index {
                         // Replace the content with cache_control
@@ -328,6 +370,7 @@ impl AnthropicClient {
                             cache_control: Some(Self::create_ephemeral_cache()),
                         }];
                     }
+                }
             }
 
             anthropic_messages.push(AnthropicMessage {
