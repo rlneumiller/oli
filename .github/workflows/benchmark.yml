@@ -169,9 +169,15 @@ jobs:
           echo "Direct Ollama test completed successfully in ${TIME}ms"
           echo "ollama_time=${TIME}" >> $GITHUB_OUTPUT
 
-      - name: Create config for oli server
+      # Instead of modifying code, use a temporary API key
+      - name: Set API keys for testing
         run: |
-          # Create directory for config
+          # Create a dummy API key for testing
+          echo "ANTHROPIC_API_KEY=dummy-key-for-testing-only" >> $GITHUB_ENV
+          echo "OPENAI_API_KEY=dummy-key-for-testing-only" >> $GITHUB_ENV
+          echo "GEMINI_API_KEY=dummy-key-for-testing-only" >> $GITHUB_ENV
+
+          # Create config directory
           mkdir -p ~/.config/oli
 
           # Simplified config file with Ollama as default provider
@@ -182,32 +188,7 @@ jobs:
           }
           EOF
 
-          # Create .env file in the current directory
-          cat > .env << EOF
-          OLLAMA_API_BASE=http://localhost:11434
-          DEFAULT_PROVIDER=ollama
-          DEFAULT_MODEL=${{ env.MODEL }}
-          EOF
-
-          echo "Config created:"
-          cat ~/.config/oli/config.json
-          cat .env
-
-      - name: Modify server code to bypass API check for testing
-        run: |
-          # Path to the file that has the API key check
-          SRC_FILE="src/app/core.rs"
-
-          # Back up the original file
-          cp $SRC_FILE ${SRC_FILE}.backup
-
-          # Replace the API key check with a modified version that allows empty keys for Ollama models
-          sed -i 's/if api_key.is_empty() {/if api_key.is_empty() \&\& !model_name_lower.contains("local") {/' $SRC_FILE
-
-          # Build again with the modification
-          cargo build --release --bin oli-server
-
-          echo "Modified server code to bypass API key check for Ollama models"
+          echo "Created test config and dummy API keys"
 
       - name: Run oli server test
         id: oli_test
@@ -240,6 +221,9 @@ jobs:
           # Set environment variables
           export OLLAMA_API_BASE="http://localhost:11434"
           export DEFAULT_PROVIDER="ollama"
+          export ANTHROPIC_API_KEY="dummy-key-for-testing-only"
+          export OPENAI_API_KEY="dummy-key-for-testing-only"
+          export GEMINI_API_KEY="dummy-key-for-testing-only"
 
           # Create request with fixed model_index=3 (position of Ollama model in the array)
           REQUEST_JSON=$(cat <<END
