@@ -1,10 +1,11 @@
 use crate::apis::api_client::{ApiClient, CompletionOptions, Message, ToolCall, ToolResult};
 use crate::app::logger::{format_log_with_color, LogLevel};
 use crate::errors::AppError;
+use crate::models::GEMINI_MODEL_NAME;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use rand;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use reqwest::Client as ReqwestClient;
 use reqwest::Response;
 use serde::{Deserialize, Serialize};
@@ -31,11 +32,14 @@ enum GeminiContent {
     FunctionResponse {
         function_response: GeminiFunctionResponse,
     },
+    // Add more flexible fallback variant for unexpected response formats
+    Other(Value),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct GeminiFunctionCall {
     name: String,
+    // The Gemini API uses 'args' field for function arguments
     args: Value,
 }
 
@@ -53,10 +57,7 @@ struct GeminiFunction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct GeminiRequest {
-    contents: Vec<GeminiMessage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<GeminiTool>>,
+struct GeminiGenerationConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -68,7 +69,18 @@ struct GeminiRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct GeminiRequest {
+    contents: Vec<GeminiMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<GeminiTool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generation_config: Option<GeminiGenerationConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct GeminiTool {
+    // Note Gemini API expects 'functionDeclarations' (camelCase), not 'function_declarations'
+    #[serde(rename = "functionDeclarations")]
     function_declarations: Vec<GeminiFunction>,
 }
 
@@ -195,24 +207,34 @@ impl GeminiClient {
     }
 
     pub fn with_api_key(api_key: String, model: Option<String>) -> Result<Self> {
-        // Create new client with appropriate headers
+        // Create new client with content-type header only
+        // Note: Gemini API uses API key in URL query param, not as Bearer token
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", api_key))?,
-        );
 
         let client = ReqwestClient::builder().default_headers(headers).build()?;
 
-        // Default to gemini-2.5-pro-exp-03-25 as specified
-        let model = model.unwrap_or_else(|| "gemini-2.5-pro-exp-03-25".to_string());
+        // Default to the centrally defined Gemini model name
+        let model = model.unwrap_or_else(|| GEMINI_MODEL_NAME.to_string());
 
-        // API base URL with model and API key
+        // API base URL with model and API key as query parameter, using v1beta endpoint
         let api_base = format!(
-            "https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={api_key}",
+            "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
             model = model,
             api_key = api_key
+        );
+
+        eprintln!(
+            "{}",
+            format_log_with_color(LogLevel::Info, "Using Gemini API v1beta endpoint")
+        );
+
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Info,
+                &format!("Configured Gemini API with model: {}", model)
+            )
         );
 
         Ok(Self {
@@ -291,13 +313,66 @@ impl GeminiClient {
         let mut tool_calls = Vec::new();
 
         for part in &candidate.content.parts {
-            if let GeminiContent::FunctionCall { function_call } = part {
-                // Each function_call in Gemini becomes a ToolCall in our system
-                tool_calls.push(ToolCall {
-                    id: Some(format!("gemini-call-{}", rand::random::<u64>())),
-                    name: function_call.name.clone(),
-                    arguments: function_call.args.clone(),
-                });
+            match part {
+                GeminiContent::FunctionCall { function_call } => {
+                    // Clone values for logging
+                    let name = function_call.name.clone();
+                    let args = function_call.args.clone();
+
+                    // Each function_call in Gemini becomes a ToolCall in our system
+                    tool_calls.push(ToolCall {
+                        id: Some(format!("gemini-call-{}", rand::random::<u64>())),
+                        name: name.clone(),
+                        arguments: args.clone(),
+                    });
+
+                    // Log the function call for debugging
+                    eprintln!(
+                        "{}",
+                        format_log_with_color(
+                            LogLevel::Info,
+                            &format!(
+                                "Found function call: {} with args: {}",
+                                name,
+                                serde_json::to_string(&args).unwrap_or_default()
+                            )
+                        )
+                    );
+                }
+                GeminiContent::Other(value) => {
+                    // Try to extract function call from the "Other" variant - check both camelCase and snake_case
+                    if let Some(fc_value) = value
+                        .get("functionCall")
+                        .or_else(|| value.get("function_call"))
+                    {
+                        // Extract function call from JSON value
+                        if let Some(name) = fc_value.get("name").and_then(|n| n.as_str()) {
+                            let args = fc_value.get("args").cloned().unwrap_or(json!({}));
+
+                            // Clone args for logging before moving it into the ToolCall
+                            let args_for_log = args.clone();
+
+                            tool_calls.push(ToolCall {
+                                id: Some(format!("gemini-call-{}", rand::random::<u64>())),
+                                name: name.to_string(),
+                                arguments: args,
+                            });
+
+                            // Log the extracted function call using the cloned args
+                            eprintln!(
+                                "{}",
+                                format_log_with_color(
+                                    LogLevel::Info,
+                                    &format!("Extracted function call from Other variant: {} with args: {}",
+                                        name,
+                                        serde_json::to_string(&args_for_log).unwrap_or_default()
+                                    )
+                                )
+                            );
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -350,24 +425,75 @@ impl GeminiClient {
         let candidate = &response.candidates[0];
         let mut text_content = String::new();
 
+        // Log response structure for debugging
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                &format!(
+                    "Gemini response parts count: {}",
+                    candidate.content.parts.len()
+                )
+            )
+        );
+
+        // Try to extract text content from parts
         for part in &candidate.content.parts {
-            if let GeminiContent::Text { text } = part {
-                text_content = text.clone();
-                break;
+            match part {
+                GeminiContent::Text { text } => {
+                    text_content = text.clone();
+                    break;
+                }
+                GeminiContent::Other(value) => {
+                    // Try to extract text from "text" field if it exists
+                    if let Some(text) = value.get("text").and_then(|t| t.as_str()) {
+                        text_content = text.to_string();
+                        break;
+                    }
+                }
+                _ => {}
             }
         }
 
         if text_content.is_empty() {
-            // If no text content but we have function calls, return empty string
-            for part in &candidate.content.parts {
-                if let GeminiContent::FunctionCall { .. } = part {
-                    return Ok(String::new());
-                }
+            // Check if this is a pure function call response (no text content)
+            let has_function_call = candidate.content.parts.iter().any(|part| match part {
+                GeminiContent::FunctionCall { .. } => true,
+                GeminiContent::Other(value) => value
+                    .get("functionCall")
+                    .or_else(|| value.get("function_call"))
+                    .is_some(),
+                _ => false,
+            });
+
+            if has_function_call {
+                // Return empty string if we found function calls but no text
+                eprintln!(
+                    "{}",
+                    format_log_with_color(
+                        LogLevel::Info,
+                        "Found function call(s) but no text content in Gemini response"
+                    )
+                );
+                return Ok(String::new());
             }
-            // Otherwise, return an error
-            return Err(
-                AppError::LLMError("No text content in Gemini response".to_string()).into(),
-            );
+
+            // Log the full response if no text is found
+            if let Ok(response_str) = serde_json::to_string_pretty(response) {
+                eprintln!(
+                    "{}",
+                    format_log_with_color(
+                        LogLevel::Debug,
+                        &format!("Full Gemini response: {}", response_str)
+                    )
+                );
+            }
+
+            // Return an error if no text content or function calls found
+            return Err(AppError::LLMError(
+                "No text content or function calls in Gemini response".to_string(),
+            )
+            .into());
         }
 
         Ok(text_content)
@@ -382,17 +508,22 @@ impl ApiClient for GeminiClient {
 
         let max_tokens = options.max_tokens.unwrap_or(2048);
 
-        let request = GeminiRequest {
-            contents,
+        // Create generation config
+        let generation_config = GeminiGenerationConfig {
             temperature: options.temperature,
             top_p: options.top_p,
             max_output_tokens: Some(max_tokens),
-            tools: None,
             response_mime_type: if options.json_schema.is_some() {
                 Some("application/json".to_string())
             } else {
                 None
             },
+        };
+
+        let request = GeminiRequest {
+            contents,
+            tools: None,
+            generation_config: Some(generation_config),
         };
 
         // Send request with retry logic
@@ -460,24 +591,28 @@ impl ApiClient for GeminiClient {
 
         let max_tokens = options.max_tokens.unwrap_or(2048);
 
-        // Create the request
-        let mut request = GeminiRequest {
-            contents,
+        // Create generation config
+        let generation_config = GeminiGenerationConfig {
             temperature: options.temperature,
             top_p: options.top_p,
             max_output_tokens: Some(max_tokens),
+            response_mime_type: if options.json_schema.is_some() {
+                Some("application/json".to_string())
+            } else {
+                None
+            },
+        };
+
+        // Create the request
+        let mut request = GeminiRequest {
+            contents,
+            generation_config: Some(generation_config),
             tools: None,
-            response_mime_type: None,
         };
 
         // Add tools if specified
         if let Some(tools) = options.tools {
             request.tools = Some(self.convert_tool_definitions(tools));
-        }
-
-        // Set JSON response format if schema is provided
-        if options.json_schema.is_some() {
-            request.response_mime_type = Some("application/json".to_string());
         }
 
         // Send request with retry logic

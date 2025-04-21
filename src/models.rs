@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+// Model name constants to avoid duplication
+pub const ANTHROPIC_MODEL_NAME: &str = "claude-3-7-sonnet-20250219";
+pub const OPENAI_MODEL_NAME: &str = "gpt-4o";
+pub const GEMINI_MODEL_NAME: &str = "gemini-2.5-pro-exp-03-25";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
     pub name: String,
@@ -24,7 +29,7 @@ pub fn get_available_models() -> Vec<ModelConfig> {
         // Claude 3.7 Sonnet - Anthropic model supporting tool use
         ModelConfig {
             name: "Claude 3.7 Sonnet".into(),
-            file_name: "claude-3-7-sonnet-20250219".into(),
+            file_name: ANTHROPIC_MODEL_NAME.into(),
             description: "Latest Anthropic Claude with advanced code capabilities".into(),
             recommended_for: "Professional code tasks, requires ANTHROPIC_API_KEY".into(),
             supports_agent: true,
@@ -32,7 +37,7 @@ pub fn get_available_models() -> Vec<ModelConfig> {
         // GPT-4o - OpenAI model supporting tool use
         ModelConfig {
             name: "GPT-4o".into(),
-            file_name: "gpt-4o".into(),
+            file_name: OPENAI_MODEL_NAME.into(),
             description: "Latest OpenAI model with advanced tool use capabilities".into(),
             recommended_for: "Professional code tasks, requires OPENAI_API_KEY".into(),
             supports_agent: true,
@@ -40,7 +45,7 @@ pub fn get_available_models() -> Vec<ModelConfig> {
         // Gemini 2.5 Pro - Google model supporting tool use
         ModelConfig {
             name: "Gemini 2.5 Pro".into(),
-            file_name: "gemini-2.5-pro-exp-03-25".into(),
+            file_name: GEMINI_MODEL_NAME.into(),
             description: "Google's latest Gemini model with advanced code capabilities".into(),
             recommended_for: "Professional code tasks, requires GEMINI_API_KEY".into(),
             supports_agent: true,
