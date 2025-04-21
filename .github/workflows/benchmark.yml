@@ -10,6 +10,19 @@ on:
         description: 'Test prompt to send'
         default: 'Write a Python function to validate an email address'
         required: true
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/benchmark.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/benchmark.yml'
+
+permissions:
+  contents: read
+  id-token: write
+  actions: read
 
 jobs:
   benchmark:
@@ -20,6 +33,18 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set defaults for non-workflow_dispatch events
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          echo "MODEL=qwen2.5-coder:7b" >> $GITHUB_ENV
+          echo "PROMPT=Write a Python function to validate an email address" >> $GITHUB_ENV
+
+      - name: Set values from workflow inputs
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "MODEL=${{ github.event.inputs.model }}" >> $GITHUB_ENV
+          echo "PROMPT=${{ github.event.inputs.prompt }}" >> $GITHUB_ENV
 
       - name: Install Ollama
         run: |
@@ -51,7 +76,7 @@ jobs:
 
       - name: Pull model
         run: |
-          ollama pull ${{ github.event.inputs.model }}
+          ollama pull ${{ env.MODEL }}
 
       - name: Run test
         id: model_test
@@ -68,8 +93,9 @@ jobs:
           {
             "metadata": {
               "timestamp": "$timestamp",
-              "model": "${{ github.event.inputs.model }}",
-              "prompt": "${{ github.event.inputs.prompt }}"
+              "model": "${{ env.MODEL }}",
+              "prompt": "${{ env.PROMPT }}",
+              "trigger": "${{ github.event_name }}"
             },
             "metrics": {
               "response_time_ms": 0
@@ -79,13 +105,13 @@ jobs:
           EOF
 
           # Run benchmark test
-          echo "Running test with model ${{ github.event.inputs.model }}"
+          echo "Running test with model ${{ env.MODEL }}"
           START=$(date +%s%3N)
           RESPONSE=$(curl -s -X POST http://localhost:11434/api/generate \
             -H "Content-Type: application/json" \
             -d '{
-              "model": "${{ github.event.inputs.model }}",
-              "prompt": "${{ github.event.inputs.prompt }}",
+              "model": "${{ env.MODEL }}",
+              "prompt": "${{ env.PROMPT }}",
               "stream": false
             }')
           END=$(date +%s%3N)
