@@ -114,7 +114,7 @@ jobs:
 
       - name: Run minimal benchmark test
         id: tool_benchmark
-        timeout-minutes: 15
+        timeout-minutes: 20
         run: |
           # Set environment variables
           export OLLAMA_API_BASE="http://localhost:11434"
