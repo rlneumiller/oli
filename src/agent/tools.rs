@@ -327,7 +327,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
                     },
                     "offset": {
                         "type": "integer",
-                        "description": "The line number to start reading from (required, 1-based)"
+                        "description": "The line number to start reading from (required, 0-based)"
                     },
                     "limit": {
                         "type": "integer",

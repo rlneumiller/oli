@@ -13,3 +13,4 @@ ui/.cache
 .cargo
 Cargo.lock
 *.log
+benchmark_results

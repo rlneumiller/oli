@@ -1,0 +1,196 @@
+name: Benchmark
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Model to benchmark'
+        default: 'qwen2.5-coder:7b'
+        required: true
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/benchmark.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/benchmark.yml'
+
+permissions:
+  contents: write
+  id-token: write
+  actions: read
+
+jobs:
+  benchmark:
+    name: Benchmark Ollama with oli
+    runs-on: [self-hosted, gpu]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Set model from inputs or default
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "MODEL=${{ github.event.inputs.model }}" >> $GITHUB_ENV
+          else
+            echo "MODEL=qwen2.5-coder:14b" >> $GITHUB_ENV
+          fi
+
+      - name: Check Ollama server
+        run: |
+          # Check if Ollama server is running and accessible
+          echo "Checking connection to Ollama server..."
+          if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+            echo "Ollama server is accessible"
+          else
+            echo "Error: Cannot connect to Ollama server at http://localhost:11434"
+            exit 1
+          fi
+
+          # Verify the model is available
+          echo "Verifying model ${{ env.MODEL }} is available..."
+          if curl -s http://localhost:11434/api/tags | grep -q "${{ env.MODEL }}"; then
+            echo "Model ${{ env.MODEL }} is available"
+          else
+            echo "Warning: Model ${{ env.MODEL }} may not be available. Continuing anyway as it might be known by a different name."
+          fi
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-benchmark-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build only what's needed
+        run: |
+          export RUSTFLAGS="-C codegen-units=16 -C opt-level=1"
+          cargo build --release --bin oli-server --features "benchmark"
+
+      - name: Setup test environment
+        run: |
+          # Create results directory
+          mkdir -p benchmark_results/tool_tests
+
+          # Create config for Ollama
+          mkdir -p ~/.config/oli
+          cat > ~/.config/oli/config.json << EOF
+          {
+            "default_provider": "ollama",
+            "default_model": "${{ env.MODEL }}"
+          }
+          EOF
+
+          # Set dummy API keys
+          echo "ANTHROPIC_API_KEY=dummy-key" >> $GITHUB_ENV
+          echo "OPENAI_API_KEY=dummy-key" >> $GITHUB_ENV
+          echo "GEMINI_API_KEY=dummy-key" >> $GITHUB_ENV
+
+      - name: Run minimal benchmark test
+        id: tool_benchmark
+        timeout-minutes: 20
+        run: |
+          # Set environment variables
+          export OLLAMA_API_BASE="http://localhost:11434"
+          export DEFAULT_PROVIDER="ollama"
+          export DEFAULT_MODEL="${{ env.MODEL }}"
+          export OLLAMA_SYSTEM_CONTEXT_LENGTH="4096"
+          export OLI_TEST_TIMEOUT="90"
+          export OLI_BENCHMARK_SUBSET="true"
+          export RUST_LOG="info"
+
+          # Special handling for Qwen models
+          if [[ "${{ env.MODEL }}" == *"qwen"* ]]; then
+            export OLLAMA_FUNCTION_CALLING_FORMAT="verbose"
+          fi
+
+          # Run the optimized file read tool test
+          echo "Running file read tool benchmark test..."
+          START=$(date +%s%3N)
+          set +e  # Don't exit on error
+          RESULT=$(cargo test --release --features benchmark --test mod -- \
+            integration::test_file_read_tool::test_read_file_tool \
+            --test-threads=1 -- --nocapture 2>&1)
+          TEST_EXIT_CODE=$?
+          END=$(date +%s%3N)
+          TIME=$((END - START))
+          set -e  # Return to exit on error
+
+          # Save results
+          echo "$RESULT" > benchmark_results/tool_tests/file_read_tool_results.txt
+
+          # Create summary files
+          TEST_STATUS="failed"
+          if [ $TEST_EXIT_CODE -eq 0 ]; then
+            TEST_STATUS="completed"
+          fi
+
+          cat > benchmark_results/tool_tests/summary.json << EOF
+          {
+            "metadata": {
+              "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+              "model": "${{ env.MODEL }}",
+              "test_type": "file_read_benchmark"
+            },
+            "metrics": {
+              "execution_time_ms": $TIME,
+              "exit_code": $TEST_EXIT_CODE
+            },
+            "result": "$TEST_STATUS"
+          }
+          EOF
+
+          cat > benchmark_results/summary.json << EOF
+          {
+            "tool_benchmark_ms": $TIME,
+            "model": "${{ env.MODEL }}",
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "status": "$TEST_STATUS",
+            "exit_code": $TEST_EXIT_CODE
+          }
+          EOF
+
+          # Output summary
+          echo "=== Benchmark Results ==="
+          echo "Model: ${{ env.MODEL }}"
+          echo "Duration: ${TIME}ms"
+          echo "Status: $TEST_STATUS (exit code: $TEST_EXIT_CODE)"
+
+          # Store for other steps
+          echo "tool_benchmark_time=${TIME}" >> $GITHUB_OUTPUT
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results
+          path: benchmark_results/
+
+      - name: Update benchmark documentation
+        if: github.event_name == 'pull_request'
+        run: |
+          chmod +x .github/scripts/update_benchmark_docs.sh
+          .github/scripts/update_benchmark_docs.sh
+
+          if ! git diff --quiet docs/src/benchmark.md; then
+            git config --global user.name "GitHub Actions"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            git add docs/src/benchmark.md
+            git commit -m "Update benchmark results [skip ci]"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: |
+          # No Ollama process to clean up since we're using an existing server
+          echo "Benchmark completed, no cleanup needed"
