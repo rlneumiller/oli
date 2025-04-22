@@ -50,10 +50,8 @@ jobs:
           path: ~/.ollama/models
           key: ollama-${{ env.MODEL }}-${{ hashFiles('.github/workflows/benchmark.yml') }}
 
-      - name: Install Ollama and start server
+      - name: Start Ollama server
         run: |
-          # Install Ollama
-          curl -fsSL https://ollama.com/install.sh | sh
           ollama --version
 
           # Create Ollama directory and start server
