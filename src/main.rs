@@ -1,4 +1,5 @@
 use anyhow::Result;
+use oli_server::app::history::ContextCompressor;
 use oli_server::app::logger::{format_log_with_color, LogLevel};
 use oli_server::communication::rpc::RpcServer;
 use oli_server::App;
@@ -220,28 +221,20 @@ fn register_conversation_apis(rpc_server: &mut RpcServer, app: &Arc<Mutex<App>>)
     rpc_server.register_method("clear_conversation", move |_| {
         let mut app = app_clone.lock().unwrap();
 
-        // Clear the session manager's messages if it exists
-        if let Some(session_manager) = &mut app.session_manager {
-            // Clear the conversation history
-            session_manager.clear();
+        // Use the history.rs implementation to clear everything
+        // This clears messages, summaries, session manager, and agent history
+        app.clear_history();
 
-            // Log the action
-            eprintln!(
-                "{}",
-                format_log_with_color(LogLevel::Info, "Conversation history cleared")
-            );
+        // Log the action
+        eprintln!(
+            "{}",
+            format_log_with_color(LogLevel::Info, "Conversation history cleared")
+        );
 
-            // Return success
-            return Ok(json!({
-                "success": true,
-                "message": "Conversation history cleared"
-            }));
-        }
-
-        // If no session manager, return error
+        // Return success
         Ok(json!({
-            "success": false,
-            "message": "No active conversation session to clear"
+            "success": true,
+            "message": "Conversation history cleared"
         }))
     });
 }
