@@ -1,4 +1,5 @@
 use anyhow::Result;
+use oli_server::app::history::ContextCompressor;
 use oli_server::app::logger::{format_log_with_color, LogLevel};
 use oli_server::communication::rpc::RpcServer;
 use oli_server::App;
