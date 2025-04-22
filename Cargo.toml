@@ -9,6 +9,10 @@ documentation = "https://docs.rs/oli-server"
 readme = "README.md"
 keywords = ["assistant", "ai", "server"]
 
+[features]
+default = []
+benchmark = []  # Feature flag for benchmark tests
+
 [lib]
 name = "oli_server"
 path = "src/lib.rs"

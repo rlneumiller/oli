@@ -281,11 +281,53 @@ jobs:
           echo "oli server test completed successfully in ${TIME}ms"
           echo "oli_time=${TIME}" >> $GITHUB_OUTPUT
 
+      - name: Run tool benchmark tests
+        id: tool_benchmark
+        run: |
+          echo "Running tool benchmark tests with model ${{ env.MODEL }}"
+
+          # Set environment variables for the tests
+          export OLLAMA_API_BASE="http://localhost:11434"
+          export DEFAULT_PROVIDER="ollama"
+          export DEFAULT_MODEL="${{ env.MODEL }}"
+
+          # Create results directory for benchmark tests
+          mkdir -p benchmark_results/tool_tests
+
+          # Run the benchmark tests (with feature flag to enable them)
+          START=$(date +%s%3N)
+          RESULT=$(cargo test --test integration test_file_read_tool --features benchmark -- --nocapture 2>&1)
+          END=$(date +%s%3N)
+          TIME=$((END - START))
+
+          # Save test results
+          echo "$RESULT" > benchmark_results/tool_tests/file_read_tool_results.txt
+
+          # Create a summary JSON
+          cat > benchmark_results/tool_tests/summary.json << EOF
+          {
+            "metadata": {
+              "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+              "model": "${{ env.MODEL }}",
+              "test_type": "file_read_tool_benchmark"
+            },
+            "metrics": {
+              "execution_time_ms": $TIME
+            },
+            "result": "completed"
+          }
+          EOF
+
+          # Output test completion message
+          echo "Tool benchmark tests completed in ${TIME}ms"
+          echo "tool_benchmark_time=${TIME}" >> $GITHUB_OUTPUT
+
       - name: Compare results
         run: |
           # Combine results into a summary
           OLLAMA_TIME=$(jq '.metrics.response_time_ms' benchmark_results/ollama_result.json)
           OLI_TIME=$(jq '.metrics.response_time_ms' benchmark_results/oli_result.json)
+          TOOL_BENCHMARK_TIME="${{ steps.tool_benchmark.outputs.tool_benchmark_time }}"
 
           # Calculate overhead
           OVERHEAD=$((OLI_TIME - OLLAMA_TIME))
@@ -298,6 +340,7 @@ jobs:
             "oli_server_ms": $OLI_TIME,
             "overhead_ms": $OVERHEAD,
             "overhead_percent": $PERCENT_OVERHEAD,
+            "tool_benchmark_ms": $TOOL_BENCHMARK_TIME,
             "model": "${{ env.MODEL }}",
             "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           }
@@ -308,10 +351,19 @@ jobs:
           echo "Direct Ollama time: ${OLLAMA_TIME}ms"
           echo "oli server time: ${OLI_TIME}ms"
           echo "Overhead: ${OVERHEAD}ms (${PERCENT_OVERHEAD}%)"
+          echo "Tool benchmark tests: ${TOOL_BENCHMARK_TIME}ms"
 
           # Print oli server log for diagnostics
           echo "=== oli Server Log ==="
           cat oli_server.log
+
+          # Print tool benchmark summary
+          echo "=== Tool Benchmark Results ==="
+          if [ -f benchmark_results/tool_tests/file_read_tool_results.txt ]; then
+            cat benchmark_results/tool_tests/file_read_tool_results.txt
+          else
+            echo "No tool benchmark results found"
+          fi
 
       - name: Upload results
         uses: actions/upload-artifact@v4
@@ -322,6 +374,7 @@ jobs:
             benchmark_results/
             oli_server.log
             ~/.config/oli/config.json
+            benchmark_results/tool_tests/
 
       - name: Cleanup
         if: always()
