@@ -87,17 +87,9 @@ export const handleClearCommand: CommandHandler = async (
       additionalHandlers.handleClearHistory();
     }
 
-    // Add success message
-    const successMessage = createMessages([
-      {
-        role: "system",
-        content: "Conversation history cleared successfully.",
-      },
-    ]);
-
+    // Set processing state to false (silently clear history without showing a message)
     setState((prev) => ({
       ...prev,
-      messages: [...prev.messages, ...successMessage],
       isProcessing: false,
     }));
   } catch (error) {

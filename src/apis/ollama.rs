@@ -6,7 +6,7 @@ use crate::errors::AppError;
 use anyhow::Result;
 use async_trait::async_trait;
 use rand;
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+
 use reqwest::Client as ReqwestClient;
 use serde::{Deserialize, Serialize};
 use serde_json::{self, json, Value};
@@ -177,23 +177,37 @@ pub struct OllamaClient {
 
 impl OllamaClient {
     pub fn new(model: Option<String>) -> Result<Self> {
-        // Default to qwen2.5-coder:14b model if None or empty string
-        let model_name = match model {
-            Some(m) if !m.trim().is_empty() => m,
-            _ => "qwen2.5-coder:14b".to_string(),
-        };
+        // Use the provided model name, with no default
+        // If no model name provided, the client will still initialize
+        // but the caller must specify a model when making a request
+        let model_name = model.unwrap_or_default();
 
-        Self::with_base_url(model_name, "http://localhost:11434".to_string())
+        // Always use localhost for Ollama - it's a local service
+        let api_base = "http://localhost:11434".to_string();
+
+        eprintln!("Initializing Ollama client at: {}", api_base);
+
+        Self::with_base_url(model_name, api_base)
     }
 
     pub fn with_base_url(model: String, api_base: String) -> Result<Self> {
-        let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-
+        // Build a simple client with only timeout configuration
         let client = ReqwestClient::builder()
-            .default_headers(headers)
-            .timeout(Duration::from_secs(300)) // 5 minutes timeout for operations
-            .build()?;
+            .timeout(Duration::from_secs(600)) // 10 minutes timeout for operations
+            .build()
+            .map_err(|e| {
+                eprintln!("Failed to build reqwest client: {}", e);
+                anyhow::anyhow!("Failed to build HTTP client: {}", e)
+            })?;
+
+        // Parse and normalize the API base URL
+        let api_base = if api_base.starts_with("http://") || api_base.starts_with("https://") {
+            api_base
+        } else {
+            format!("http://{}", api_base)
+        };
+
+        eprintln!("Using normalized Ollama API base URL: {}", api_base);
 
         Ok(Self {
             client,
@@ -242,37 +256,67 @@ impl OllamaClient {
             )
         );
 
-        let response = self.client.get(&url).send().await.map_err(|e| {
-            let error_msg = if e.is_connect() {
-                // Connection failed - likely Ollama is not running
-                "Failed to connect to Ollama server. Make sure 'ollama serve' is running."
-                    .to_string()
-            } else {
-                format!("Failed to send request to Ollama: {}", e)
-            };
-            eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
-            AppError::NetworkError(error_msg)
-        })?;
+        // More detailed debug information
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                &format!("Using API base: {}, model: {}", self.api_base, self.model)
+            )
+        );
 
+        // Print client information
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                "Client configured with timeout: 300 seconds"
+            )
+        );
+
+        // Try to send the request with better error handling
+        let response = match self.client.get(&url).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                let error_msg = if e.is_connect() {
+                    // Connection failed - likely Ollama is not running
+                    format!("Failed to connect to Ollama server at {}. Make sure 'ollama serve' is running. Error: {}",
+                            self.api_base, e)
+                } else if e.is_timeout() {
+                    format!("Request to Ollama timed out: {}", e)
+                } else if e.is_request() {
+                    format!("Failed to build request to Ollama: {}", e)
+                } else {
+                    format!("Failed to send request to Ollama: {}", e)
+                };
+
+                eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+                return Err(AppError::NetworkError(error_msg).into());
+            }
+        };
+
+        // Check status code
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(AppError::NetworkError(format!(
-                "Ollama API error: {} - {}",
-                status, error_text
-            ))
-            .into());
+            let error_text = match response.text().await {
+                Ok(text) => text,
+                Err(_) => "Failed to get error details".to_string(),
+            };
+
+            let error_msg = format!("Ollama API error: {} - {}", status, error_text);
+            eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+            return Err(AppError::NetworkError(error_msg).into());
         }
 
-        // Parse response
-        let response_text = response.text().await.map_err(|e| {
-            let error_msg = format!("Failed to get response text: {}", e);
-            eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
-            AppError::NetworkError(error_msg)
-        })?;
+        // Parse response text
+        let response_text = match response.text().await {
+            Ok(text) => text,
+            Err(e) => {
+                let error_msg = format!("Failed to get response text: {}", e);
+                eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+                return Err(AppError::NetworkError(error_msg).into());
+            }
+        };
 
         eprintln!(
             "{}",
@@ -285,14 +329,18 @@ impl OllamaClient {
             )
         );
 
-        let models_response: OllamaListModelsResponse = serde_json::from_str(&response_text)
-            .map_err(|e| {
-                let error_msg = format!("Failed to parse Ollama response: {}", e);
+        // Try to parse the response
+        match serde_json::from_str::<OllamaListModelsResponse>(&response_text) {
+            Ok(models_response) => Ok(models_response.models),
+            Err(e) => {
+                let error_msg = format!(
+                    "Failed to parse Ollama response: {}. Response text: {}",
+                    e, response_text
+                );
                 eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
-                AppError::LLMError(error_msg)
-            })?;
-
-        Ok(models_response.models)
+                Err(AppError::LLMError(error_msg).into())
+            }
+        }
     }
 }
 
@@ -302,14 +350,13 @@ impl ApiClient for OllamaClient {
         let ollama_messages = self.convert_messages(messages);
 
         // Make sure we have a valid model name
-        let model_name = if self.model.is_empty() {
-            "qwen2.5-coder:14b".to_string() // Fallback to the default model
-        } else {
-            self.model.clone()
-        };
+        if self.model.is_empty() {
+            return Err(anyhow::anyhow!("No model specified for Ollama request"));
+        }
+        let model_name = self.model.clone();
 
         let request = OllamaRequest {
-            model: model_name,
+            model: model_name.clone(),
             messages: ollama_messages,
             stream: false,
             temperature: options.temperature,
@@ -325,51 +372,78 @@ impl ApiClient for OllamaClient {
 
         let url = format!("{}/api/chat", self.api_base);
 
+        // Enhanced logging
         eprintln!(
             "{}",
             format_log_with_color(
                 LogLevel::Debug,
-                &format!("Sending request to Ollama API with model: {}", self.model)
+                &format!(
+                    "Sending request to Ollama API at {} with model: {}",
+                    url, model_name
+                )
             )
         );
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_connect() {
-                    // Connection failed - likely Ollama is not running
-                    AppError::NetworkError(
-                        "Failed to connect to Ollama server. Make sure 'ollama serve' is running."
-                            .to_string(),
-                    )
-                } else {
-                    AppError::NetworkError(format!("Failed to send request to Ollama: {}", e))
-                }
-            })?;
+        // Log request structure (sanitized to avoid logging entire messages)
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                &format!(
+                    "Request structure: model={}, messages={} items, stream=false",
+                    model_name,
+                    request.messages.len()
+                )
+            )
+        );
 
+        // Use match to provide more detailed error handling
+        let response = match self.client.post(&url).json(&request).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                let error_msg = if e.is_connect() {
+                    // Connection failed - likely Ollama is not running
+                    format!("Failed to connect to Ollama server at {}. Make sure 'ollama serve' is running. Error: {}",
+                        self.api_base, e)
+                } else if e.is_timeout() {
+                    format!("Request to Ollama timed out: {}", e)
+                } else if e.is_request() {
+                    format!("Failed to build request to Ollama: {}", e)
+                } else if e.is_builder() {
+                    format!("Failed to build HTTP request: {} - This may be due to a configuration issue with reqwest", e)
+                } else {
+                    format!("Failed to send request to Ollama: {}", e)
+                };
+
+                eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+                return Err(AppError::NetworkError(error_msg).into());
+            }
+        };
+
+        // Handle non-success status codes
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(AppError::NetworkError(format!(
-                "Ollama API error: {} - {}",
-                status, error_text
-            ))
-            .into());
+
+            // Get error details with better error handling
+            let error_text = match response.text().await {
+                Ok(text) => text,
+                Err(_) => "Unknown error (failed to get error details)".to_string(),
+            };
+
+            let error_msg = format!("Ollama API error: {} - {}", status, error_text);
+            eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+            return Err(AppError::NetworkError(error_msg).into());
         }
 
-        // Parse response
-        let response_text = response.text().await.map_err(|e| {
-            let error_msg = format!("Failed to get response text: {}", e);
-            eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
-            AppError::NetworkError(error_msg)
-        })?;
+        // Get response text with better error handling
+        let response_text = match response.text().await {
+            Ok(text) => text,
+            Err(e) => {
+                let error_msg = format!("Failed to get response text: {}", e);
+                eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+                return Err(AppError::NetworkError(error_msg).into());
+            }
+        };
 
         eprintln!(
             "{}",
@@ -382,9 +456,21 @@ impl ApiClient for OllamaClient {
             )
         );
 
-        // Try to parse as a direct response
+        // Try to parse as a direct response with better fallback
         let ollama_response = match serde_json::from_str::<OllamaResponse>(&response_text) {
-            Ok(resp) => resp,
+            Ok(resp) => {
+                eprintln!(
+                    "{}",
+                    format_log_with_color(
+                        LogLevel::Debug,
+                        &format!(
+                            "Successfully parsed standard Ollama response: model={}",
+                            resp.model
+                        )
+                    )
+                );
+                resp
+            }
             Err(e) => {
                 // Log errors when parsing Ollama API response
                 eprintln!(
@@ -395,59 +481,87 @@ impl ApiClient for OllamaClient {
                     )
                 );
 
+                // Log the response text for debugging (truncated to avoid excessive logging)
+                let preview = if response_text.len() > 100 {
+                    format!("{}... [truncated]", &response_text[..100])
+                } else {
+                    response_text.clone()
+                };
+
+                eprintln!(
+                    "{}",
+                    format_log_with_color(
+                        LogLevel::Debug,
+                        &format!("Response text preview: {}", preview)
+                    )
+                );
+
                 // Try to parse as a generic JSON value to extract what we need
-                let json_value: Result<serde_json::Value, _> = serde_json::from_str(&response_text);
-                if let Ok(value) = json_value {
-                    if let Some(message) = value.get("message") {
-                        let role = message
-                            .get("role")
-                            .and_then(|r| r.as_str())
-                            .unwrap_or("assistant")
-                            .to_string();
+                match serde_json::from_str::<serde_json::Value>(&response_text) {
+                    Ok(value) => {
+                        if let Some(message) = value.get("message") {
+                            let role = message
+                                .get("role")
+                                .and_then(|r| r.as_str())
+                                .unwrap_or("assistant")
+                                .to_string();
 
-                        // Extract content, which might be a string or object
-                        let content = match message.get("content") {
-                            Some(c) if c.is_string() => c.as_str().unwrap_or("").to_string(),
-                            Some(c) => c.to_string(),
-                            None => "".to_string(),
-                        };
+                            // Extract content, which might be a string or object
+                            let content = match message.get("content") {
+                                Some(c) if c.is_string() => c.as_str().unwrap_or("").to_string(),
+                                Some(c) => c.to_string(),
+                                None => "".to_string(),
+                            };
 
-                        // Construct a valid OllamaResponse with the extracted data
-                        OllamaResponse {
-                            model: value
-                                .get("model")
-                                .and_then(|m| m.as_str())
-                                .unwrap_or("unknown")
-                                .to_string(),
-                            created_at: value
-                                .get("created_at")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            message: OllamaMessage {
-                                role,
-                                content,
-                                tool_calls: None,
-                                tool_call_id: None,
-                            },
-                            done: value.get("done").and_then(|d| d.as_bool()).unwrap_or(true),
-                            total_duration: None,
-                            load_duration: None,
-                            prompt_eval_duration: None,
-                            eval_count: None,
-                            eval_duration: None,
+                            // Construct a valid OllamaResponse with the extracted data
+                            OllamaResponse {
+                                model: value
+                                    .get("model")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string(),
+                                created_at: value
+                                    .get("created_at")
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                message: OllamaMessage {
+                                    role,
+                                    content,
+                                    tool_calls: None,
+                                    tool_call_id: None,
+                                },
+                                done: value.get("done").and_then(|d| d.as_bool()).unwrap_or(true),
+                                total_duration: None,
+                                load_duration: None,
+                                prompt_eval_duration: None,
+                                eval_count: None,
+                                eval_duration: None,
+                            }
+                        } else {
+                            // If we didn't find a message, create a synthetic error response
+                            eprintln!(
+                                "{}",
+                                format_log_with_color(
+                                    LogLevel::Error,
+                                    "Could not find 'message' field in Ollama response"
+                                )
+                            );
+
+                            return Err(AppError::Other(format!(
+                                "Failed to parse Ollama response: missing 'message' field. Response: {}",
+                                preview
+                            )).into());
                         }
-                    } else {
+                    }
+                    Err(json_err) => {
+                        // If we can't parse as JSON at all, return a clear error
                         return Err(AppError::Other(format!(
-                            "Failed to parse Ollama response: {}",
-                            e
+                            "Failed to parse Ollama response as JSON: {}. Raw response: {}",
+                            json_err, preview
                         ))
                         .into());
                     }
-                } else {
-                    return Err(
-                        AppError::Other(format!("Failed to parse Ollama response: {}", e)).into(),
-                    );
                 }
             }
         };
@@ -467,6 +581,7 @@ impl ApiClient for OllamaClient {
                 "Model name is empty. Please select a valid Ollama model."
             ));
         }
+        let model_name = self.model.clone();
 
         // Convert messages to Ollama format
         let mut ollama_messages = self.convert_messages(messages);
@@ -483,16 +598,9 @@ impl ApiClient for OllamaClient {
             }
         }
 
-        // Make sure we have a valid model name
-        let model_name = if self.model.is_empty() {
-            "qwen2.5-coder:14b".to_string() // Fallback to the default model
-        } else {
-            self.model.clone()
-        };
-
         // Create the request payload
         let mut request = OllamaRequest {
-            model: model_name,
+            model: model_name.clone(),
             messages: ollama_messages,
             stream: false,
             temperature: options.temperature,
@@ -514,129 +622,197 @@ impl ApiClient for OllamaClient {
 
         let url = format!("{}/api/chat", self.api_base);
 
+        // Enhanced logging
         eprintln!(
             "{}",
             format_log_with_color(
                 LogLevel::Debug,
-                &format!("Sending request to Ollama API with model: {}", self.model)
+                &format!(
+                    "Sending tool request to Ollama API at {} with model: {}",
+                    url, model_name
+                )
             )
         );
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_connect() {
-                    // Connection failed - likely Ollama is not running
-                    AppError::NetworkError(
-                        "Failed to connect to Ollama server. Make sure 'ollama serve' is running."
-                            .to_string(),
-                    )
-                } else {
-                    AppError::NetworkError(format!("Failed to send request to Ollama: {}", e))
-                }
-            })?;
+        // Log request structure (sanitized to avoid logging entire messages)
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                &format!(
+                    "Tool request structure: model={}, messages={} items, tools={} defined, stream=false",
+                    model_name,
+                    request.messages.len(),
+                    request.tools.as_ref().map_or(0, |t| t.len())
+                )
+            )
+        );
 
+        // Use match to provide more detailed error handling
+        let response = match self.client.post(&url).json(&request).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                let error_msg = if e.is_connect() {
+                    // Connection failed - likely Ollama is not running
+                    format!("Failed to connect to Ollama server at {}. Make sure 'ollama serve' is running. Error: {}",
+                        self.api_base, e)
+                } else if e.is_timeout() {
+                    format!("Request to Ollama timed out: {}", e)
+                } else if e.is_request() {
+                    format!("Failed to build request to Ollama: {}", e)
+                } else if e.is_builder() {
+                    format!("Failed to build HTTP request: {} - This may be due to a configuration issue with reqwest", e)
+                } else {
+                    format!("Failed to send request to Ollama: {}", e)
+                };
+
+                eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+                return Err(AppError::NetworkError(error_msg).into());
+            }
+        };
+
+        // Handle non-success status codes
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(AppError::NetworkError(format!(
-                "Ollama API error: {} - {}",
-                status, error_text
-            ))
-            .into());
+
+            // Get error details with better error handling
+            let error_text = match response.text().await {
+                Ok(text) => text,
+                Err(_) => "Unknown error (failed to get error details)".to_string(),
+            };
+
+            let error_msg = format!("Ollama API error: {} - {}", status, error_text);
+            eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+            return Err(AppError::NetworkError(error_msg).into());
         }
 
-        // Parse response
-        let response_text = response.text().await.map_err(|e| {
-            let error_msg = format!("Failed to get response text: {}", e);
-            eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
-            AppError::NetworkError(error_msg)
-        })?;
+        // Get response text with better error handling
+        let response_text = match response.text().await {
+            Ok(text) => text,
+            Err(e) => {
+                let error_msg = format!("Failed to get response text: {}", e);
+                eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+                return Err(AppError::NetworkError(error_msg).into());
+            }
+        };
 
         eprintln!(
             "{}",
             format_log_with_color(
                 LogLevel::Debug,
                 &format!(
-                    "Ollama API response received: {} bytes",
+                    "Ollama API tool response received: {} bytes",
                     response_text.len()
                 )
             )
         );
 
-        // Try to parse as a direct response
+        // Try to parse as a direct response with better fallback
         let ollama_response = match serde_json::from_str::<OllamaResponse>(&response_text) {
-            Ok(resp) => resp,
+            Ok(resp) => {
+                eprintln!(
+                    "{}",
+                    format_log_with_color(
+                        LogLevel::Debug,
+                        &format!(
+                            "Successfully parsed standard Ollama tool response: model={}",
+                            resp.model
+                        )
+                    )
+                );
+                resp
+            }
             Err(e) => {
                 // Log errors when parsing Ollama API response
                 eprintln!(
                     "{}",
                     format_log_with_color(
                         LogLevel::Warning,
-                        &format!("Failed to parse standard Ollama response: {}, attempting alternate parsing", e)
+                        &format!("Failed to parse standard Ollama tool response: {}, attempting alternate parsing", e)
+                    )
+                );
+
+                // Log the response text for debugging (truncated to avoid excessive logging)
+                let preview = if response_text.len() > 100 {
+                    format!("{}... [truncated]", &response_text[..100])
+                } else {
+                    response_text.clone()
+                };
+
+                eprintln!(
+                    "{}",
+                    format_log_with_color(
+                        LogLevel::Debug,
+                        &format!("Tool response text preview: {}", preview)
                     )
                 );
 
                 // Try to parse as a generic JSON value to extract what we need
-                let json_value: Result<serde_json::Value, _> = serde_json::from_str(&response_text);
-                if let Ok(value) = json_value {
-                    if let Some(message) = value.get("message") {
-                        let role = message
-                            .get("role")
-                            .and_then(|r| r.as_str())
-                            .unwrap_or("assistant")
-                            .to_string();
+                match serde_json::from_str::<serde_json::Value>(&response_text) {
+                    Ok(value) => {
+                        if let Some(message) = value.get("message") {
+                            let role = message
+                                .get("role")
+                                .and_then(|r| r.as_str())
+                                .unwrap_or("assistant")
+                                .to_string();
 
-                        // Extract content, which might be a string or object
-                        let content = match message.get("content") {
-                            Some(c) if c.is_string() => c.as_str().unwrap_or("").to_string(),
-                            Some(c) => c.to_string(),
-                            None => "".to_string(),
-                        };
+                            // Extract content, which might be a string or object
+                            let content = match message.get("content") {
+                                Some(c) if c.is_string() => c.as_str().unwrap_or("").to_string(),
+                                Some(c) => c.to_string(),
+                                None => "".to_string(),
+                            };
 
-                        // Construct a valid OllamaResponse with the extracted data
-                        OllamaResponse {
-                            model: value
-                                .get("model")
-                                .and_then(|m| m.as_str())
-                                .unwrap_or("unknown")
-                                .to_string(),
-                            created_at: value
-                                .get("created_at")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            message: OllamaMessage {
-                                role,
-                                content,
-                                tool_calls: None,
-                                tool_call_id: None,
-                            },
-                            done: value.get("done").and_then(|d| d.as_bool()).unwrap_or(true),
-                            total_duration: None,
-                            load_duration: None,
-                            prompt_eval_duration: None,
-                            eval_count: None,
-                            eval_duration: None,
+                            // Construct a valid OllamaResponse with the extracted data
+                            OllamaResponse {
+                                model: value
+                                    .get("model")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string(),
+                                created_at: value
+                                    .get("created_at")
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                message: OllamaMessage {
+                                    role,
+                                    content,
+                                    tool_calls: None,
+                                    tool_call_id: None,
+                                },
+                                done: value.get("done").and_then(|d| d.as_bool()).unwrap_or(true),
+                                total_duration: None,
+                                load_duration: None,
+                                prompt_eval_duration: None,
+                                eval_count: None,
+                                eval_duration: None,
+                            }
+                        } else {
+                            // If we didn't find a message, create a synthetic error response
+                            eprintln!(
+                                "{}",
+                                format_log_with_color(
+                                    LogLevel::Error,
+                                    "Could not find 'message' field in Ollama tool response"
+                                )
+                            );
+
+                            return Err(AppError::Other(format!(
+                                "Failed to parse Ollama tool response: missing 'message' field. Response: {}",
+                                preview
+                            )).into());
                         }
-                    } else {
+                    }
+                    Err(json_err) => {
+                        // If we can't parse as JSON at all, return a clear error
                         return Err(AppError::Other(format!(
-                            "Failed to parse Ollama response: {}",
-                            e
+                            "Failed to parse Ollama tool response as JSON: {}. Raw response: {}",
+                            json_err, preview
                         ))
                         .into());
                     }
-                } else {
-                    return Err(
-                        AppError::Other(format!("Failed to parse Ollama response: {}", e)).into(),
-                    );
                 }
             }
         };
@@ -647,6 +823,17 @@ impl ApiClient for OllamaClient {
         // Check for tool calls in the response
         if let Some(ollama_tool_calls) = ollama_response.message.tool_calls {
             if !ollama_tool_calls.is_empty() {
+                eprintln!(
+                    "{}",
+                    format_log_with_color(
+                        LogLevel::Debug,
+                        &format!(
+                            "Found {} tool calls in Ollama response",
+                            ollama_tool_calls.len()
+                        )
+                    )
+                );
+
                 let tool_calls = ollama_tool_calls
                     .iter()
                     .map(|call| {
@@ -655,7 +842,16 @@ impl ApiClient for OllamaClient {
                             serde_json::from_str::<Value>(&call.function.arguments);
                         let arguments = match arguments_result {
                             Ok(args) => args,
-                            Err(_) => json!({}),
+                            Err(e) => {
+                                eprintln!(
+                                    "{}",
+                                    format_log_with_color(
+                                        LogLevel::Warning,
+                                        &format!("Failed to parse tool arguments as JSON: {}. Using empty object instead.", e)
+                                    )
+                                );
+                                json!({})
+                            },
                         };
 
                         // Generate a random ID if one wasn't provided
@@ -683,11 +879,30 @@ impl ApiClient for OllamaClient {
         // but still returns JSON in the content field that looks like a tool call
         let content_str = content.trim();
         if content_str.starts_with('{') && content_str.ends_with('}') {
+            eprintln!(
+                "{}",
+                format_log_with_color(
+                    LogLevel::Debug,
+                    "Content appears to be JSON, checking for tool calls"
+                )
+            );
+
             if let Ok(json_value) = serde_json::from_str::<Value>(content_str) {
                 // Check for OpenAI style tool calls
                 if let Some(tool_calls) = json_value.get("tool_calls").and_then(|tc| tc.as_array())
                 {
                     if !tool_calls.is_empty() {
+                        eprintln!(
+                            "{}",
+                            format_log_with_color(
+                                LogLevel::Debug,
+                                &format!(
+                                    "Found {} OpenAI-style tool calls in JSON content",
+                                    tool_calls.len()
+                                )
+                            )
+                        );
+
                         let calls = tool_calls
                             .iter()
                             .filter_map(|call| {
@@ -719,6 +934,14 @@ impl ApiClient for OllamaClient {
                     json_value.get("tool").and_then(|t| t.as_str()),
                     json_value.get("args"),
                 ) {
+                    eprintln!(
+                        "{}",
+                        format_log_with_color(
+                            LogLevel::Debug,
+                            &format!("Found simple tool call format with tool: {}", tool_name)
+                        )
+                    );
+
                     let tool_call = ToolCall {
                         id: Some(format!("ollama-tool-{}", rand::random::<u64>())),
                         name: tool_name.to_string(),
@@ -731,6 +954,14 @@ impl ApiClient for OllamaClient {
         }
 
         // If no tool calls were found, just return the content
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Debug,
+                "No tool calls found in response, returning content"
+            )
+        );
+
         Ok((content, None))
     }
 }

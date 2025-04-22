@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+// Model name constants to avoid duplication
+pub const ANTHROPIC_MODEL_NAME: &str = "claude-3-7-sonnet-20250219";
+pub const OPENAI_MODEL_NAME: &str = "gpt-4o";
+pub const GEMINI_MODEL_NAME: &str = "gemini-2.5-pro-exp-03-25";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
     pub name: String,
@@ -24,7 +29,7 @@ pub fn get_available_models() -> Vec<ModelConfig> {
         // Claude 3.7 Sonnet - Anthropic model supporting tool use
         ModelConfig {
             name: "Claude 3.7 Sonnet".into(),
-            file_name: "claude-3-7-sonnet-20250219".into(),
+            file_name: ANTHROPIC_MODEL_NAME.into(),
             description: "Latest Anthropic Claude with advanced code capabilities".into(),
             recommended_for: "Professional code tasks, requires ANTHROPIC_API_KEY".into(),
             supports_agent: true,
@@ -32,7 +37,7 @@ pub fn get_available_models() -> Vec<ModelConfig> {
         // GPT-4o - OpenAI model supporting tool use
         ModelConfig {
             name: "GPT-4o".into(),
-            file_name: "gpt-4o".into(),
+            file_name: OPENAI_MODEL_NAME.into(),
             description: "Latest OpenAI model with advanced tool use capabilities".into(),
             recommended_for: "Professional code tasks, requires OPENAI_API_KEY".into(),
             supports_agent: true,
@@ -40,7 +45,7 @@ pub fn get_available_models() -> Vec<ModelConfig> {
         // Gemini 2.5 Pro - Google model supporting tool use
         ModelConfig {
             name: "Gemini 2.5 Pro".into(),
-            file_name: "gemini-2.5-pro-exp-03-25".into(),
+            file_name: GEMINI_MODEL_NAME.into(),
             description: "Google's latest Gemini model with advanced code capabilities".into(),
             recommended_for: "Professional code tasks, requires GEMINI_API_KEY".into(),
             supports_agent: true,
@@ -86,30 +91,45 @@ fn get_available_ollama_models() -> Result<Vec<crate::apis::ollama::OllamaModelI
         .build()?;
 
     // Try to list models with a timeout - if it fails, we just return an empty list
-    match runtime.block_on(async {
+    let result = runtime.block_on(async {
         // Handle the client creation result explicitly rather than using ?
         match OllamaClient::new(None) {
             Ok(ollama_client) => {
                 // Use a short timeout (2 seconds) to avoid hanging if Ollama is not running
-                let models_future = ollama_client.list_models();
-                tokio::time::timeout(std::time::Duration::from_secs(2), models_future).await
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    ollama_client.list_models(),
+                )
+                .await
+                {
+                    Ok(models_result) => match models_result {
+                        Ok(models) => {
+                            eprintln!("Found {} Ollama models", models.len());
+                            Ok(models)
+                        }
+                        Err(e) => {
+                            eprintln!("Error listing Ollama models: {}", e);
+                            Err(anyhow::anyhow!("Failed to list Ollama models: {}", e))
+                        }
+                    },
+                    Err(_) => {
+                        eprintln!("Timeout waiting for Ollama - likely not running");
+                        Err(anyhow::anyhow!("Timeout waiting for Ollama"))
+                    }
+                }
             }
             Err(e) => {
-                // Return as a timeout error type to match the outer result type
-                Ok(Err(anyhow::anyhow!(
-                    "Failed to create Ollama client: {}",
-                    e
-                )))
+                eprintln!("Failed to create Ollama client: {}", e);
+                Err(anyhow::anyhow!("Failed to create Ollama client: {}", e))
             }
         }
-    }) {
-        Ok(Ok(models)) => Ok(models),
-        Err(_) => {
-            // Return empty list on timeout
-            Ok(Vec::new())
-        }
-        Ok(Err(_)) => {
-            // Return empty list on error
+    });
+
+    // Return empty list on any error
+    match result {
+        Ok(models) => Ok(models),
+        Err(e) => {
+            eprintln!("Returning empty models list due to error: {}", e);
             Ok(Vec::new())
         }
     }
