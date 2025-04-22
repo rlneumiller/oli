@@ -143,22 +143,31 @@ mod mock_initialization {
     use super::*;
     use anyhow::Result;
 
-    // Test that checks if we can initialize without an API key
-    // This is more of a compilation test than a runtime test
+    // Test that checks initialization behavior without API keys
     #[tokio::test]
     async fn test_initialize_signature() -> Result<()> {
-        let mut agent = Agent::new(LLMProvider::Anthropic);
-
-        // Since we removed the runtime creation that was causing a panic,
-        // we need to call the method directly and expect it to fail or panic
-        // when attempting to initialize without proper API keys
-        let result = agent.initialize().await;
-
-        // We expect this to fail in a real environment without mocks/API keys
+        // Test cloud providers that require API keys (should fail without keys)
+        let mut cloud_agent = Agent::new(LLMProvider::Anthropic);
+        let cloud_result = cloud_agent.initialize().await;
         assert!(
-            result.is_err(),
-            "Expected the method to fail without API keys, but it succeeded."
+            cloud_result.is_err(),
+            "Expected cloud provider to fail without API keys, but it succeeded."
         );
+
+        // Test Ollama which should work without API keys
+        let mut ollama_agent = Agent::new(LLMProvider::Ollama);
+        let ollama_result = ollama_agent.initialize().await;
+
+        // For Ollama, we accept either outcome. Some setups might have Ollama running,
+        // others might not. The important part is that the error, if any, is not related
+        // to missing API keys but rather to connectivity.
+        if ollama_result.is_err() {
+            let err_msg = format!("{:?}", ollama_result.err().unwrap());
+            assert!(
+                err_msg.contains("Failed to connect") || err_msg.contains("No model specified"),
+                "Ollama should fail due to connectivity issues or missing model, not API keys."
+            );
+        }
 
         Ok(())
     }
