@@ -213,87 +213,12 @@ impl AgentExecutor {
 
             // Execute each tool call and collect results
             for (i, call) in calls.iter().enumerate() {
-                // Format tool call details for better UI display before execution
-                let formatted_tool_details = match call.name.as_str() {
-                    "View" => {
-                        if let (Some(path), Some(offset), Some(limit)) = (
-                            call.arguments.get("file_path").and_then(|v| v.as_str()),
-                            call.arguments.get("offset").and_then(|v| v.as_u64()),
-                            call.arguments.get("limit").and_then(|v| v.as_u64()),
-                        ) {
-                            format!(
-                                "View(file_path: \"{}\", offset: {}, limit: {})…",
-                                path, offset, limit
-                            )
-                        } else if let Some(path) =
-                            call.arguments.get("file_path").and_then(|v| v.as_str())
-                        {
-                            format!("View(file_path: \"{}\")…", path)
-                        } else {
-                            format!("View({:?})…", call.arguments)
-                        }
-                    }
-                    "GlobTool" => {
-                        if let (Some(pattern), Some(path)) = (
-                            call.arguments.get("pattern").and_then(|v| v.as_str()),
-                            call.arguments.get("path").and_then(|v| v.as_str()),
-                        ) {
-                            format!("GlobTool(pattern: \"{}\", path: \"{}\")…", pattern, path)
-                        } else if let Some(pattern) =
-                            call.arguments.get("pattern").and_then(|v| v.as_str())
-                        {
-                            format!("GlobTool(pattern: \"{}\")…", pattern)
-                        } else {
-                            format!("GlobTool({:?})…", call.arguments)
-                        }
-                    }
-                    "GrepTool" => {
-                        if let Some(pattern) =
-                            call.arguments.get("pattern").and_then(|v| v.as_str())
-                        {
-                            format!("GrepTool(pattern: \"{}\")…", pattern)
-                        } else {
-                            format!("GrepTool({:?})…", call.arguments)
-                        }
-                    }
-                    "LS" => {
-                        if let Some(path) = call.arguments.get("path").and_then(|v| v.as_str()) {
-                            format!("LS(path: \"{}\")…", path)
-                        } else {
-                            format!("LS({:?})…", call.arguments)
-                        }
-                    }
-                    "Edit" | "Replace" => {
-                        if let Some(path) = call.arguments.get("file_path").and_then(|v| v.as_str())
-                        {
-                            format!("{} file: \"{}\"…", call.name, path)
-                        } else {
-                            format!("{} {:?}…", call.name, call.arguments)
-                        }
-                    }
-                    "Bash" => {
-                        if let Some(cmd) = call.arguments.get("command").and_then(|v| v.as_str()) {
-                            if cmd.len() > 40 {
-                                format!("Bash(command: \"{}...\")…", &cmd[..40])
-                            } else {
-                                format!("Bash(command: \"{}\")…", cmd)
-                            }
-                        } else {
-                            format!("Bash({:?})…", call.arguments)
-                        }
-                    }
-                    _ => format!("{} {:?}…", call.name, call.arguments),
-                };
-
-                // Send the formatted tool details to UI before execution
+                // Send basic tool execution message to UI
                 if let Some(sender) = &self.progress_sender {
                     let _ = sender
-                        // Use orange color for tool execution in progress
-                        .send(format!("⏺ {}", formatted_tool_details))
+                        .send(format!("⏺ [{}] Executing {}...", call.name, call.name))
                         .await;
                 }
-
-                // Use the previously formatted tool details for showing execution
 
                 // Parse the tool call into our enum
                 let tool_call: ToolCall = match parse_tool_call(&call.name, &call.arguments) {
@@ -376,9 +301,9 @@ impl AgentExecutor {
                             let _ = sender.send("[TOOL_EXECUTED]".to_string()).await;
                         }
 
-                        // Format successful tool result with detailed output
+                        // Send a simple completion notification
                         if let Some(sender) = &self.progress_sender {
-                            // Send a separate explicit success status notification
+                            // Send a success notification
                             let _ = sender
                                 .send(format!(
                                     "[completed] Tool {} executed successfully",
@@ -386,246 +311,16 @@ impl AgentExecutor {
                                 ))
                                 .await;
 
-                            // Create a preview of the output
-                            let preview = if output.len() > 200 {
-                                format!(
-                                    "{}... [+{} more chars]",
-                                    &output[..200],
-                                    output.len() - 200
-                                )
-                            } else {
-                                output.clone()
-                            };
-
-                            // For file outputs, prepare a structured display for the UI
-                            let formatted_result = match call.name.as_str() {
-                                "View" => {
-                                    if let Some(path) =
-                                        call.arguments.get("file_path").and_then(|v| v.as_str())
-                                    {
-                                        // Display path and first few content lines
-                                        let output_lines: Vec<&str> = output.lines().collect();
-                                        let header =
-                                            format!("View(file_path: \"{}\") → Result:", path);
-
-                                        // Format first few lines with line numbers
-                                        if output_lines.len() <= 2 {
-                                            format!("{}\n  ⎿ {}", header, output)
-                                        } else {
-                                            let mut formatted = header.to_string();
-                                            for (i, line) in output_lines.iter().take(3).enumerate()
-                                            {
-                                                formatted.push_str(&format!("\n  ⎿ {}", line));
-                                                if i == 2 && output_lines.len() > 3 {
-                                                    formatted.push_str(&format!(
-                                                        "\n  ... [{} more lines]",
-                                                        output_lines.len() - 3
-                                                    ));
-                                                }
-                                            }
-                                            formatted
-                                        }
-                                    } else {
-                                        format!("Tool result: {}", preview)
-                                    }
-                                }
-                                "GlobTool" => {
-                                    let pattern = call
-                                        .arguments
-                                        .get("pattern")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("unknown");
-
-                                    // Tool name for display
-                                    let name = "Glob";
-
-                                    // Get the file paths from the output, skipping the header
-                                    let file_paths: Vec<String> = output
-                                        .lines()
-                                        .filter(|line| line.contains(". "))
-                                        .map(|line| {
-                                            // Extract just the path part after the numbering
-                                            line.split_once(". ")
-                                                .map(|(_, path)| path.trim().to_string())
-                                                .unwrap_or_else(|| line.trim().to_string())
-                                        })
-                                        .collect();
-
-                                    let file_count = file_paths.len();
-
-                                    // Create a cleaner format that works better with TUI rendering
-                                    if file_count == 0 {
-                                        format!(
-                                            "{}(pattern: \"{}\") → No files found",
-                                            name, pattern
-                                        )
-                                    } else {
-                                        let mut formatted = format!(
-                                            "{}(pattern: \"{}\") → Found {} files",
-                                            name, pattern, file_count
-                                        );
-
-                                        // Show first 3 files at most
-                                        for path in file_paths.iter().take(3) {
-                                            formatted.push_str(&format!("\n  ⎿ {}", path));
-                                        }
-
-                                        // Add count of remaining files if needed
-                                        if file_count > 3 {
-                                            formatted.push_str(&format!(
-                                                "\n  ... [+{} more files]",
-                                                file_count - 3
-                                            ));
-                                        }
-
-                                        formatted
-                                    }
-                                }
-                                "GrepTool" => {
-                                    let pattern = call
-                                        .arguments
-                                        .get("pattern")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("unknown");
-
-                                    // First line contains count of matches
-                                    let first_line = output.lines().next().unwrap_or("");
-                                    let match_count = if first_line.starts_with("Found ") {
-                                        first_line
-                                            .split_whitespace()
-                                            .nth(1)
-                                            .and_then(|s| s.parse::<usize>().ok())
-                                            .unwrap_or(0)
-                                    } else {
-                                        output.lines().filter(|l| l.contains(":")).count()
-                                    };
-
-                                    // Format the grep matches for better display
-                                    if match_count == 0 {
-                                        format!("Grep(pattern: \"{}\") → No matches found", pattern)
-                                    } else {
-                                        let mut formatted = format!(
-                                            "Grep(pattern: \"{}\") → Found {} matches",
-                                            pattern, match_count
-                                        );
-
-                                        // Extract and format the grep matches (path:line:content)
-                                        let matches: Vec<&str> = output
-                                            .lines()
-                                            .filter(|line| line.contains(":"))
-                                            .take(3)
-                                            .collect();
-
-                                        for grep_match in matches {
-                                            formatted.push_str(&format!("\n  ⎿ {}", grep_match));
-                                        }
-
-                                        // Add count of remaining matches if needed
-                                        if match_count > 3 {
-                                            formatted.push_str(&format!(
-                                                "\n  ... [+{} more matches]",
-                                                match_count - 3
-                                            ));
-                                        }
-
-                                        formatted
-                                    }
-                                }
-                                "LS" => {
-                                    if let Some(path) =
-                                        call.arguments.get("path").and_then(|v| v.as_str())
-                                    {
-                                        let file_count =
-                                            output.lines().filter(|l| l.contains("FILE")).count();
-                                        let dir_count =
-                                            output.lines().filter(|l| l.contains("DIR")).count();
-                                        format!("LS(path: \"{}\") → Listed {} items ({} files, {} dirs)",
-                                            path, file_count + dir_count, file_count, dir_count)
-                                    } else {
-                                        format!("Tool result: {}", preview)
-                                    }
-                                }
-                                "Edit" | "Replace" => {
-                                    if let Some(_path) =
-                                        call.arguments.get("file_path").and_then(|v| v.as_str())
-                                    {
-                                        // The output is now already formatted as a diff, directly pass it through
-                                        // We return multiple lines that show colored diff output
-                                        output.clone()
-                                    } else {
-                                        format!("Tool result: {}", preview)
-                                    }
-                                }
-                                "Bash" => {
-                                    if let Some(cmd) =
-                                        call.arguments.get("command").and_then(|v| v.as_str())
-                                    {
-                                        let cmd_preview = if cmd.len() > 30 {
-                                            format!("{}...", &cmd[..30])
-                                        } else {
-                                            cmd.to_string()
-                                        };
-
-                                        // Format command output with line counts
-                                        let output_lines = output.lines().count();
-                                        if output_lines > 5 {
-                                            let mut formatted = format!(
-                                                "Bash(command: \"{}\") → {} lines of output:",
-                                                cmd_preview, output_lines
-                                            );
-                                            for line in output.lines().take(3) {
-                                                formatted.push_str(&format!("\n  ⎿ {}", line));
-                                            }
-                                            formatted.push_str(&format!(
-                                                "\n  ... [{} more lines]",
-                                                output_lines - 3
-                                            ));
-                                            formatted
-                                        } else if output_lines > 0 {
-                                            let mut formatted = format!(
-                                                "Bash(command: \"{}\") → Output:",
-                                                cmd_preview
-                                            );
-                                            for line in output.lines() {
-                                                formatted.push_str(&format!("\n  ⎿ {}", line));
-                                            }
-                                            formatted
-                                        } else {
-                                            format!(
-                                                "Bash(command: \"{}\") → No output",
-                                                cmd_preview
-                                            )
-                                        }
-                                    } else {
-                                        format!("Tool result: {}", preview)
-                                    }
-                                }
-                                _ => format!("Tool result: {}", preview),
-                            };
-
-                            // Replace newlines with proper message breaks to ensure they display properly in TUI
-                            let formatted_lines: Vec<&str> = formatted_result.split('\n').collect();
-
-                            if formatted_lines.len() <= 1 {
-                                // Single line - just send it directly
-                                let _ = sender
-                                    .send(format!("⏺ [completed] {}", formatted_result))
-                                    .await;
-                            } else {
-                                // For multiline output, break into separate messages for better display
-                                // Send first line with the [completed] prefix
-                                let _ = sender
-                                    .send(format!("⏺ [completed] {}", formatted_lines[0]))
-                                    .await;
-
-                                // Send remaining lines with proper indentation
-                                for line in &formatted_lines[1..] {
-                                    let _ = sender.send(format!("  {}", line)).await;
+                            // For View tool, send the output directly
+                            if call.name == "View" {
+                                if let Some(path) =
+                                    call.arguments.get("file_path").and_then(|v| v.as_str())
+                                {
+                                    let _ = sender
+                                        .send(format!("View(file_path: \"{}\") → Result:", path))
+                                        .await;
                                 }
                             }
-
-                            // Small delay to allow UI update
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                         }
                         output
                     }
