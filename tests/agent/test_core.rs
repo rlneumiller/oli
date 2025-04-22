@@ -175,8 +175,10 @@ mod mock_initialization {
 
         // Should compile - this checks the method signature is as expected
         // The actual implementation will fail without mock providers
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| async move {
-            let _ = agent.initialize_with_api_key("test_key".to_string()).await;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tokio::runtime::Runtime::new().unwrap().block_on(async {
+                let _ = agent.initialize_with_api_key("test_key".to_string()).await;
+            })
         }));
 
         // We expect this to fail or panic in a real environment without mocks
