@@ -293,12 +293,25 @@ const App: React.FC<AppProps> = ({ backend }) => {
   }, [backend]);
 
   // Handle model selection - memoized to prevent unnecessary rerenders
-  const handleModelSelect = useCallback((index: number) => {
-    setState((prev) => ({
-      ...prev,
-      selectedModel: index,
-    }));
-  }, []);
+  const handleModelSelect = useCallback(
+    (index: number) => {
+      // Update local state for the UI
+      setState((prev) => ({
+        ...prev,
+        selectedModel: index,
+      }));
+
+      // Notify the backend about the model change if connected
+      if (backend) {
+        backend
+          .call("set_selected_model", { model_index: index })
+          .catch((error) => {
+            console.error("Failed to update selected model on backend:", error);
+          });
+      }
+    },
+    [backend],
+  );
 
   // Memoize the clear history handler
   const handleClearHistory = useCallback(() => {
@@ -355,12 +368,26 @@ const App: React.FC<AppProps> = ({ backend }) => {
   const handleModelConfirm = useCallback(() => {
     // Only proceed if we have models and backend is connected
     if (state.models.length > 0 && state.backendConnected) {
-      setState((prev) => ({
-        ...prev,
-        appMode: "chat",
-      }));
+      // Send the final model selection to the backend
+      backend
+        .call("set_selected_model", { model_index: state.selectedModel })
+        .then(() => {
+          // Then switch to chat mode
+          setState((prev) => ({
+            ...prev,
+            appMode: "chat",
+          }));
+        })
+        .catch((error) => {
+          console.error("Failed to set model on backend:", error);
+          // Still switch to chat mode even if there was an error
+          setState((prev) => ({
+            ...prev,
+            appMode: "chat",
+          }));
+        });
     }
-  }, [state.models, state.backendConnected]);
+  }, [state.models, state.backendConnected, state.selectedModel, backend]);
 
   // Memoize the toggle shortcuts handler
   const handleToggleShortcuts = useCallback(() => {

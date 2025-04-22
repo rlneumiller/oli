@@ -3,7 +3,7 @@ use crate::apis::api_client::{ApiClient, SessionManager};
 use crate::app::history::ConversationSummary;
 use crate::app::logger::{format_log_with_color, LogLevel};
 use crate::models;
-use crate::models::ModelConfig;
+use crate::models::{ModelConfig, ANTHROPIC_MODEL_NAME, GEMINI_MODEL_NAME, OPENAI_MODEL_NAME};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -278,7 +278,7 @@ impl App {
     }
 
     /// Query the model with the given prompt
-    pub fn query_model(&mut self, prompt: &str) -> Result<String> {
+    pub fn query_model(&mut self, prompt: &str, model_index: Option<usize>) -> Result<String> {
         // First gather all the info we need
 
         // Create a task for this query
@@ -304,7 +304,14 @@ impl App {
         // Clone and collect all necessary data before any async calls
 
         // Use model_index from parameter (default to first model)
-        let model_index = 0; // This should come from the frontend selection
+        let model_index = model_index.unwrap_or(0);
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Info,
+                &format!("Using model at index: {}", model_index)
+            )
+        );
         let model = match self.available_models.get(model_index) {
             Some(m) => m,
             None => return Err(anyhow::anyhow!("No models available")),
@@ -320,17 +327,64 @@ impl App {
             format_log_with_color(LogLevel::Info, &format!("Using model: {}", model_name))
         );
 
-        // API key
+        // Determine which API key to use based on the model name
+        let model_name_lower = model_name.to_lowercase();
+
+        // Get the appropriate API key for the selected model
         let api_key = self.api_key.clone().unwrap_or_else(|| {
-            std::env::var("ANTHROPIC_API_KEY")
-                .or_else(|_| std::env::var("OPENAI_API_KEY"))
-                .or_else(|_| std::env::var("GEMINI_API_KEY"))
-                .unwrap_or_default()
+            if model_name_lower.contains("claude") {
+                std::env::var("ANTHROPIC_API_KEY").unwrap_or_default()
+            } else if model_name_lower.contains("gpt") {
+                std::env::var("OPENAI_API_KEY").unwrap_or_default()
+            } else if model_name_lower.contains("gemini") {
+                std::env::var("GEMINI_API_KEY").unwrap_or_default()
+            } else {
+                // Fallback to trying all available keys
+                std::env::var("ANTHROPIC_API_KEY")
+                    .or_else(|_| std::env::var("OPENAI_API_KEY"))
+                    .or_else(|_| std::env::var("GEMINI_API_KEY"))
+                    .unwrap_or_default()
+            }
         });
 
         if api_key.is_empty() {
-            return Err(anyhow::anyhow!("No API key available. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY environment variable."));
+            let api_env_var = if model_name_lower.contains("claude") {
+                "ANTHROPIC_API_KEY"
+            } else if model_name_lower.contains("gpt") {
+                "OPENAI_API_KEY"
+            } else if model_name_lower.contains("gemini") {
+                "GEMINI_API_KEY"
+            } else {
+                "ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY"
+            };
+
+            return Err(anyhow::anyhow!(
+                "No API key available for {}. Please set {} environment variable.",
+                model_name,
+                api_env_var
+            ));
         }
+
+        // Log API key source (without exposing the key)
+        let api_source = if model_name_lower.contains("claude") {
+            "Anthropic"
+        } else if model_name_lower.contains("gpt") {
+            "OpenAI"
+        } else if model_name_lower.contains("gemini") {
+            "Google"
+        } else if model_name_lower.contains("local") {
+            "Local"
+        } else {
+            "Unknown"
+        };
+
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Info,
+                &format!("Using {} API for model: {}", api_source, model_name)
+            )
+        );
 
         // Session management
         if self.session_manager.is_none() {
@@ -403,11 +457,24 @@ impl App {
                     .unwrap_or_else(|_| ".".to_string())
             });
 
-            // Determine provider from model name
-            let has_anthropic_key =
-                !api_key.is_empty() && std::env::var("ANTHROPIC_API_KEY").is_ok();
-            let has_openai_key = !api_key.is_empty() && std::env::var("OPENAI_API_KEY").is_ok();
-            let has_gemini_key = !api_key.is_empty() && std::env::var("GEMINI_API_KEY").is_ok();
+            // Determine provider based on the selected model
+            let has_anthropic_key = if model_name_lower.contains("claude") {
+                !api_key.is_empty() // If using Claude, we already have the correct API key
+            } else {
+                std::env::var("ANTHROPIC_API_KEY").is_ok() // Otherwise check if we have this key
+            };
+
+            let has_openai_key = if model_name_lower.contains("gpt") {
+                !api_key.is_empty() // If using GPT, we already have the correct API key
+            } else {
+                std::env::var("OPENAI_API_KEY").is_ok() // Otherwise check if we have this key
+            };
+
+            let has_gemini_key = if model_name_lower.contains("gemini") {
+                !api_key.is_empty() // If using Gemini, we already have the correct API key
+            } else {
+                std::env::var("GEMINI_API_KEY").is_ok() // Otherwise check if we have this key
+            };
 
             // Import agent provider enum
             use crate::agent::core::LLMProvider;
@@ -454,21 +521,21 @@ impl App {
             let agent_model = match model_name_lower.as_str() {
                 name if name.contains("claude") => {
                     if has_anthropic_key {
-                        Some("claude-3-7-sonnet-20250219".to_string())
+                        Some(ANTHROPIC_MODEL_NAME.to_string())
                     } else {
                         None
                     }
                 }
                 name if name.contains("gpt") => {
                     if has_openai_key {
-                        Some("gpt-4o".to_string())
+                        Some(OPENAI_MODEL_NAME.to_string())
                     } else {
                         None
                     }
                 }
                 name if name.contains("gemini") => {
                     if has_gemini_key {
-                        Some("gemini-2.5-pro-exp-03-25".to_string())
+                        Some(GEMINI_MODEL_NAME.to_string())
                     } else {
                         None
                     }

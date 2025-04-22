@@ -104,8 +104,8 @@ fn register_model_interaction_apis(
             }),
         ));
 
-        // Query the model
-        match app.query_model(prompt) {
+        // Query the model with the selected model index
+        match app.query_model(prompt, Some(model_index)) {
             Ok(response) => {
                 // Send processing complete event
                 let _ = event_sender.send(("processing_complete".to_string(), json!({})));
@@ -172,6 +172,54 @@ fn register_model_discovery_apis(rpc_server: &mut RpcServer, app: &Arc<Mutex<App
             .collect::<Vec<_>>();
 
         Ok(json!({ "models": models }))
+    });
+
+    // Clone app state for set_selected_model handler
+    let app_clone = app.clone();
+
+    // Register set_selected_model method
+    rpc_server.register_method("set_selected_model", move |params| {
+        // Extract and validate model index from params
+        let model_index = match params.get("model_index").and_then(|v| v.as_u64()) {
+            Some(index) => index as usize,
+            None => {
+                return Err(anyhow::anyhow!(
+                    "Invalid or missing 'model_index' parameter. Expected a non-negative integer."
+                ));
+            }
+        };
+
+        let app = app_clone.lock().unwrap();
+
+        // Validate model index range
+        if model_index >= app.available_models.len() {
+            return Err(anyhow::anyhow!(
+                "Invalid model index: {}. Out of range.",
+                model_index
+            ));
+        }
+
+        // Log model selection
+        let model_name = app.available_models[model_index].name.clone();
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Info,
+                &format!(
+                    "Selected model changed to: {} (index: {})",
+                    model_name, model_index
+                )
+            )
+        );
+
+        Ok(json!({
+            "success": true,
+            "model": {
+                "name": app.available_models[model_index].name,
+                "id": app.available_models[model_index].file_name,
+                "index": model_index
+            }
+        }))
     });
 }
 

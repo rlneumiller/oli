@@ -65,10 +65,7 @@ export class BackendService extends EventEmitter {
         // Handle JSON-RPC notification
         else if ("method" in message) {
           const notification = message as JsonRpcNotification;
-          console.log(
-            `Received notification: ${notification.method}`,
-            notification.params,
-          );
+          // Emit the notification event without logging to console
           this.emit(notification.method, notification.params);
         }
       } catch {
@@ -135,7 +132,6 @@ export class BackendService extends EventEmitter {
 
       // Save subscription
       this.subscriptions.set(eventType, subId);
-      console.log(`Subscribed to ${eventType} events with ID ${subId}`);
       return subId;
     } catch (error) {
       console.error(`Failed to subscribe to ${eventType}:`, error);
@@ -146,7 +142,6 @@ export class BackendService extends EventEmitter {
   // Unsubscribe from an event type
   async unsubscribe(eventType: string): Promise<boolean> {
     if (!this.subscriptions.has(eventType)) {
-      console.log(`Not subscribed to ${eventType}, nothing to unsubscribe`);
       return false; // Not subscribed
     }
 
@@ -160,7 +155,6 @@ export class BackendService extends EventEmitter {
       const success = result.success as boolean;
       if (success) {
         this.subscriptions.delete(eventType);
-        console.log(`Successfully unsubscribed from ${eventType}`);
       }
 
       return success;
@@ -194,7 +188,6 @@ export function spawnBackend(path: string): BackendService {
         version = versionResult.version as string;
       } catch {
         // Don't set version if we can't get it from backend
-        console.error("Failed to get version from backend");
       }
 
       // Success event
