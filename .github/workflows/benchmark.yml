@@ -148,7 +148,34 @@ jobs:
         run: |
           echo "Running tool benchmark tests with model ${{ env.MODEL }}"
 
-          # Set environment variables for the tests
+          # Verify Ollama is running
+          echo "Verifying Ollama server status..."
+          if curl -s http://localhost:11434/api/tags > /dev/null; then
+            echo "✅ Ollama server is running"
+          else
+            echo "❌ Ollama server is not responding"
+            ps aux | grep ollama
+            echo "Checking server logs..."
+            journalctl -u ollama --no-pager -n 50 || echo "No journalctl logs available"
+          fi
+
+          # Always pull the specified model to ensure it's available
+          echo "Pulling model ${{ env.MODEL }}..."
+          ollama pull ${{ env.MODEL }}
+
+          # Verify model exists after pull
+          echo "Verifying model was pulled correctly..."
+          MODEL_NAME="${{ env.MODEL }}"
+          if curl -s http://localhost:11434/api/tags | jq -e ".models[] | select(.name == \"$MODEL_NAME\")" > /dev/null; then
+            echo "✅ Model ${{ env.MODEL }} now available"
+          else
+            echo "❌ Failed to pull model ${{ env.MODEL }} - check Ollama logs"
+            echo "Available models:"
+            curl -s http://localhost:11434/api/tags | jq '.models[].name'
+            echo "Continuing with the requested model anyway..."
+          fi
+
+          # Set environment variables for the tests with debug level logging
           export OLLAMA_API_BASE="http://localhost:11434"
           export DEFAULT_PROVIDER="ollama"
           export DEFAULT_MODEL="${{ env.MODEL }}"
@@ -158,6 +185,12 @@ jobs:
           export OLI_TEST_TIMEOUT="120"
           # Run only a subset of the benchmark tests for speed
           export OLI_BENCHMARK_SUBSET="true"
+          # Enable detailed logging
+          export RUST_LOG="debug,ollama=debug"
+
+          # List the test modules to verify they exist
+          echo "Listing available integration tests..."
+          cargo test --features benchmark --test mod -- --list | grep integration::test_file_read_tool
 
           # Create results directory for benchmark tests
           mkdir -p benchmark_results/tool_tests
@@ -165,22 +198,70 @@ jobs:
           # Optimize Rust compiler settings for faster compilation
           export RUSTFLAGS="-C codegen-units=16 -C opt-level=1"
 
+          # First try a single test to isolate issues
+          echo "Running a single test first to isolate potential issues..."
+          set +e  # Don't exit on error
+          SINGLE_TEST_OUTPUT=$(cargo test --release --features benchmark --test mod -- \
+            integration::test_file_read_tool::test_agent_file_read_basic \
+            --test-threads=1 -- --nocapture 2>&1)
+          SINGLE_TEST_EXIT=$?
+          set -e  # Return to exit on error
+
+          echo "$SINGLE_TEST_OUTPUT" > benchmark_results/tool_tests/single_test_output.txt
+          echo "Single test exit code: $SINGLE_TEST_EXIT"
+
+          if [ $SINGLE_TEST_EXIT -ne 0 ]; then
+            echo "❌ Initial test failed! Checking OllamaClient logs..."
+            grep -A 20 "Using model:" benchmark_results/tool_tests/single_test_output.txt || true
+            grep -A 20 "Sending request to Ollama API" benchmark_results/tool_tests/single_test_output.txt || true
+
+            # Check if the test is failing due to model initialization
+            if grep -q "Failed to initialize agent" benchmark_results/tool_tests/single_test_output.txt; then
+              echo "Agent initialization failed - possible model issue"
+              # Continue anyway for reporting
+            fi
+          else
+            echo "✅ Initial test passed! Proceeding with full test suite."
+          fi
+
           # Run the benchmark tests with optimizations:
           # 1. Use --release for better performance
           # 2. Use --test-threads=1 to avoid overloading the Ollama server
           # 3. Only run the two fastest test cases
+          echo "Running full benchmark test suite..."
           START=$(date +%s%3N)
+          set +e  # Don't exit on error
           RESULT=$(cargo test --release --features benchmark --test mod -- \
             integration::test_file_read_tool::test_agent_file_read_basic \
             integration::test_file_read_tool::test_agent_tool_selection_accuracy \
             --test-threads=1 -- --nocapture 2>&1)
+          TEST_EXIT_CODE=$?
           END=$(date +%s%3N)
           TIME=$((END - START))
+          set -e  # Return to exit on error
 
-          # Save test results
-          echo "$RESULT" > benchmark_results/tool_tests/file_read_tool_results.txt
+          echo "Test exit code: $TEST_EXIT_CODE"
 
-          # Create a summary JSON
+          # Save test results with exit code
+          {
+            echo "$RESULT"
+            echo "---------------------------------------"
+            echo "Test exit code: $TEST_EXIT_CODE"
+            echo "---------------------------------------"
+
+            # Add extra debug info
+            echo "Model used: ${{ env.MODEL }}"
+            echo "OLLAMA_API_BASE: $OLLAMA_API_BASE"
+            echo "Test start timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            echo "Test duration: ${TIME}ms"
+          } > benchmark_results/tool_tests/file_read_tool_results.txt
+
+          # Create a summary JSON with status based on exit code
+          TEST_STATUS="failed"
+          if [ $TEST_EXIT_CODE -eq 0 ]; then
+            TEST_STATUS="completed"
+          fi
+
           cat > benchmark_results/tool_tests/summary.json << EOF
           {
             "metadata": {
@@ -189,27 +270,41 @@ jobs:
               "test_type": "file_read_tool_benchmark"
             },
             "metrics": {
-              "execution_time_ms": $TIME
+              "execution_time_ms": $TIME,
+              "exit_code": $TEST_EXIT_CODE
             },
-            "result": "completed"
+            "result": "$TEST_STATUS"
           }
           EOF
 
           # Output test completion message
-          echo "Tool benchmark tests completed in ${TIME}ms"
+          echo "Tool benchmark tests completed in ${TIME}ms with exit code $TEST_EXIT_CODE ($TEST_STATUS)"
           echo "tool_benchmark_time=${TIME}" >> $GITHUB_OUTPUT
+          # Do not fail the workflow on test failures - we want to generate reports regardless
+          true
 
       - name: Generate summary
         run: |
           # Get tool benchmark time
           TOOL_BENCHMARK_TIME="${{ steps.tool_benchmark.outputs.tool_benchmark_time }}"
 
+          # Get test status from summary.json if it exists
+          if [ -f benchmark_results/tool_tests/summary.json ]; then
+            TEST_STATUS=$(jq -r '.result' benchmark_results/tool_tests/summary.json 2>/dev/null || echo "unknown")
+            TEST_EXIT_CODE=$(jq -r '.metrics.exit_code' benchmark_results/tool_tests/summary.json 2>/dev/null || echo "999")
+          else
+            TEST_STATUS="unknown"
+            TEST_EXIT_CODE="999"
+          fi
+
           # Create summary file
           cat > benchmark_results/summary.json << EOF
           {
             "tool_benchmark_ms": $TOOL_BENCHMARK_TIME,
             "model": "${{ env.MODEL }}",
-            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "status": "$TEST_STATUS",
+            "exit_code": $TEST_EXIT_CODE
           }
           EOF
 
@@ -217,13 +312,39 @@ jobs:
           echo "=== Benchmark Results ==="
           echo "Tool benchmark tests: ${TOOL_BENCHMARK_TIME}ms"
           echo "Model: ${{ env.MODEL }}"
+          echo "Status: $TEST_STATUS (exit code: $TEST_EXIT_CODE)"
 
           # Print tool benchmark summary
           echo "=== Tool Benchmark Results ==="
           if [ -f benchmark_results/tool_tests/file_read_tool_results.txt ]; then
-            grep -E "test |running|result:|BENCHMARK SUCCESS" benchmark_results/tool_tests/file_read_tool_results.txt
+            # Look for specific patterns of interest
+            echo "Test results:"
+            grep -E "test |running|result:|BENCHMARK SUCCESS|panic|error|failed" benchmark_results/tool_tests/file_read_tool_results.txt || echo "No test output matches found"
+
+            # Print agent log snippets if available
+            echo "Agent logs:"
+            grep -A 5 "Agent initialized successfully" benchmark_results/tool_tests/file_read_tool_results.txt || echo "No agent initialization found"
+
+            # Print any Ollama client errors
+            echo "Client errors:"
+            grep -E -A 5 -B 5 "(failed|error|panic)" benchmark_results/tool_tests/file_read_tool_results.txt || echo "No obvious errors found in logs"
           else
             echo "No tool benchmark results found"
+          fi
+
+          # Print single test output if it failed
+          if [ -f benchmark_results/tool_tests/single_test_output.txt ] && [ "$TEST_STATUS" = "failed" ]; then
+            echo "=== Single Test Debug Output ==="
+            grep -E "(Agent|Ollama|error|panic|failed|model)" benchmark_results/tool_tests/single_test_output.txt || echo "No relevant debug output found"
+
+            # Log the full exit code info
+            echo "Final test exit code: $TEST_EXIT_CODE"
+
+            # On failure, suggest possible fixes
+            echo "Possible issues and fixes:"
+            echo "1. Model might not be fully compatible with the function calling format required"
+            echo "2. Ollama server might need more resources or configuration updates"
+            echo "3. Test timeout might be too short for this model - consider increasing OLI_TEST_TIMEOUT"
           fi
 
       - name: Upload results

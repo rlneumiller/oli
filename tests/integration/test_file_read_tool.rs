@@ -27,8 +27,8 @@ async fn test_agent_file_read_basic() {
         env::set_var("OLLAMA_API_BASE", "http://localhost:11434");
     }
 
-    // Get the default model from env or use a fallback
-    let model = env::var("DEFAULT_MODEL").unwrap_or_else(|_| "qwen2.5-coder:7b".to_string());
+    // Get the default model from env with no fallback to ensure we use the model specified in the workflow
+    let model = env::var("DEFAULT_MODEL").expect("DEFAULT_MODEL environment variable must be set");
     println!("Using model: {}", model);
 
     // Create a temporary directory for test files
@@ -117,8 +117,8 @@ async fn test_agent_file_read_with_offset_limit() {
         env::set_var("OLLAMA_API_BASE", "http://localhost:11434");
     }
 
-    // Get the default model from env or use a fallback
-    let model = env::var("DEFAULT_MODEL").unwrap_or_else(|_| "qwen2.5-coder:7b".to_string());
+    // Get the default model from env with no fallback to ensure we use the model specified in the workflow
+    let model = env::var("DEFAULT_MODEL").expect("DEFAULT_MODEL environment variable must be set");
     println!("Using model: {}", model);
 
     // Create a temporary directory for test files
@@ -185,8 +185,8 @@ async fn test_agent_tool_selection_accuracy() {
         env::set_var("OLLAMA_API_BASE", "http://localhost:11434");
     }
 
-    // Get the default model from env or use a fallback
-    let model = env::var("DEFAULT_MODEL").unwrap_or_else(|_| "qwen2.5-coder:7b".to_string());
+    // Get the default model from env with no fallback to ensure we use the model specified in the workflow
+    let model = env::var("DEFAULT_MODEL").expect("DEFAULT_MODEL environment variable must be set");
     println!("Using model: {}", model);
 
     // Create a temporary directory with multiple file types
@@ -273,8 +273,8 @@ async fn test_agent_file_read_errors() {
         env::set_var("OLLAMA_API_BASE", "http://localhost:11434");
     }
 
-    // Get the default model from env or use a fallback
-    let model = env::var("DEFAULT_MODEL").unwrap_or_else(|_| "qwen2.5-coder:7b".to_string());
+    // Get the default model from env with no fallback to ensure we use the model specified in the workflow
+    let model = env::var("DEFAULT_MODEL").expect("DEFAULT_MODEL environment variable must be set");
     println!("Using model: {}", model);
 
     // Create a temporary directory
