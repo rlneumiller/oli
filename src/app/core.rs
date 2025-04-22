@@ -832,6 +832,29 @@ impl App {
             // Initialize the agent
             runtime.block_on(async { agent.initialize_with_api_key(api_key.clone()).await })?;
 
+            // Add conversation history from the session manager to the agent
+            if let Some(session) = &self.session_manager {
+                // Get the existing history from the session manager
+                let session_messages = session.get_messages_for_api();
+
+                // Add each message to the agent's conversation history
+                for message in session_messages {
+                    agent.add_message(message.clone());
+                }
+
+                // Debug log the added history
+                eprintln!(
+                    "{}",
+                    format_log_with_color(
+                        LogLevel::Debug,
+                        &format!(
+                            "Added {} messages from session to agent",
+                            session.message_count()
+                        )
+                    )
+                );
+            }
+
             // Execute the agent with the prompt
             let response = runtime.block_on(async { agent.execute(prompt).await })?;
 

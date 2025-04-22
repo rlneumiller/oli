@@ -77,6 +77,11 @@ impl Agent {
         self.conversation_history.push(message);
     }
 
+    /// Get a clone of the conversation history (for testing)
+    pub fn get_conversation_history_for_test(&self) -> Vec<Message> {
+        self.conversation_history.clone()
+    }
+
     pub async fn initialize(&mut self) -> Result<()> {
         // Create the API client based on provider and model
         self.api_client = Some(match self.provider {
