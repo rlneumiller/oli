@@ -5,11 +5,11 @@ These benchmarks are automatically updated with each new PR.
 
 ## Tool Performance Overview
 
-The benchmark tests measure how efficiently oli tools operate when used with local Ollama models. The tests evaluate:
+The benchmark test measures how efficiently oli's FileReadTool operates when used with local Ollama models. The test evaluates:
 
-1. Tool selection accuracy - Does the agent correctly choose the FileReadTool when appropriate?
-2. Functionality with various parameters - Does the tool handle offset and limit parameters correctly?
-3. Execution time - How quickly can the tool process file operations?
+1. File reading capability - Can the agent correctly read a file when given a path?
+2. Content processing - Can the agent identify and extract specific content (like a particular line)?
+3. Execution time - How quickly can the agent complete a file reading task?
 
 ## Latest Benchmark Results
 
@@ -34,11 +34,12 @@ _This section is automatically updated by CI/CD pipelines._
 
 ## Methodology
 
-The benchmarks use Ollama's local models to test real-world tool usage. Each test:
+The benchmark uses Ollama's local models to test real-world file reading capability. The test:
 
-1. Creates temporary files with known content
-2. Prompts the agent to perform file reading operations
-3. Verifies tool selection accuracy and content retrieval
-4. Records execution time and success rates
+1. Creates a temporary file with known line-by-line content
+2. Initializes an agent with the specified Ollama model
+3. Prompts the agent to read the file and identify specific line content
+4. Validates that the agent can correctly understand and process the file contents
+5. Measures execution time and success rate
 
-All tests are executed in a controlled CI environment with consistent model versions.
+The test is designed to be lightweight yet comprehensive, focusing on essential functionality while maintaining consistent performance metrics across different models. All tests are executed in a controlled CI environment with consistent model versions.

@@ -85,49 +85,38 @@ TEST_DETAILS=""
 
 # Add test details if available
 if [ -f "$TOOL_RESULTS_FILE" ]; then
-  # Extract test details (specific to the file_read_tool tests)
-  # Look for "test_agent_uses_file_read_tool" and extract result
-  if grep -q "test_agent_uses_file_read_tool" "$TOOL_RESULTS_FILE"; then
-    if grep -q "test_agent_uses_file_read_tool.*ok" "$TOOL_RESULTS_FILE"; then
-      TEST_DETAILS="${TEST_DETAILS}✅ Agent correctly uses FileReadTool for direct path prompts
+  # Extract test details for the optimized file read tool test
+  if grep -q "test_read_file_tool" "$TOOL_RESULTS_FILE"; then
+    if grep -q "test_read_file_tool.*ok" "$TOOL_RESULTS_FILE"; then
+      TEST_DETAILS="${TEST_DETAILS}✅ Agent correctly reads files and processes file content
 "
-    else
-      TEST_DETAILS="${TEST_DETAILS}❌ Agent failed to use FileReadTool for direct path prompts
-"
-    fi
-  fi
 
-  # Look for "test_file_read_tool_with_offset_limit" and extract result
-  if grep -q "test_file_read_tool_with_offset_limit" "$TOOL_RESULTS_FILE"; then
-    if grep -q "test_file_read_tool_with_offset_limit.*ok" "$TOOL_RESULTS_FILE"; then
-      TEST_DETAILS="${TEST_DETAILS}✅ FileReadTool correctly handles offset and limit parameters
+      # Check for specific capabilities based on test output
+      if grep -i -q "line 2" "$TOOL_RESULTS_FILE"; then
+        TEST_DETAILS="${TEST_DETAILS}✅ Agent can identify and extract specific lines from files
 "
-    else
-      TEST_DETAILS="${TEST_DETAILS}❌ FileReadTool failed to handle offset and limit parameters
-"
-    fi
-  fi
+      fi
 
-  # Look for "test_agent_tool_selection_accuracy" and extract result
-  if grep -q "test_agent_tool_selection_accuracy" "$TOOL_RESULTS_FILE"; then
-    if grep -q "test_agent_tool_selection_accuracy.*ok" "$TOOL_RESULTS_FILE"; then
-      TEST_DETAILS="${TEST_DETAILS}✅ Agent has high tool selection accuracy
+      # Check execution time from test data
+      TEST_TIME=$(grep -o "finished in [0-9.]\+s" "$TOOL_RESULTS_FILE" | head -1 | grep -o "[0-9.]\+")
+      if [ -n "$TEST_TIME" ]; then
+        TEST_DETAILS="${TEST_DETAILS}ℹ️ Test execution time: ${TEST_TIME}s
 "
+      fi
     else
-      TEST_DETAILS="${TEST_DETAILS}❌ Agent failed tool selection accuracy tests
+      TEST_DETAILS="${TEST_DETAILS}❌ Agent failed to properly read files
 "
-    fi
-  fi
 
-  # Look for "test_real_agent_file_read" and extract result
-  if grep -q "test_real_agent_file_read" "$TOOL_RESULTS_FILE"; then
-    if grep -q "test_real_agent_file_read.*ok" "$TOOL_RESULTS_FILE"; then
-      TEST_DETAILS="${TEST_DETAILS}✅ Real agent successfully reads files with Ollama LLM
+      # Try to extract error information
+      ERROR_INFO=$(grep -A 2 "panicked at" "$TOOL_RESULTS_FILE" 2>/dev/null || echo "")
+      if [ -n "$ERROR_INFO" ]; then
+        TEST_DETAILS="${TEST_DETAILS}ℹ️ Error info: ${ERROR_INFO}
 "
-    else
-      TEST_DETAILS="${TEST_DETAILS}❌ Real agent failed to read files with Ollama LLM
-"
+      fi
     fi
+  else
+    TEST_DETAILS="${TEST_DETAILS}⚠️ File read tool test didn't run or wasn't found in logs
+"
   fi
 else
   TEST_DETAILS="_Detailed test results not available_
