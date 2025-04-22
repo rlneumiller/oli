@@ -6,10 +6,6 @@ on:
         description: 'Model to benchmark'
         default: 'qwen2.5-coder:7b'
         required: true
-      prompt:
-        description: 'Test prompt to send'
-        default: 'Hello, how are you today?'
-        required: true
   push:
     branches: [main]
     paths:
@@ -20,7 +16,7 @@ on:
       - '.github/workflows/benchmark.yml'
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
   actions: read
 
