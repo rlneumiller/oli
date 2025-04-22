@@ -193,7 +193,10 @@ fn register_model_discovery_apis(rpc_server: &mut RpcServer, app: &Arc<Mutex<App
 
         // Validate model index range
         if model_index >= app.available_models.len() {
-            return Err(anyhow::anyhow!("Invalid model index: {}. Out of range.", model_index));
+            return Err(anyhow::anyhow!(
+                "Invalid model index: {}. Out of range.",
+                model_index
+            ));
         }
 
         // Log model selection
