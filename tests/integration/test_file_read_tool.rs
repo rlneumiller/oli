@@ -1,6 +1,6 @@
 use anyhow::Result;
 use oli_server::agent::core::{Agent, LLMProvider};
-use oli_server::agent::tools::{ToolCall, ViewParams};
+use oli_server::agent::tools::{FileReadToolParams, ToolCall};
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -318,10 +318,10 @@ impl MockExecutor {
 
         // Actually execute the tool for real testing - using View internally
         // since that's the actual tool name in the implementation
-        let tool_call = ToolCall::View(ViewParams {
+        let tool_call = ToolCall::FileReadTool(FileReadToolParams {
             file_path: file_path.to_string_lossy().to_string(),
-            offset,
-            limit,
+            offset: offset.unwrap_or(0),
+            limit: limit.unwrap_or(2000),
         });
 
         // Execute the tool call
