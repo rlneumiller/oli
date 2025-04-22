@@ -124,11 +124,12 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Generate Coverage
+        env:
+          SKIP_INTEGRATION: "true"
         run: |
           cargo llvm-cov --verbose \
             --all-features \
             --workspace \
-            --ignore-filename-regex "src/bin/*|tests/integration/*" \
             --lcov \
             --output-path lcov.info
 

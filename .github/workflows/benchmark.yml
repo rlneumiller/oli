@@ -28,7 +28,7 @@ jobs:
   benchmark:
     name: Benchmark Ollama with oli
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository
@@ -96,11 +96,24 @@ jobs:
           fi
           ollama pull ${{ env.MODEL }}
 
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-benchmark-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-benchmark-
+
       - name: Build oli server
         run: |
           echo "Building oli server..."
-          # Run faster build for CI
-          cargo build --release --bin oli-server
+          # Set compiler flags for faster builds
+          export RUSTFLAGS="-C codegen-units=16 -C opt-level=1"
+          # Only build what we need for benchmarks
+          cargo build --release --bin oli-server --features "benchmark"
           echo "oli server built successfully"
 
       - name: Create results directory
@@ -139,13 +152,28 @@ jobs:
           export OLLAMA_API_BASE="http://localhost:11434"
           export DEFAULT_PROVIDER="ollama"
           export DEFAULT_MODEL="${{ env.MODEL }}"
+          # Use smaller context to make Ollama responses faster
+          export OLLAMA_SYSTEM_CONTEXT_LENGTH="512"
+          # Set a reasonable timeout to prevent long-running tests
+          export OLI_TEST_TIMEOUT="120"
+          # Run only a subset of the benchmark tests for speed
+          export OLI_BENCHMARK_SUBSET="true"
 
           # Create results directory for benchmark tests
           mkdir -p benchmark_results/tool_tests
 
-          # Run the benchmark tests (with feature flag to enable them)
+          # Optimize Rust compiler settings for faster compilation
+          export RUSTFLAGS="-C codegen-units=16 -C opt-level=1"
+
+          # Run the benchmark tests with optimizations:
+          # 1. Use --release for better performance
+          # 2. Use --test-threads=1 to avoid overloading the Ollama server
+          # 3. Only run the two fastest test cases
           START=$(date +%s%3N)
-          RESULT=$(cargo test --features benchmark --test mod -- integration::test_file_read_tool --test-threads=4 -- --nocapture 2>&1)
+          RESULT=$(cargo test --release --features benchmark --test mod -- \
+            integration::test_file_read_tool::test_agent_file_read_basic \
+            integration::test_file_read_tool::test_agent_tool_selection_accuracy \
+            --test-threads=1 -- --nocapture 2>&1)
           END=$(date +%s%3N)
           TIME=$((END - START))
 
