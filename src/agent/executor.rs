@@ -301,41 +301,14 @@ impl AgentExecutor {
                             let _ = sender.send("[TOOL_EXECUTED]".to_string()).await;
                         }
 
-                        // Send a simple completion notification
-                        if let Some(sender) = &self.progress_sender {
-                            // Send a success notification
-                            let _ = sender
-                                .send(format!(
-                                    "[completed] Tool {} executed successfully",
-                                    call.name
-                                ))
-                                .await;
+                        // No need for additional notifications here - tools.rs already sends detailed notifications
+                        // through the RPC system with proper tool status updates
 
-                            // For View tool, send the output directly
-                            if call.name == "View" {
-                                if let Some(path) =
-                                    call.arguments.get("file_path").and_then(|v| v.as_str())
-                                {
-                                    let _ = sender
-                                        .send(format!("View(file_path: \"{}\") → Result:", path))
-                                        .await;
-                                }
-                            }
-                        }
                         output
                     }
                     Err(e) => {
-                        let error_msg = format!("Tool execution failed: {}", e);
-                        if let Some(sender) = &self.progress_sender {
-                            // Send an explicit error notification that the UI can detect
-                            let _ = sender
-                                .send("[error] Tool execution failed".to_string())
-                                .await;
-                            // Then send the detailed error message
-                            let _ = sender.send(format!("⏺ [error] {}", error_msg)).await;
-                        }
-
-                        // Return error message as tool result
+                        // The tools.rs implementation already sends detailed error notifications via RPC
+                        // Return error message as tool result without additional notifications
                         format!("ERROR EXECUTING TOOL: {}", e)
                     }
                 };
@@ -457,10 +430,10 @@ impl AgentExecutor {
 
 fn parse_tool_call(name: &str, args: &Value) -> Result<ToolCall> {
     match name {
-        "View" => {
-            let params =
-                serde_json::from_value(args.clone()).context("Failed to parse View parameters")?;
-            Ok(ToolCall::View(params))
+        "FileReadTool" => {
+            let params = serde_json::from_value(args.clone())
+                .context("Failed to parse FileReadTool parameters")?;
+            Ok(ToolCall::FileReadTool(params))
         }
         "GlobTool" => {
             let params = serde_json::from_value(args.clone())
