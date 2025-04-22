@@ -149,19 +149,15 @@ mod mock_initialization {
     async fn test_initialize_signature() -> Result<()> {
         let mut agent = Agent::new(LLMProvider::Anthropic);
 
-        // Should compile - this checks the method signature is as expected
-        // The actual implementation will fail without mock providers
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tokio::runtime::Runtime::new().unwrap().block_on(async {
-                let _ = agent.initialize().await;
-            })
-        }));
+        // Since we removed the runtime creation that was causing a panic,
+        // we need to call the method directly and expect it to fail or panic
+        // when attempting to initialize without proper API keys
+        let result = agent.initialize().await;
 
-        // We expect this to fail or panic in a real environment without mocks
-        // The point is to verify the signature is correct
+        // We expect this to fail in a real environment without mocks/API keys
         assert!(
             result.is_err(),
-            "Expected the method to fail or panic without mocks, but it succeeded."
+            "Expected the method to fail without API keys, but it succeeded."
         );
 
         Ok(())
@@ -173,18 +169,11 @@ mod mock_initialization {
     async fn test_initialize_with_api_key_signature() -> Result<()> {
         let mut agent = Agent::new(LLMProvider::Anthropic);
 
-        // Should compile - this checks the method signature is as expected
-        // The actual implementation will fail without mock providers
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tokio::runtime::Runtime::new().unwrap().block_on(async {
-                let _ = agent.initialize_with_api_key("test_key".to_string()).await;
-            })
-        }));
+        // Just call the method to verify it compiles and doesn't panic
+        // We don't care about the actual result since this is just testing the API signature
+        let _result = agent.initialize_with_api_key("test_key".to_string()).await;
 
-        // We expect this to fail or panic in a real environment without mocks
-        // The point is to verify the signature is correct
-        assert!(result.is_ok(), "The method call panicked unexpectedly.");
-
+        // If we got here without panicking, the test passes
         Ok(())
     }
 }
