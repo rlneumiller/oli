@@ -122,18 +122,9 @@ impl Agent {
                 ApiClientEnum::OpenAI(Arc::new(client))
             }
             LLMProvider::Ollama => {
-                // For Ollama, we'll use the api_key as the base URL if provided
-                // Otherwise, use the default localhost URL
-                let client = if api_key.trim().is_empty() {
-                    OllamaClient::new(self.model.clone())?
-                } else {
-                    // Treat the "API key" as the base URL for Ollama
-                    let model = self
-                        .model
-                        .clone()
-                        .unwrap_or_else(|| "qwen2.5-coder:14b".to_string());
-                    OllamaClient::with_base_url(model, api_key)?
-                };
+                // For Ollama, we always use the local URL
+                // API keys don't apply to local Ollama instances
+                let client = OllamaClient::new(self.model.clone())?;
                 ApiClientEnum::Ollama(Arc::new(client))
             }
             LLMProvider::Gemini => {
