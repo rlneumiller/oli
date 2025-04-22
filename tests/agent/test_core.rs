@@ -178,7 +178,7 @@ mod mock_initialization {
 
         // We expect this to fail or panic in a real environment without mocks
         // The point is to verify the signature is correct
-        assert!(result.is_err() || result.is_ok());
+        assert!(result.is_ok(), "The method call panicked unexpectedly.");
 
         Ok(())
     }
