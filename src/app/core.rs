@@ -141,7 +141,7 @@ pub enum ToolExecutionStatus {
 pub struct ToolExecution {
     pub id: String,                                   // Unique ID for this tool execution
     pub task_id: String,                              // ID of the parent task
-    pub name: String,                                 // Tool name (View, GlobTool, etc.)
+    pub name: String,                                 // Tool name (FileReadTool, GlobTool, etc.)
     pub status: ToolExecutionStatus,                  // Running, Success, Error
     pub start_time: u64,                              // Start timestamp (milliseconds)
     pub end_time: Option<u64>, // End timestamp (milliseconds), None if still running

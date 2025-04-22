@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolType {
-    View,
+    FileReadTool,
     GlobTool,
     GrepTool,
     LS,
@@ -17,10 +17,10 @@ pub enum ToolType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ViewParams {
+pub struct FileReadToolParams {
     pub file_path: String,
-    pub offset: Option<usize>,
-    pub limit: Option<usize>,
+    pub offset: usize,
+    pub limit: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,7 +73,7 @@ pub struct ParseCodeParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "tool", content = "params")]
 pub enum ToolCall {
-    View(ViewParams),
+    FileReadTool(FileReadToolParams),
     GlobTool(GlobToolParams),
     GrepTool(GrepToolParams),
     LS(LSParams),
@@ -86,12 +86,12 @@ pub enum ToolCall {
 impl ToolCall {
     pub fn execute(&self) -> Result<String> {
         match self {
-            ToolCall::View(params) => {
+            ToolCall::FileReadTool(params) => {
                 // Get the global RPC server to send notification
                 if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
                     // Generate a unique ID for this execution
                     let tool_id = format!(
-                        "view-direct-{}",
+                        "fileread-direct-{}",
                         std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
@@ -104,7 +104,7 @@ impl ToolCall {
                         "execution": {
                             "id": tool_id,
                             "task_id": "direct-task",
-                            "name": "View",
+                            "name": "Read",
                             "status": "running",
                             "startTime": std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
@@ -129,12 +129,8 @@ impl ToolCall {
 
                     // Read the file
                     let path = PathBuf::from(&params.file_path);
-                    let result = if let (Some(offset), Some(limit)) = (params.offset, params.limit)
-                    {
-                        FileOps::read_file_lines(&path, offset, Some(limit))
-                    } else {
-                        FileOps::read_file_with_line_numbers(&path)
-                    };
+                    // Always use read_file_lines with provided offset and limit
+                    let result = FileOps::read_file_lines(&path, params.offset, Some(params.limit));
 
                     // For successful reads, send a completion notification
                     if let Ok(ref content) = result {
@@ -147,7 +143,7 @@ impl ToolCall {
                             "execution": {
                                 "id": tool_id,
                                 "task_id": "direct-task",
-                                "name": "View",
+                                "name": "Read",
                                 "status": "success",
                                 "startTime": std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
@@ -177,7 +173,7 @@ impl ToolCall {
                             "execution": {
                                 "id": tool_id,
                                 "task_id": "direct-task",
-                                "name": "View",
+                                "name": "Read",
                                 "status": "error",
                                 "startTime": std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
@@ -205,11 +201,8 @@ impl ToolCall {
                 } else {
                     // No RPC server available, just read the file
                     let path = PathBuf::from(&params.file_path);
-                    if let (Some(offset), Some(limit)) = (params.offset, params.limit) {
-                        FileOps::read_file_lines(&path, offset, Some(limit))
-                    } else {
-                        FileOps::read_file_with_line_numbers(&path)
-                    }
+                    // Always use read_file_lines with provided offset and limit
+                    FileOps::read_file_lines(&path, params.offset, Some(params.limit))
                 }
             }
             ToolCall::GlobTool(params) => {
@@ -323,7 +316,7 @@ impl ToolCall {
 pub fn get_tool_definitions() -> Vec<Value> {
     vec![
         serde_json::json!({
-            "name": "View",
+            "name": "FileReadTool",
             "description": "Reads a file from the local filesystem. The file_path must be an absolute path.",
             "parameters": {
                 "type": "object",
@@ -334,14 +327,14 @@ pub fn get_tool_definitions() -> Vec<Value> {
                     },
                     "offset": {
                         "type": "integer",
-                        "description": "The line number to start reading from (optional)"
+                        "description": "The line number to start reading from (required, 1-based)"
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "The number of lines to read (optional)"
+                        "description": "The number of lines to read (required)"
                     }
                 },
-                "required": ["file_path"]
+                "required": ["file_path", "offset", "limit"]
             }
         }),
         serde_json::json!({
