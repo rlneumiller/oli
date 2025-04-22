@@ -105,67 +105,11 @@ jobs:
           cargo build --release --bin oli-server
           echo "oli server built successfully"
 
-      - name: Run direct Ollama test
-        id: ollama_test
+      - name: Create results directory
         run: |
           # Create results directory
           mkdir -p benchmark_results
-
-          # Record timestamp
-          timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-          # Initialize results structure
-          cat > benchmark_results/ollama_result.json << EOF
-          {
-            "metadata": {
-              "timestamp": "$timestamp",
-              "model": "${{ env.MODEL }}",
-              "prompt": "${{ env.PROMPT }}",
-              "type": "direct_ollama_call"
-            },
-            "metrics": {
-              "response_time_ms": 0
-            },
-            "response": ""
-          }
-          EOF
-
-          # Run direct Ollama test
-          echo "Running direct test with model ${{ env.MODEL }}"
-          START=$(date +%s%3N)
-          RESPONSE=$(curl -s -X POST http://localhost:11434/api/generate \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"model\": \"${{ env.MODEL }}\",
-              \"prompt\": \"${{ env.PROMPT }}\",
-              \"stream\": false
-            }")
-          END=$(date +%s%3N)
-          TIME=$((END - START))
-
-          # Save raw response for debugging
-          echo "$RESPONSE" > benchmark_results/ollama_raw_response.json
-
-          # Check if response is valid
-          if ! echo "$RESPONSE" | jq -e '.response' > /dev/null; then
-            echo "::error::Failed to get valid response from model"
-            cat benchmark_results/ollama_raw_response.json
-            exit 1
-          fi
-
-          # Extract response text
-          RESPONSE_TEXT=$(echo "$RESPONSE" | jq -r '.response')
-
-          # Update results JSON
-          jq --arg time "$TIME" \
-             --arg response "$RESPONSE_TEXT" \
-             '.metrics.response_time_ms = ($time | tonumber) |
-              .response = $response' \
-             benchmark_results/ollama_result.json > temp.json && mv temp.json benchmark_results/ollama_result.json
-
-          # Output summary
-          echo "Direct Ollama test completed successfully in ${TIME}ms"
-          echo "ollama_time=${TIME}" >> $GITHUB_OUTPUT
+          mkdir -p benchmark_results/tool_tests
 
       # Instead of modifying code, use a temporary API key
       - name: Set API keys for testing
@@ -188,98 +132,7 @@ jobs:
 
           echo "Created test config and dummy API keys"
 
-      - name: Run oli server test
-        id: oli_test
-        run: |
-          # Create results directory
-          mkdir -p benchmark_results
-
-          # Initialize result file
-          timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          cat > benchmark_results/oli_result.json << EOF
-          {
-            "metadata": {
-              "timestamp": "$timestamp",
-              "model": "${{ env.MODEL }}",
-              "prompt": "${{ env.PROMPT }}",
-              "type": "oli_server_call"
-            },
-            "metrics": {
-              "response_time_ms": 0
-            },
-            "response": ""
-          }
-          EOF
-
-          # Create a simple test script
-          cat > run_oli_test.sh << 'EOF'
-          #!/bin/bash
-          PROMPT="$1"
-
-          # Set environment variables
-          export OLLAMA_API_BASE="http://localhost:11434"
-          export DEFAULT_PROVIDER="ollama"
-          export ANTHROPIC_API_KEY="dummy-key-for-testing-only"
-          export OPENAI_API_KEY="dummy-key-for-testing-only"
-          export GEMINI_API_KEY="dummy-key-for-testing-only"
-
-          # Create request with fixed model_index=3 (position of Ollama model in the array)
-          REQUEST_JSON=$(cat <<END
-          {"jsonrpc":"2.0","id":1,"method":"query_model","params":{"prompt":"$PROMPT","model_index":3,"use_agent":false}}
-          END
-          )
-
-          # Run the server with the request
-          echo "$REQUEST_JSON" | ./target/release/oli-server 2>oli_server.log | head -n 1
-          EOF
-
-          # Make the script executable
-          chmod +x run_oli_test.sh
-
-          # Run the test with timing
-          echo "Running test through oli server with model ${{ env.MODEL }}"
-          START=$(date +%s%3N)
-          RESPONSE=$(./run_oli_test.sh "${{ env.PROMPT }}")
-          END=$(date +%s%3N)
-          TIME=$((END - START))
-
-          # Save raw response
-          echo "$RESPONSE" > benchmark_results/oli_raw_response.json
-
-          # Check if response is valid
-          if ! echo "$RESPONSE" | jq -e '.result.response' > /dev/null; then
-            echo "::error::Failed to get valid response from oli server"
-            echo "Raw response:"
-            cat benchmark_results/oli_raw_response.json
-            echo "Server log:"
-            cat oli_server.log
-
-            # Additional diagnostic
-            echo "Directly checking Ollama models:"
-            curl -s http://localhost:11434/api/tags | jq
-
-            # Test a direct request
-            echo "Trying direct Ollama query:"
-            curl -s -X POST http://localhost:11434/api/generate \
-              -H "Content-Type: application/json" \
-              -d "{\"model\":\"${{ env.MODEL }}\",\"prompt\":\"test\",\"stream\":false}" | jq
-
-            exit 1
-          fi
-
-          # Extract response text
-          RESPONSE_TEXT=$(echo "$RESPONSE" | jq -r '.result.response')
-
-          # Update results JSON
-          jq --arg time "$TIME" \
-             --arg response "$RESPONSE_TEXT" \
-             '.metrics.response_time_ms = ($time | tonumber) |
-              .response = $response' \
-             benchmark_results/oli_result.json > temp.json && mv temp.json benchmark_results/oli_result.json
-
-          # Output summary
-          echo "oli server test completed successfully in ${TIME}ms"
-          echo "oli_time=${TIME}" >> $GITHUB_OUTPUT
+      # No oli server test - focusing only on tool benchmark
 
       - name: Run tool benchmark tests
         id: tool_benchmark
@@ -322,24 +175,14 @@ jobs:
           echo "Tool benchmark tests completed in ${TIME}ms"
           echo "tool_benchmark_time=${TIME}" >> $GITHUB_OUTPUT
 
-      - name: Compare results
+      - name: Generate summary
         run: |
-          # Combine results into a summary
-          OLLAMA_TIME=$(jq '.metrics.response_time_ms' benchmark_results/ollama_result.json)
-          OLI_TIME=$(jq '.metrics.response_time_ms' benchmark_results/oli_result.json)
+          # Get tool benchmark time
           TOOL_BENCHMARK_TIME="${{ steps.tool_benchmark.outputs.tool_benchmark_time }}"
-
-          # Calculate overhead
-          OVERHEAD=$((OLI_TIME - OLLAMA_TIME))
-          PERCENT_OVERHEAD=$(echo "scale=2; $OVERHEAD * 100 / $OLLAMA_TIME" | bc)
 
           # Create summary file
           cat > benchmark_results/summary.json << EOF
           {
-            "direct_ollama_ms": $OLLAMA_TIME,
-            "oli_server_ms": $OLI_TIME,
-            "overhead_ms": $OVERHEAD,
-            "overhead_percent": $PERCENT_OVERHEAD,
             "tool_benchmark_ms": $TOOL_BENCHMARK_TIME,
             "model": "${{ env.MODEL }}",
             "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -348,19 +191,13 @@ jobs:
 
           # Output summary to console
           echo "=== Benchmark Results ==="
-          echo "Direct Ollama time: ${OLLAMA_TIME}ms"
-          echo "oli server time: ${OLI_TIME}ms"
-          echo "Overhead: ${OVERHEAD}ms (${PERCENT_OVERHEAD}%)"
           echo "Tool benchmark tests: ${TOOL_BENCHMARK_TIME}ms"
-
-          # Print oli server log for diagnostics
-          echo "=== oli Server Log ==="
-          cat oli_server.log
+          echo "Model: ${{ env.MODEL }}"
 
           # Print tool benchmark summary
           echo "=== Tool Benchmark Results ==="
           if [ -f benchmark_results/tool_tests/file_read_tool_results.txt ]; then
-            cat benchmark_results/tool_tests/file_read_tool_results.txt
+            grep -E "test |running|result:|BENCHMARK SUCCESS" benchmark_results/tool_tests/file_read_tool_results.txt
           else
             echo "No tool benchmark results found"
           fi
@@ -372,9 +209,29 @@ jobs:
           name: benchmark-results
           path: |
             benchmark_results/
-            oli_server.log
             ~/.config/oli/config.json
             benchmark_results/tool_tests/
+
+      - name: Update benchmark documentation
+        if: github.event_name == 'pull_request'
+        run: |
+          # Make script executable
+          chmod +x .github/scripts/update_benchmark_docs.sh
+
+          # Run the script to update benchmark.md
+          .github/scripts/update_benchmark_docs.sh
+
+          # Check if there are changes to commit
+          if git diff --quiet docs/src/benchmark.md; then
+            echo "No changes to benchmark documentation"
+          else
+            echo "Committing updated benchmark documentation"
+            git config --global user.name "GitHub Actions"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            git add docs/src/benchmark.md
+            git commit -m "Update benchmark results [skip ci]"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
 
       - name: Cleanup
         if: always()
