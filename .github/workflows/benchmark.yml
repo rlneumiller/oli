@@ -43,13 +43,11 @@ jobs:
         if: github.event_name != 'workflow_dispatch'
         run: |
           echo "MODEL=qwen2.5-coder:7b" >> $GITHUB_ENV
-          echo "PROMPT=Hello, how are you today?" >> $GITHUB_ENV
 
       - name: Set values from workflow inputs
         if: github.event_name == 'workflow_dispatch'
         run: |
           echo "MODEL=${{ github.event.inputs.model }}" >> $GITHUB_ENV
-          echo "PROMPT=${{ github.event.inputs.prompt }}" >> $GITHUB_ENV
 
       # Cache the Ollama models to avoid redownloading each time
       - name: Cache Ollama models
@@ -132,8 +130,6 @@ jobs:
 
           echo "Created test config and dummy API keys"
 
-      # No oli server test - focusing only on tool benchmark
-
       - name: Run tool benchmark tests
         id: tool_benchmark
         run: |
@@ -149,7 +145,7 @@ jobs:
 
           # Run the benchmark tests (with feature flag to enable them)
           START=$(date +%s%3N)
-          RESULT=$(cargo test --test integration test_file_read_tool --features benchmark -- --nocapture 2>&1)
+          RESULT=$(cargo test --features benchmark --test mod -- integration::test_file_read_tool --test-threads=4 -- --nocapture 2>&1)
           END=$(date +%s%3N)
           TIME=$((END - START))
 
