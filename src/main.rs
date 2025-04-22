@@ -179,14 +179,21 @@ fn register_model_discovery_apis(rpc_server: &mut RpcServer, app: &Arc<Mutex<App
 
     // Register set_selected_model method
     rpc_server.register_method("set_selected_model", move |params| {
-        // Extract model index from params
-        let model_index = params["model_index"].as_u64().unwrap_or(0) as usize;
+        // Extract and validate model index from params
+        let model_index = match params.get("model_index").and_then(|v| v.as_u64()) {
+            Some(index) => index as usize,
+            None => {
+                return Err(anyhow::anyhow!(
+                    "Invalid or missing 'model_index' parameter. Expected a non-negative integer."
+                ));
+            }
+        };
 
         let app = app_clone.lock().unwrap();
 
-        // Validate model index
+        // Validate model index range
         if model_index >= app.available_models.len() {
-            return Err(anyhow::anyhow!("Invalid model index: {}", model_index));
+            return Err(anyhow::anyhow!("Invalid model index: {}. Out of range.", model_index));
         }
 
         // Log model selection
