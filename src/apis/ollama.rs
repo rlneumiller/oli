@@ -182,8 +182,9 @@ impl OllamaClient {
         // but the caller must specify a model when making a request
         let model_name = model.unwrap_or_default();
 
-        // Always use localhost for Ollama - it's a local service
-        let api_base = "http://localhost:11434".to_string();
+        // Check for OLLAMA_API_BASE environment variable first, fallback to localhost
+        let api_base = std::env::var("OLLAMA_API_BASE")
+            .unwrap_or_else(|_| "http://localhost:11434".to_string());
 
         eprintln!("Initializing Ollama client at: {}", api_base);
 
