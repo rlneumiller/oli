@@ -40,42 +40,27 @@ jobs:
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "MODEL=${{ github.event.inputs.model }}" >> $GITHUB_ENV
           else
-            echo "MODEL=qwen2.5-coder:7b" >> $GITHUB_ENV
+            echo "MODEL=qwen2.5-coder:14b" >> $GITHUB_ENV
           fi
 
-      - name: Cache Ollama models
-        id: cache-ollama
-        uses: actions/cache@v4
-        with:
-          path: ~/.ollama/models
-          key: ollama-${{ env.MODEL }}-${{ hashFiles('.github/workflows/benchmark.yml') }}
-
-      - name: Start Ollama server
+      - name: Check Ollama server
         run: |
-          ollama --version
+          # Check if Ollama server is running and accessible
+          echo "Checking connection to Ollama server..."
+          if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+            echo "Ollama server is accessible"
+          else
+            echo "Error: Cannot connect to Ollama server at http://localhost:11434"
+            exit 1
+          fi
 
-          # Create Ollama directory and start server
-          mkdir -p ~/.ollama/models
-          ollama serve &
-          echo "OLLAMA_PID=$!" >> $GITHUB_ENV
-
-          # Wait for server to be ready
-          echo "Waiting for Ollama server to start..."
-          for i in {1..30}; do
-            if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
-              echo "Ollama server started successfully"
-              break
-            fi
-            sleep 1
-            if [ $i -eq 30 ]; then
-              echo "Timed out waiting for Ollama server"
-              exit 1
-            fi
-          done
-
-          # Pull model
-          echo "Pulling model ${{ env.MODEL }}..."
-          ollama pull ${{ env.MODEL }}
+          # Verify the model is available
+          echo "Verifying model ${{ env.MODEL }} is available..."
+          if curl -s http://localhost:11434/api/tags | grep -q "${{ env.MODEL }}"; then
+            echo "Model ${{ env.MODEL }} is available"
+          else
+            echo "Warning: Model ${{ env.MODEL }} may not be available. Continuing anyway as it might be known by a different name."
+          fi
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -207,6 +192,5 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          if [ -n "$OLLAMA_PID" ]; then
-            kill $OLLAMA_PID || true
-          fi
+          # No Ollama process to clean up since we're using an existing server
+          echo "Benchmark completed, no cleanup needed"
