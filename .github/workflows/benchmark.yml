@@ -23,7 +23,7 @@ permissions:
 jobs:
   benchmark:
     name: Benchmark Ollama with oli
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, gpu]
     timeout-minutes: 20
 
     steps:
