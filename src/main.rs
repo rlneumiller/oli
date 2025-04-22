@@ -222,7 +222,6 @@ fn register_conversation_apis(rpc_server: &mut RpcServer, app: &Arc<Mutex<App>>)
 
         // Use the history.rs implementation to clear everything
         // This clears messages, summaries, session manager, and agent history
-        use oli_server::app::history::ContextCompressor;
         app.clear_history();
 
         // Log the action
