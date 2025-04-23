@@ -4,7 +4,7 @@ on:
     inputs:
       model:
         description: 'Model to benchmark'
-        default: 'qwen2.5-coder:7b'
+        default: 'qwen2.5-coder:14b'
         required: true
   push:
     branches: [main]
@@ -19,10 +19,11 @@ permissions:
   contents: write
   id-token: write
   actions: read
+  pull-requests: write
 
 jobs:
   benchmark:
-    name: Benchmark Ollama with oli
+    name: Run Benchmark Tests
     runs-on: [self-hosted, gpu]
     timeout-minutes: 20
 
@@ -125,8 +126,27 @@ jobs:
           TIME=$((END - START))
           set -e  # Return to exit on error
 
-          # Save results
-          echo "$RESULT" > benchmark_results/tool_tests/file_read_tool_results.txt
+          # Extract test details
+          # Count total and successful tests
+          TOTAL_TESTS=$(echo "$RESULT" | grep -c "test integration::test_file_read_tool::" || echo "0")
+          SUCCESS_COUNT=$(echo "$RESULT" | grep "test integration::test_file_read_tool::" | grep -c "ok" || echo "0")
+          TEST_TIME=$(echo "$RESULT" | grep -o "finished in [0-9.]\+s" | head -1 | grep -o "[0-9.]\+" || echo "")
+
+          # Save results as JSON
+          cat > benchmark_results/tool_tests/file_read_tool_results.json << EOF
+          {
+            "raw_output": $(echo "$RESULT" | jq -Rs .),
+            "test_details": {
+              "total_tests": $TOTAL_TESTS,
+              "successful_tests": $SUCCESS_COUNT,
+              "test_time_seconds": "$TEST_TIME",
+              "capabilities": {
+                "reads_files": $(if echo "$RESULT" | grep -q "test_read_file_tool.*ok"; then echo "true"; else echo "false"; fi),
+                "extracts_specific_lines": $(if echo "$RESULT" | grep -i -q "line 2"; then echo "true"; else echo "false"; fi)
+              }
+            }
+          }
+          EOF
 
           # Create summary files
           TEST_STATUS="failed"
@@ -143,7 +163,8 @@ jobs:
             },
             "metrics": {
               "execution_time_ms": $TIME,
-              "exit_code": $TEST_EXIT_CODE
+              "exit_code": $TEST_EXIT_CODE,
+              "success_rate": $(awk "BEGIN {if ($TOTAL_TESTS == 0) print 0; else print ($SUCCESS_COUNT/$TOTAL_TESTS)}")
             },
             "result": "$TEST_STATUS"
           }
@@ -155,7 +176,12 @@ jobs:
             "model": "${{ env.MODEL }}",
             "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
             "status": "$TEST_STATUS",
-            "exit_code": $TEST_EXIT_CODE
+            "exit_code": $TEST_EXIT_CODE,
+            "test_summary": {
+              "total": $TOTAL_TESTS,
+              "passed": $SUCCESS_COUNT,
+              "success_rate": $(awk "BEGIN {print ($SUCCESS_COUNT/$TOTAL_TESTS)}")
+            }
           }
           EOF
 
@@ -164,9 +190,11 @@ jobs:
           echo "Model: ${{ env.MODEL }}"
           echo "Duration: ${TIME}ms"
           echo "Status: $TEST_STATUS (exit code: $TEST_EXIT_CODE)"
+          echo "Tests: $SUCCESS_COUNT/$TOTAL_TESTS passed"
 
           # Store for other steps
           echo "tool_benchmark_time=${TIME}" >> $GITHUB_OUTPUT
+          echo "tool_benchmark_status=${TEST_STATUS}" >> $GITHUB_OUTPUT
 
       - name: Upload results
         uses: actions/upload-artifact@v4
@@ -175,22 +203,51 @@ jobs:
           name: benchmark-results
           path: benchmark_results/
 
-      - name: Update benchmark documentation
-        if: github.event_name == 'pull_request'
+  update-docs:
+    name: Update Benchmark Documentation
+    needs: benchmark
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download benchmark results
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmark_results/
+
+      - name: Generate updated benchmark docs
         run: |
           chmod +x .github/scripts/update_benchmark_docs.sh
           .github/scripts/update_benchmark_docs.sh
 
+      - name: Check for changes
+        id: check_changes
+        run: |
           if ! git diff --quiet docs/src/benchmark.md; then
-            git config --global user.name "GitHub Actions"
-            git config --global user.email "github-actions[bot]@users.noreply.github.com"
-            git add docs/src/benchmark.md
-            git commit -m "Update benchmark results [skip ci]"
-            git push origin HEAD:${{ github.head_ref }}
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
           fi
+
+      - name: Create Pull Request
+        if: steps.check_changes.outputs.has_changes == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.BENCHMARK_PAT }}
+          commit-message: "Update benchmark results"
+          title: "Update benchmark results from latest run"
+          body: |
+            This PR updates the benchmark documentation with the latest results.
+
+            - Generated automatically from benchmark run
+            - Updated docs/src/benchmark.md with latest metrics
+          branch: update-benchmark-docs
+          base: main
+          delete-branch: true
 
       - name: Cleanup
         if: always()
-        run: |
-          # No Ollama process to clean up since we're using an existing server
-          echo "Benchmark completed, no cleanup needed"
+        run: echo "Documentation update complete"
