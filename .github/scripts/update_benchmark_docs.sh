@@ -91,7 +91,7 @@ if [ -f "$TOOL_RESULTS_FILE" ]; then
     READS_FILES=$(jq -r '.test_details.capabilities.reads_files // false' "$TOOL_RESULTS_FILE")
     EXTRACTS_LINES=$(jq -r '.test_details.capabilities.extracts_specific_lines // false' "$TOOL_RESULTS_FILE")
     TEST_TIME=$(jq -r '.test_details.test_time_seconds // ""' "$TOOL_RESULTS_FILE")
-    
+
     # Build bullet checklist (without checkmarks)
     TEST_DETAILS="${TEST_DETAILS}- [ ] Agent correctly reads files and processes file content
 "
@@ -102,7 +102,7 @@ if [ -f "$TOOL_RESULTS_FILE" ]; then
     if [ "$READS_FILES" = "true" ]; then
       TEST_DETAILS=$(echo "$TEST_DETAILS" | sed 's/- \[ \] Agent correctly reads files/- [x] Agent correctly reads files/')
     fi
-    
+
     if [ "$EXTRACTS_LINES" = "true" ]; then
       TEST_DETAILS=$(echo "$TEST_DETAILS" | sed 's/- \[ \] Agent can identify and extract/- [x] Agent can identify and extract/')
     fi
