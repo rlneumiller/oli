@@ -120,22 +120,23 @@ elif [ -f "$TOOL_RESULTS_FILE" ] && jq -e . "$TOOL_RESULTS_FILE" > /dev/null 2>&
   fi
 fi
 
-# Generate the checklist using the actual test function names
+# Generate the checklist using the actual test function names with execution time in brackets if available
 for test in "${ALL_TESTS[@]}"; do
+  test_display="${test}"
+
+  # Add execution time in brackets if available
+  if [ -n "$TEST_TIME" ]; then
+    test_display="${test} (${TEST_TIME}s)"
+  fi
+
   if [[ " ${PASSED_TESTS[*]} " =~ " ${test} " ]]; then
-    TEST_DETAILS="${TEST_DETAILS}- [x] ${test}
+    TEST_DETAILS="${TEST_DETAILS}- [x] ${test_display}
 "
   else
-    TEST_DETAILS="${TEST_DETAILS}- [ ] ${test}
+    TEST_DETAILS="${TEST_DETAILS}- [ ] ${test_display}
 "
   fi
 done
-
-# Add execution time info if available
-if [ -n "$TEST_TIME" ]; then
-  TEST_DETAILS="${TEST_DETAILS}ℹ️ Test execution time: ${TEST_TIME}s
-"
-fi
 
 # Update the benchmark markdown file
 if [ -f "$BENCHMARK_FILE" ]; then

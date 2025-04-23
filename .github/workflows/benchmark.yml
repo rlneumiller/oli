@@ -10,10 +10,12 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/benchmark.yml'
+      - '.github/scripts/update_benchmark_docs.sh'
   pull_request:
     branches: [main]
     paths:
       - '.github/workflows/benchmark.yml'
+      - '.github/scripts/update_benchmark_docs.sh'
 
 permissions:
   contents: write
