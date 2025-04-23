@@ -77,54 +77,63 @@ MARKDOWN_CONTENT="## Latest Results (as of $TIMESTAMP)
 | Tool Benchmark Time | $TOOL_TIME ms |
 | Tool Tests | $TOOL_TEST_RESULTS |
 
-### Tool Performance Summary
+### Tool Performance Tests
 "
 
 # Create a variable for test details with checklist format
 TEST_DETAILS=""
 
-# Add test details if available
-if [ -f "$TOOL_RESULTS_FILE" ]; then
-  # Check if file contains valid JSON
-  if jq -e . "$TOOL_RESULTS_FILE" > /dev/null 2>&1; then
-    # Extract test details from the JSON file
-    READS_FILES=$(jq -r '.test_details.capabilities.reads_files // false' "$TOOL_RESULTS_FILE")
-    EXTRACTS_LINES=$(jq -r '.test_details.capabilities.extracts_specific_lines // false' "$TOOL_RESULTS_FILE")
-    TEST_TIME=$(jq -r '.test_details.test_time_seconds // ""' "$TOOL_RESULTS_FILE")
+# Since there's only one benchmark test file, we'll just hard-code the test name for now
+# This is a simplification for the specific needs of this project
+ALL_TESTS=("test_read_file_tool")
 
-    # Build bullet checklist (without checkmarks)
-    TEST_DETAILS="${TEST_DETAILS}- [ ] Agent correctly reads files and processes file content
-"
-    TEST_DETAILS="${TEST_DETAILS}- [ ] Agent can identify and extract specific lines from files
-"
+# In the future, if more benchmark tests are added, the code below could be used
+# to dynamically extract test names from file patterns
+#
+# BENCHMARK_TEST_DIR="tests"
+# Uncomment these lines when needed:
+# if [ -f "$BENCHMARK_TEST_DIR/integration/test_file_read_tool.rs" ]; then
+#   # Add any other benchmark tests by parsing the test files
+#   grep_result=$(grep -A 1 "cfg_attr.*benchmark.*ignore" "$BENCHMARK_TEST_DIR/integration/test_file_read_tool.rs" | grep -o "async fn test[a-zA-Z0-9_]*" | sed 's/async fn //g')
+#   if [ -n "$grep_result" ]; then
+#     ALL_TESTS+=("$grep_result")
+#   fi
+# fi
 
-    # If tests were successful, mark the corresponding list items
-    if [ "$READS_FILES" = "true" ]; then
-      TEST_DETAILS=$(echo "$TEST_DETAILS" | sed 's/- \[ \] Agent correctly reads files/- [x] Agent correctly reads files/')
-    fi
+# Add test execution time if available
+TEST_TIME=""
+if [ -f "$TOOL_RESULTS_FILE" ] && jq -e . "$TOOL_RESULTS_FILE" > /dev/null 2>&1; then
+  TEST_TIME=$(jq -r '.test_details.test_time_seconds // ""' "$TOOL_RESULTS_FILE")
+fi
 
-    if [ "$EXTRACTS_LINES" = "true" ]; then
-      TEST_DETAILS=$(echo "$TEST_DETAILS" | sed 's/- \[ \] Agent can identify and extract/- [x] Agent can identify and extract/')
-    fi
+# Get the list of passed tests
+PASSED_TESTS=()
 
-    # Add additional items from the benchmark file's Tool Performance Summary
-    TEST_DETAILS="${TEST_DETAILS}- [ ] Agent has high tool selection accuracy
-"
-    TEST_DETAILS="${TEST_DETAILS}- [ ] Real agent successfully reads files with Ollama LLM
-"
+# If all tests passed as indicated in summary file, assume all tests passed
+if [ "$TEST_PASSED" = "$TEST_TOTAL" ] && [ "$TEST_TOTAL" -gt 0 ]; then
+  PASSED_TESTS=("${ALL_TESTS[@]}")
+# Otherwise, if some tests failed, we need to determine which ones passed
+elif [ -f "$TOOL_RESULTS_FILE" ] && jq -e . "$TOOL_RESULTS_FILE" > /dev/null 2>&1; then
+  if [ "$(jq -r '.test_details.capabilities.reads_files // false' "$TOOL_RESULTS_FILE")" = "true" ]; then
+    # If the file reading capability passed, assume the test_read_file_tool passed
+    PASSED_TESTS+=("test_read_file_tool")
+  fi
+fi
 
-    # Add execution time info if available
-    if [ -n "$TEST_TIME" ]; then
-      TEST_DETAILS="${TEST_DETAILS}ℹ️ Test execution time: ${TEST_TIME}s
+# Generate the checklist using the actual test function names
+for test in "${ALL_TESTS[@]}"; do
+  if [[ " ${PASSED_TESTS[*]} " =~ " ${test} " ]]; then
+    TEST_DETAILS="${TEST_DETAILS}- [x] ${test}
 "
-    fi
   else
-    # Fallback if JSON is invalid
-    TEST_DETAILS="${TEST_DETAILS}- [ ] File read tool tests were executed but results format is invalid
+    TEST_DETAILS="${TEST_DETAILS}- [ ] ${test}
 "
   fi
-else
-  TEST_DETAILS="_Detailed test results not available_
+done
+
+# Add execution time info if available
+if [ -n "$TEST_TIME" ]; then
+  TEST_DETAILS="${TEST_DETAILS}ℹ️ Test execution time: ${TEST_TIME}s
 "
 fi
 
