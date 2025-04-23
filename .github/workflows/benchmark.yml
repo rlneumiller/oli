@@ -4,7 +4,7 @@ on:
     inputs:
       model:
         description: 'Model to benchmark'
-        default: 'qwen2.5-coder:7b'
+        default: 'qwen2.5-coder:14b'
         required: true
   push:
     branches: [main]
@@ -237,14 +237,13 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.BENCHMARK_PAT }}
-          commit-message: "Update benchmark results [skip ci]"
+          commit-message: "Update benchmark results"
           title: "Update benchmark results from latest run"
           body: |
             This PR updates the benchmark documentation with the latest results.
 
             - Generated automatically from benchmark run
             - Updated docs/src/benchmark.md with latest metrics
-            - [Skip CI] to avoid redundant workflows
           branch: update-benchmark-docs
           base: main
           delete-branch: true
