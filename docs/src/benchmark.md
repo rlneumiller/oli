@@ -13,16 +13,15 @@ Ollama models. The benchmark evaluates every tool's performance using simple tes
 _This section is automatically updated by CI/CD pipelines._
 
 <!-- BENCHMARK_RESULTS -->
-## Latest Results (as of 2025-04-22T19:01:36Z)
+## Latest Results (as of 2025-04-23 01:25:51 UTC)
 
 | Category | Details |
 |----------|---------|
-| Model | `qwen2.5-coder:7b` |
-| Tool Benchmark Time | 23000 ms |
-| Tool Tests | 4/4 tests passed |
+| Model | `(unknown)` |
+| Tool Benchmark Time | N/A ms |
+| Tool Tests | No test results available |
 
 ### Tool Performance Tests
-- [x] test_read_file_tool
-ℹ️ Test execution time: 3.5s
+- [ ] test_read_file_tool
 
 <!-- END_BENCHMARK_RESULTS -->
