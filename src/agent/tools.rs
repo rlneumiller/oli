@@ -1,4 +1,4 @@
-use crate::tools::{code::parser::CodeParser, fs::file_ops::FileOps, fs::search::SearchTools};
+use crate::tools::{fs::file_ops::FileOps, fs::search::SearchTools};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -13,7 +13,6 @@ pub enum ToolType {
     Edit,
     Replace,
     Bash,
-    ParseCode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,15 +61,6 @@ pub struct BashParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ParseCodeParams {
-    pub root_dir: String,
-    pub query: String,
-    pub max_file_size: Option<usize>,
-    pub max_files: Option<usize>,
-    pub max_depth: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "tool", content = "params")]
 pub enum ToolCall {
     FileReadTool(FileReadToolParams),
@@ -80,7 +70,6 @@ pub enum ToolCall {
     Edit(EditParams),
     Replace(ReplaceParams),
     Bash(BashParams),
-    ParseCode(ParseCodeParams),
 }
 
 impl ToolCall {
@@ -294,21 +283,6 @@ impl ToolCall {
 
                 Ok(result)
             }
-            ToolCall::ParseCode(params) => {
-                let mut parser = CodeParser::with_config(
-                    None, // Use default cache size
-                    params.max_file_size,
-                    params.max_files,
-                    params.max_depth,
-                )?;
-                let root_dir = PathBuf::from(&params.root_dir);
-
-                // Generate AST data optimized for LLM consumption
-                let ast_data = parser.generate_llm_friendly_ast(&root_dir, &params.query)?;
-
-                // Return the AST data in markdown format
-                Ok(ast_data)
-            }
         }
     }
 }
@@ -454,36 +428,6 @@ pub fn get_tool_definitions() -> Vec<Value> {
                     }
                 },
                 "required": ["command"]
-            }
-        }),
-        serde_json::json!({
-            "name": "ParseCode",
-            "description": "Parses individual files, lists of files, or entire codebases to generate structural understanding. The tool analyzes source code and produces a clean, accurate Abstract Syntax Tree (AST) optimized for LLM consumption. It can handle Rust, JavaScript, TypeScript, Python, Go, C/C++, and Java code.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "root_dir": {
-                        "type": "string",
-                        "description": "The root directory of the codebase to parse. Can be a path to a single file, a directory containing specific files, or the root of a codebase."
-                    },
-                    "query": {
-                        "type": "string",
-                        "description": "A natural language query to determine what to parse. Examples: 'Parse all JavaScript files', 'Show me the implementation of CodeParser', 'Analyze the class hierarchy in src/models/'. The query helps focus parsing on relevant files."
-                    },
-                    "max_file_size": {
-                        "type": "integer",
-                        "description": "Optional maximum file size to parse in bytes (default: 1,000,000 bytes / 1MB)"
-                    },
-                    "max_files": {
-                        "type": "integer",
-                        "description": "Optional maximum number of files to parse (default: 25)"
-                    },
-                    "max_depth": {
-                        "type": "integer",
-                        "description": "Optional maximum recursion depth for parsing nested structures (default: 3)"
-                    }
-                },
-                "required": ["root_dir", "query"]
             }
         }),
     ]

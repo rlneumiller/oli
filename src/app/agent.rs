@@ -1,5 +1,4 @@
 use crate::agent::core::LLMProvider;
-use crate::tools::code::parser::CodeParser;
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -8,46 +7,6 @@ pub trait AgentManager {
     fn query_model(&mut self, prompt: &str) -> Result<String>;
     fn query_with_agent(&mut self, prompt: &str) -> Result<String>;
 
-    /// Handle a parse_code command request with the given file path
-    fn handle_parse_code_command(&mut self, file_path: &str) -> Result<String> {
-        // Get current working directory
-        let cwd = self
-            .current_working_dir()
-            .map(|p| p.to_string())
-            .unwrap_or_else(|| ".".to_string());
-
-        // Initialize parser
-        let mut parser = CodeParser::new().context("Failed to initialize code parser")?;
-
-        // Normalize file path - if it's not absolute, make it relative to current dir
-        let path = if Path::new(file_path).is_absolute() {
-            Path::new(file_path).to_path_buf()
-        } else {
-            Path::new(&cwd).join(file_path)
-        };
-
-        // Check if file exists
-        if !path.exists() {
-            return Ok(format!("File not found: {}", path.display()));
-        }
-
-        // Parse the file
-        match parser.parse_file(&path) {
-            Ok(ast) => {
-                // Convert AST to structured text output
-                let structured_output = serde_json::to_string_pretty(&ast)
-                    .context("Failed to serialize AST to JSON")?;
-
-                // Return formatted output with file info
-                Ok(format!(
-                    "# Code Structure Analysis for {}\n\n```json\n{}\n```",
-                    path.display(),
-                    structured_output
-                ))
-            }
-            Err(err) => Ok(format!("Error parsing file {}: {}", path.display(), err)),
-        }
-    }
 
     /// Get the current working directory
     fn current_working_dir(&self) -> Option<&str>;
