@@ -338,6 +338,9 @@ impl App {
                 std::env::var("OPENAI_API_KEY").unwrap_or_default()
             } else if model_name_lower.contains("gemini") {
                 std::env::var("GEMINI_API_KEY").unwrap_or_default()
+            } else if model_name_lower.contains("local") {
+                // For local models via Ollama, no API key is needed
+                String::new()
             } else {
                 // Fallback to trying all available keys
                 std::env::var("ANTHROPIC_API_KEY")
@@ -347,7 +350,7 @@ impl App {
             }
         });
 
-        if api_key.is_empty() {
+        if api_key.is_empty() && !model_name_lower.contains("local") {
             let api_env_var = if model_name_lower.contains("claude") {
                 "ANTHROPIC_API_KEY"
             } else if model_name_lower.contains("gpt") {

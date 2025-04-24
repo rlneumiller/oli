@@ -5,7 +5,6 @@ use crate::apis::gemini::GeminiClient;
 use crate::apis::ollama::OllamaClient;
 use crate::apis::openai::OpenAIClient;
 use crate::prompts::DEFAULT_AGENT_PROMPT;
-use crate::tools::code::parser::CodeParser;
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -25,7 +24,6 @@ pub struct Agent {
     api_client: Option<DynApiClient>,
     system_prompt: Option<String>,
     progress_sender: Option<mpsc::Sender<String>>,
-    code_parser: Option<Arc<CodeParser>>,
     // Store the conversation history
     conversation_history: Vec<crate::apis::api_client::Message>,
 }
@@ -38,7 +36,6 @@ impl Agent {
             api_client: None,
             system_prompt: None,
             progress_sender: None,
-            code_parser: None,
             conversation_history: Vec::new(),
         }
     }
@@ -103,10 +100,6 @@ impl Agent {
             }
         });
 
-        // Initialize the code parser
-        let parser = CodeParser::new()?;
-        self.code_parser = Some(Arc::new(parser));
-
         Ok(())
     }
 
@@ -132,10 +125,6 @@ impl Agent {
                 ApiClientEnum::Gemini(Arc::new(client))
             }
         });
-
-        // Initialize the code parser
-        let parser = CodeParser::new()?;
-        self.code_parser = Some(Arc::new(parser));
 
         Ok(())
     }

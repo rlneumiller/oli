@@ -1,4 +1,12 @@
-use crate::tools::{code::parser::CodeParser, fs::file_ops::FileOps, fs::search::SearchTools};
+use crate::tools::{
+    fs::file_ops::FileOps,
+    fs::search::SearchTools,
+    lsp::{
+        DefinitionParams, LspServerManager, ModelsCodeLensParams as CodeLensParams,
+        ModelsDocumentSymbolParams as DocumentSymbolParams,
+        ModelsSemanticTokensParams as SemanticTokensParams,
+    },
+};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -13,7 +21,10 @@ pub enum ToolType {
     Edit,
     Replace,
     Bash,
-    ParseCode,
+    DocumentSymbol,
+    SemanticTokens,
+    CodeLens,
+    Definition,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,15 +73,6 @@ pub struct BashParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ParseCodeParams {
-    pub root_dir: String,
-    pub query: String,
-    pub max_file_size: Option<usize>,
-    pub max_files: Option<usize>,
-    pub max_depth: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "tool", content = "params")]
 pub enum ToolCall {
     FileReadTool(FileReadToolParams),
@@ -80,7 +82,10 @@ pub enum ToolCall {
     Edit(EditParams),
     Replace(ReplaceParams),
     Bash(BashParams),
-    ParseCode(ParseCodeParams),
+    DocumentSymbol(DocumentSymbolParams),
+    SemanticTokens(SemanticTokensParams),
+    CodeLens(CodeLensParams),
+    Definition(DefinitionParams),
 }
 
 impl ToolCall {
@@ -294,20 +299,141 @@ impl ToolCall {
 
                 Ok(result)
             }
-            ToolCall::ParseCode(params) => {
-                let mut parser = CodeParser::with_config(
-                    None, // Use default cache size
-                    params.max_file_size,
-                    params.max_files,
-                    params.max_depth,
+            ToolCall::DocumentSymbol(params) => {
+                // Initialize LSP server manager
+                let lsp_manager = LspServerManager::new();
+
+                // Get document symbols
+                let symbols =
+                    lsp_manager.document_symbol(&params.file_path, &params.server_type)?;
+
+                // Format the result
+                let mut output = format!("Document symbols for '{}':\n\n", params.file_path);
+
+                fn format_symbols(
+                    symbols: &[crate::tools::lsp::DocumentSymbol],
+                    depth: usize,
+                    output: &mut String,
+                ) {
+                    for symbol in symbols {
+                        // Add indentation based on depth
+                        let indent = "  ".repeat(depth);
+
+                        // Add symbol information
+                        output.push_str(&format!(
+                            "{}{} - {}\n",
+                            indent,
+                            symbol
+                                .kind
+                                .to_string()
+                                .unwrap_or_else(|| format!("{:?}", symbol.kind)),
+                            symbol.name
+                        ));
+
+                        // Add detail if available
+                        if let Some(ref detail) = symbol.detail {
+                            output.push_str(&format!("{}  Detail: {}\n", indent, detail));
+                        }
+
+                        // Recursively add children
+                        if let Some(ref children) = symbol.children {
+                            format_symbols(children, depth + 1, output);
+                        }
+                    }
+                }
+
+                format_symbols(&symbols, 0, &mut output);
+                Ok(output)
+            }
+            ToolCall::SemanticTokens(params) => {
+                // Initialize LSP server manager
+                let lsp_manager = LspServerManager::new();
+
+                // Get semantic tokens
+                let tokens = lsp_manager.semantic_tokens(&params.file_path, &params.server_type)?;
+
+                // Format the result
+                let mut output = format!("Semantic tokens for '{}':\n\n", params.file_path);
+
+                // Add tokens data
+                output.push_str(&format!(
+                    "Received {} token data points\n",
+                    tokens.data.len() / 5
+                ));
+
+                // LSP semantic tokens are encoded as 5-tuples
+                for chunk in tokens.data.chunks(5) {
+                    if chunk.len() == 5 {
+                        output.push_str(&format!(
+                            "Token: delta_line={}, delta_start={}, length={}, token_type={}, token_modifiers={}\n",
+                            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4]
+                        ));
+                    }
+                }
+
+                Ok(output)
+            }
+            ToolCall::CodeLens(params) => {
+                // Initialize LSP server manager
+                let lsp_manager = LspServerManager::new();
+
+                // Get code lenses
+                let lenses = lsp_manager.code_lens(&params.file_path, &params.server_type)?;
+
+                // Format the result
+                let mut output = format!("Code lenses for '{}':\n\n", params.file_path);
+
+                for (i, lens) in lenses.iter().enumerate() {
+                    output.push_str(&format!(
+                        "{}. Range: {}:{} to {}:{}\n",
+                        i + 1,
+                        lens.range.start.line,
+                        lens.range.start.character,
+                        lens.range.end.line,
+                        lens.range.end.character
+                    ));
+
+                    if let Some(ref command) = lens.command {
+                        output.push_str(&format!("   Command: {}\n", command.title));
+                        output.push_str(&format!("   Action: {}\n", command.command));
+                    }
+
+                    output.push('\n');
+                }
+
+                Ok(output)
+            }
+            ToolCall::Definition(params) => {
+                // Initialize LSP server manager
+                let lsp_manager = LspServerManager::new();
+
+                // Get definition
+                let locations = lsp_manager.definition(
+                    &params.file_path,
+                    &params.position,
+                    &params.server_type,
                 )?;
-                let root_dir = PathBuf::from(&params.root_dir);
 
-                // Generate AST data optimized for LLM consumption
-                let ast_data = parser.generate_llm_friendly_ast(&root_dir, &params.query)?;
+                // Format the result
+                let mut output = format!(
+                    "Definitions for position {}:{} in '{}':\n\n",
+                    params.position.line, params.position.character, params.file_path
+                );
 
-                // Return the AST data in markdown format
-                Ok(ast_data)
+                for (i, location) in locations.iter().enumerate() {
+                    let uri = location.uri.replace("file://", "");
+
+                    output.push_str(&format!("{}. File: {}\n", i + 1, uri));
+                    output.push_str(&format!(
+                        "   Range: {}:{} to {}:{}\n\n",
+                        location.range.start.line,
+                        location.range.start.character,
+                        location.range.end.line,
+                        location.range.end.character
+                    ));
+                }
+
+                Ok(output)
             }
         }
     }
@@ -457,33 +583,94 @@ pub fn get_tool_definitions() -> Vec<Value> {
             }
         }),
         serde_json::json!({
-            "name": "ParseCode",
-            "description": "Parses individual files, lists of files, or entire codebases to generate structural understanding. The tool analyzes source code and produces a clean, accurate Abstract Syntax Tree (AST) optimized for LLM consumption. It can handle Rust, JavaScript, TypeScript, Python, Go, C/C++, and Java code.",
+            "name": "DocumentSymbol",
+            "description": "Extracts document symbols from a file using LSP",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "root_dir": {
+                    "file_path": {
                         "type": "string",
-                        "description": "The root directory of the codebase to parse. Can be a path to a single file, a directory containing specific files, or the root of a codebase."
+                        "description": "The absolute path to the file to analyze"
                     },
-                    "query": {
+                    "server_type": {
                         "type": "string",
-                        "description": "A natural language query to determine what to parse. Examples: 'Parse all JavaScript files', 'Show me the implementation of CodeParser', 'Analyze the class hierarchy in src/models/'. The query helps focus parsing on relevant files."
-                    },
-                    "max_file_size": {
-                        "type": "integer",
-                        "description": "Optional maximum file size to parse in bytes (default: 1,000,000 bytes / 1MB)"
-                    },
-                    "max_files": {
-                        "type": "integer",
-                        "description": "Optional maximum number of files to parse (default: 25)"
-                    },
-                    "max_depth": {
-                        "type": "integer",
-                        "description": "Optional maximum recursion depth for parsing nested structures (default: 3)"
+                        "enum": ["Python", "Rust"],
+                        "description": "The type of LSP server to use"
                     }
                 },
-                "required": ["root_dir", "query"]
+                "required": ["file_path", "server_type"]
+            }
+        }),
+        serde_json::json!({
+            "name": "SemanticTokens",
+            "description": "Extracts semantic tokens from a file using LSP",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The absolute path to the file to analyze"
+                    },
+                    "server_type": {
+                        "type": "string",
+                        "enum": ["Python", "Rust"],
+                        "description": "The type of LSP server to use"
+                    }
+                },
+                "required": ["file_path", "server_type"]
+            }
+        }),
+        serde_json::json!({
+            "name": "CodeLens",
+            "description": "Extracts code lenses from a file using LSP",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The absolute path to the file to analyze"
+                    },
+                    "server_type": {
+                        "type": "string",
+                        "enum": ["Python", "Rust"],
+                        "description": "The type of LSP server to use"
+                    }
+                },
+                "required": ["file_path", "server_type"]
+            }
+        }),
+        serde_json::json!({
+            "name": "Definition",
+            "description": "Finds the definition of a symbol at a specific position in a file using LSP",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The absolute path to the file to analyze"
+                    },
+                    "position": {
+                        "type": "object",
+                        "properties": {
+                            "line": {
+                                "type": "integer",
+                                "description": "The line number (0-based)"
+                            },
+                            "character": {
+                                "type": "integer",
+                                "description": "The character position (0-based)"
+                            }
+                        },
+                        "required": ["line", "character"],
+                        "description": "The position of the symbol in the file"
+                    },
+                    "server_type": {
+                        "type": "string",
+                        "enum": ["Python", "Rust"],
+                        "description": "The type of LSP server to use"
+                    }
+                },
+                "required": ["file_path", "position", "server_type"]
             }
         }),
     ]

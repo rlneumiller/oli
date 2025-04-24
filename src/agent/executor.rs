@@ -465,11 +465,6 @@ fn parse_tool_call(name: &str, args: &Value) -> Result<ToolCall> {
                 serde_json::from_value(args.clone()).context("Failed to parse Bash parameters")?;
             Ok(ToolCall::Bash(params))
         }
-        "ParseCode" => {
-            let params = serde_json::from_value(args.clone())
-                .context("Failed to parse ParseCode parameters")?;
-            Ok(ToolCall::ParseCode(params))
-        }
         _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),
     }
 }

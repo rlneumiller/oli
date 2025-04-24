@@ -1,2 +1,2 @@
-pub mod code;
 pub mod fs;
+pub mod lsp;
