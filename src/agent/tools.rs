@@ -273,8 +273,6 @@ impl ToolCall {
                             "pattern": params.pattern,
                             "count": results.len(),
                             "description": format!("Found {} files", results.len()),
-                            // Explicitly include pattern field to ensure UI can access it
-                            "pattern": params.pattern,
                         });
                         send_tool_notification(
                             "Search",
