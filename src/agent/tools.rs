@@ -239,8 +239,6 @@ impl ToolCall {
                 let metadata = serde_json::json!({
                     "pattern": params.pattern,
                     "description": format!("Search(pattern: \"{}\")", params.pattern),
-                    // Explicitly include pattern field to ensure UI can access it
-                    "pattern": params.pattern,
                 });
                 send_tool_notification(
                     "Search",
