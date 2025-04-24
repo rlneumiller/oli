@@ -33,15 +33,23 @@ const ToolStatusIndicator: React.FC<ToolStatusIndicatorProps> = ({
     }
   }, [status]);
 
-  // Format tool name and file path - memoized to prevent recalculation
+  // Format tool name and file path or pattern - memoized to prevent recalculation
   const toolTitle = useMemo(() => {
     let title = data.name || "Unknown Tool";
 
-    // Extract file path from data or metadata
-    const filePath = data.file_path
-      ? data.file_path
-      : (data as unknown as { metadata?: { file_path?: string } }).metadata
-          ?.file_path;
+    // Special handling for Search tool (GlobTool)
+    if (data.name === "Search") {
+      // Try to get pattern directly from metadata
+      const pattern = data.metadata?.pattern as string;
+
+      if (pattern) {
+        return `Search(pattern: "${pattern}")${status === "running" ? "…" : ""}`;
+      }
+    }
+
+    // Extract file path from data or metadata (for other tools)
+    const filePath =
+      data.file_path ?? (data.metadata?.file_path as string | undefined);
 
     if (filePath) {
       // Shorten file path if it's too long
@@ -59,34 +67,41 @@ const ToolStatusIndicator: React.FC<ToolStatusIndicatorProps> = ({
     }
 
     return title;
-  }, [data.name, data.file_path, status]);
+  }, [data.name, data.file_path, status, data.metadata?.pattern]);
 
   // Format details based on tool type - memoized to prevent recalculation
   const details = useMemo(() => {
     if (compact) return null;
 
+    // Special handling for Search tool (GlobTool)
+    if (data.name === "Search") {
+      const count = data.metadata?.count as number;
+
+      if (count !== undefined) {
+        return `Found ${count} files`;
+      }
+    }
+
     // Safely access lines - check both direct property and metadata
-    const lines = data.lines
-      ? data.lines
-      : (data as unknown as { metadata?: { lines?: number } }).metadata?.lines;
+    const lines = data.lines ?? (data.metadata?.lines as number | undefined);
 
     if (lines) {
       return `Read ${lines} lines`;
     }
 
-    // Safely access description - check both direct property and metadata
-    const description = data.description
-      ? data.description
-      : (data as unknown as { message?: string }).message ||
-        (data as unknown as { metadata?: { description?: string } }).metadata
-          ?.description;
+    // Safely access description from various possible locations
+    const message = data.metadata?.message as string | undefined;
+    const metadataDescription = data.metadata?.description as
+      | string
+      | undefined;
+    const description = data.description ?? message ?? metadataDescription;
 
     if (description) {
       return description;
     }
 
     return null;
-  }, [data, compact]);
+  }, [data.name, data.lines, data.description, data.metadata, compact]);
 
   // Get appropriate color for status
   const statusColor = useMemo(() => {

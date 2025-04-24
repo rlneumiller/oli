@@ -93,6 +93,8 @@ const App: React.FC<AppProps> = ({ backend }) => {
                       description:
                         execution.message ||
                         (execution.metadata.description as string | undefined),
+                      // Pass through the full metadata to ensure pattern is available
+                      metadata: execution.metadata,
                     },
                   },
                 ],
@@ -263,6 +265,12 @@ const App: React.FC<AppProps> = ({ backend }) => {
                 file_path: params.file_path,
                 lines: params.lines,
                 description: params.description,
+                metadata: {
+                  file_path: params.file_path,
+                  lines: params.lines,
+                  description: params.description,
+                  pattern: params.pattern,
+                },
               },
             },
           ],
