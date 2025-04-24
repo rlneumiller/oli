@@ -6,7 +6,7 @@
 
 # oli - Open Local Intelligent assistant
 
-![demo](https://github.com/user-attachments/assets/c55b7a01-6046-4893-85d3-0a7aa6a0467d)
+![oli_demo](https://github.com/user-attachments/assets/7b6045a6-cf8c-4ca5-9662-691c885ea730)
 
 ---
 
