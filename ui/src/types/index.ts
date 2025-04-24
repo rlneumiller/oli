@@ -24,6 +24,7 @@ export interface ToolData {
   file_path?: string;
   lines?: number;
   description?: string;
+  metadata?: Record<string, unknown>;
 }
 
 // Tool execution interface

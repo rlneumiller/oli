@@ -38,7 +38,6 @@ pub struct FileReadToolParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobToolParams {
     pub pattern: String,
-    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,40 +221,203 @@ impl ToolCall {
                 result
             }
             ToolCall::GlobTool(params) => {
-                let results = if let Some(path) = &params.path {
-                    let dir_path = PathBuf::from(path);
-                    SearchTools::glob_search_in_dir(&dir_path, &params.pattern)?
-                } else {
-                    SearchTools::glob_search(&params.pattern)?
-                };
-
-                let mut output = format!(
-                    "Found {} files matching pattern '{}':\n\n",
-                    results.len(),
-                    params.pattern
+                // Generate a unique ID for this execution
+                let tool_id = format!(
+                    "glob-direct-{}",
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
                 );
-                for (i, path) in results.iter().enumerate() {
-                    output.push_str(&format!("{}. {}\n", i + 1, path.display()));
+
+                let start_time = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+
+                // Send start notification with the pattern format
+                let metadata = serde_json::json!({
+                    "pattern": params.pattern,
+                    "description": format!("Search(pattern: \"{}\")", params.pattern),
+                    // Explicitly include pattern field to ensure UI can access it
+                    "pattern": params.pattern,
+                });
+                send_tool_notification(
+                    "Search",
+                    "running",
+                    &format!("Searching with pattern: {}", params.pattern),
+                    metadata,
+                    &tool_id,
+                    start_time,
+                )
+                .ok();
+
+                // Add a brief delay to ensure the running state is visible
+                std::thread::sleep(std::time::Duration::from_millis(500));
+
+                // Perform the glob search using only the pattern
+                let result = SearchTools::glob_search(&params.pattern);
+
+                match result {
+                    Ok(results) => {
+                        // Format the output
+                        let mut output = format!(
+                            "Found {} files matching pattern '{}':\n\n",
+                            results.len(),
+                            params.pattern
+                        );
+                        for (i, path) in results.iter().enumerate() {
+                            output.push_str(&format!("{}. {}\n", i + 1, path.display()));
+                        }
+
+                        // Send success notification with count and pattern
+                        let metadata = serde_json::json!({
+                            "pattern": params.pattern,
+                            "count": results.len(),
+                            "description": format!("Found {} files", results.len()),
+                            // Explicitly include pattern field to ensure UI can access it
+                            "pattern": params.pattern,
+                        });
+                        send_tool_notification(
+                            "Search",
+                            "success",
+                            &format!("Found {} files", results.len()),
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
+
+                        Ok(output)
+                    }
+                    Err(e) => {
+                        // Send error notification with pattern included
+                        let metadata = serde_json::json!({
+                            "pattern": params.pattern,
+                            "description": format!("Error searching for pattern: {}", e),
+                            // Explicitly include pattern field to ensure UI can access it
+                            "pattern": params.pattern,
+                        });
+                        send_tool_notification(
+                            "Search",
+                            "error",
+                            &format!("Error searching for pattern: {}", e),
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
+
+                        Err(e)
+                    }
                 }
-                Ok(output)
             }
             ToolCall::GrepTool(params) => {
+                // Generate a unique ID for this execution
+                let tool_id = format!(
+                    "grep-direct-{}",
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                );
+
+                let start_time = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+
+                // Prepare the description with include pattern if available
+                let search_desc = if let Some(include) = &params.include {
+                    format!(
+                        "Searching for content: \"{}\" in files matching \"{}\"",
+                        params.pattern, include
+                    )
+                } else {
+                    format!("Searching for content: \"{}\"", params.pattern)
+                };
+
+                // Send start notification
+                let metadata = serde_json::json!({
+                    "pattern": params.pattern,
+                    "include": params.include,
+                    "path": params.path,
+                    "description": search_desc,
+                });
+                send_tool_notification(
+                    "Grep",
+                    "running",
+                    &search_desc,
+                    metadata,
+                    &tool_id,
+                    start_time,
+                )
+                .ok();
+
+                // Add a brief delay to ensure the running state is visible
+                std::thread::sleep(std::time::Duration::from_millis(500));
+
+                // Execute the grep search
                 let search_dir = params.path.as_ref().map(Path::new);
-                let results = SearchTools::grep_search(
+                let result = SearchTools::grep_search(
                     &params.pattern,
                     params.include.as_deref(),
                     search_dir,
-                )?;
-
-                let mut output = format!(
-                    "Found {} matches for pattern '{}':\n\n",
-                    results.len(),
-                    params.pattern
                 );
-                for (path, line_num, line) in results {
-                    output.push_str(&format!("{}:{}:{}\n", path.display(), line_num, line));
+
+                match result {
+                    Ok(results) => {
+                        // Format the output
+                        let mut output = format!(
+                            "Found {} matches for pattern '{}':\n\n",
+                            results.len(),
+                            params.pattern
+                        );
+                        for (path, line_num, line) in &results {
+                            output.push_str(&format!("{}:{}:{}\n", path.display(), line_num, line));
+                        }
+
+                        // Send success notification
+                        let metadata = serde_json::json!({
+                            "pattern": params.pattern,
+                            "include": params.include,
+                            "path": params.path,
+                            "count": results.len(),
+                            "description": format!("Found {} content matches", results.len()),
+                        });
+                        send_tool_notification(
+                            "Grep",
+                            "success",
+                            &format!("Found {} content matches", results.len()),
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
+
+                        Ok(output)
+                    }
+                    Err(e) => {
+                        // Send error notification
+                        let metadata = serde_json::json!({
+                            "pattern": params.pattern,
+                            "include": params.include,
+                            "path": params.path,
+                            "description": format!("Error searching content: {}", e),
+                        });
+                        send_tool_notification(
+                            "Grep",
+                            "error",
+                            &format!("Error searching content: {}", e),
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
+
+                        Err(e)
+                    }
                 }
-                Ok(output)
             }
             ToolCall::LSTool(params) => {
                 // Generate a unique ID for this execution
@@ -559,10 +721,6 @@ pub fn get_tool_definitions() -> Vec<Value> {
                     "pattern": {
                         "type": "string",
                         "description": "The glob pattern to match files against"
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "The directory to search in (optional)"
                     }
                 },
                 "required": ["pattern"]
