@@ -445,10 +445,10 @@ fn parse_tool_call(name: &str, args: &Value) -> Result<ToolCall> {
                 .context("Failed to parse GrepTool parameters")?;
             Ok(ToolCall::GrepTool(params))
         }
-        "LS" => {
-            let params =
-                serde_json::from_value(args.clone()).context("Failed to parse LS parameters")?;
-            Ok(ToolCall::LS(params))
+        "LSTool" => {
+            let params = serde_json::from_value(args.clone())
+                .context("Failed to parse LSTool parameters")?;
+            Ok(ToolCall::LSTool(params))
         }
         "Edit" => {
             let params =
