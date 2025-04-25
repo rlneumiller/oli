@@ -11,11 +11,17 @@ on:
     paths:
       - '.github/workflows/benchmark.yml'
       - '.github/scripts/update_benchmark_docs.sh'
+      - '**.rs'
+      - Cargo.lock
+      - Cargo.toml
   pull_request:
     branches: [main]
     paths:
       - '.github/workflows/benchmark.yml'
       - '.github/scripts/update_benchmark_docs.sh'
+      - '**.rs'
+      - Cargo.lock
+      - Cargo.toml
 
 permissions:
   contents: write
