@@ -188,7 +188,7 @@ jobs:
             "test_summary": {
               "total": $TOTAL_TESTS,
               "passed": $SUCCESS_COUNT,
-              "success_rate": $(awk "BEGIN {print ($SUCCESS_COUNT/$TOTAL_TESTS)}")
+              "success_rate": $(awk "BEGIN {if ($TOTAL_TESTS == 0) print 0; else print ($SUCCESS_COUNT/$TOTAL_TESTS)}")
             }
           }
           EOF
