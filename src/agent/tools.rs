@@ -38,6 +38,7 @@ pub struct FileReadToolParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobToolParams {
     pub pattern: String,
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,26 +236,40 @@ impl ToolCall {
                     .unwrap_or_default()
                     .as_millis();
 
-                // Send start notification with the pattern format
-                let metadata = serde_json::json!({
-                    "pattern": params.pattern,
-                    "description": format!("Search(pattern: \"{}\")", params.pattern),
-                });
+                // Send start notification with the pattern format and optional path
+                let metadata = if let Some(path) = &params.path {
+                    serde_json::json!({
+                        "pattern": params.pattern,
+                        "path": path,
+                        "description": format!("Search(pattern: \"{}\", path: \"{}\")", params.pattern, path),
+                    })
+                } else {
+                    serde_json::json!({
+                        "pattern": params.pattern,
+                        "description": format!("Search(pattern: \"{}\")", params.pattern),
+                    })
+                };
+                let message = if let Some(path) = &params.path {
+                    format!("Searching in {} with pattern: {}", path, params.pattern)
+                } else {
+                    format!("Searching with pattern: {}", params.pattern)
+                };
+
                 send_tool_notification(
-                    "Search",
-                    "running",
-                    &format!("Searching with pattern: {}", params.pattern),
-                    metadata,
-                    &tool_id,
-                    start_time,
+                    "Search", "running", &message, metadata, &tool_id, start_time,
                 )
                 .ok();
 
                 // Add a brief delay to ensure the running state is visible
                 std::thread::sleep(std::time::Duration::from_millis(500));
 
-                // Perform the glob search using only the pattern
-                let result = SearchTools::glob_search(&params.pattern);
+                // Perform the glob search with optional path parameter
+                let result = if let Some(path) = &params.path {
+                    let path_buf = PathBuf::from(path);
+                    SearchTools::glob_search_in_dir(&path_buf, &params.pattern)
+                } else {
+                    SearchTools::glob_search(&params.pattern)
+                };
 
                 match result {
                     Ok(results) => {
@@ -268,12 +283,21 @@ impl ToolCall {
                             output.push_str(&format!("{}. {}\n", i + 1, path.display()));
                         }
 
-                        // Send success notification with count and pattern
-                        let metadata = serde_json::json!({
-                            "pattern": params.pattern,
-                            "count": results.len(),
-                            "description": format!("Found {} files", results.len()),
-                        });
+                        // Send success notification with count, pattern, and optional path
+                        let metadata = if let Some(path) = &params.path {
+                            serde_json::json!({
+                                "pattern": params.pattern,
+                                "path": path,
+                                "count": results.len(),
+                                "description": format!("Found {} files", results.len()),
+                            })
+                        } else {
+                            serde_json::json!({
+                                "pattern": params.pattern,
+                                "count": results.len(),
+                                "description": format!("Found {} files", results.len()),
+                            })
+                        };
                         send_tool_notification(
                             "Search",
                             "success",
@@ -287,13 +311,23 @@ impl ToolCall {
                         Ok(output)
                     }
                     Err(e) => {
-                        // Send error notification with pattern included
-                        let metadata = serde_json::json!({
-                            "pattern": params.pattern,
-                            "description": format!("Error searching for pattern: {}", e),
-                            // Explicitly include pattern field to ensure UI can access it
-                            "pattern": params.pattern,
-                        });
+                        // Send error notification with pattern and optional path included
+                        let metadata = if let Some(path) = &params.path {
+                            serde_json::json!({
+                                "pattern": params.pattern,
+                                "path": path,
+                                "description": format!("Error searching for pattern: {}", e),
+                                // Explicitly include pattern field to ensure UI can access it
+                                "pattern": params.pattern,
+                            })
+                        } else {
+                            serde_json::json!({
+                                "pattern": params.pattern,
+                                "description": format!("Error searching for pattern: {}", e),
+                                // Explicitly include pattern field to ensure UI can access it
+                                "pattern": params.pattern,
+                            })
+                        };
                         send_tool_notification(
                             "Search",
                             "error",
@@ -323,14 +357,21 @@ impl ToolCall {
                     .unwrap_or_default()
                     .as_millis();
 
-                // Prepare the description with include pattern if available
-                let search_desc = if let Some(include) = &params.include {
-                    format!(
-                        "Searching for content: \"{}\" in files matching \"{}\"",
+                // Construct metadata based on available parameters
+                let description = match (&params.path, &params.include) {
+                    (Some(path), Some(include)) => format!(
+                        "Search(pattern: \"{}\", path: \"{}\", include: \"{}\")",
+                        params.pattern, path, include
+                    ),
+                    (Some(path), None) => format!(
+                        "Search(pattern: \"{}\", path: \"{}\")",
+                        params.pattern, path
+                    ),
+                    (None, Some(include)) => format!(
+                        "Search(pattern: \"{}\", include: \"{}\")",
                         params.pattern, include
-                    )
-                } else {
-                    format!("Searching for content: \"{}\"", params.pattern)
+                    ),
+                    (None, None) => format!("Search(pattern: \"{}\")", params.pattern),
                 };
 
                 // Send start notification
@@ -338,15 +379,26 @@ impl ToolCall {
                     "pattern": params.pattern,
                     "include": params.include,
                     "path": params.path,
-                    "description": search_desc,
+                    "description": description,
                 });
+                // Create a user-friendly message
+                let message = match (&params.path, &params.include) {
+                    (Some(path), Some(include)) => format!(
+                        "Searching in {} for content: \"{}\" in files matching \"{}\"",
+                        path, params.pattern, include
+                    ),
+                    (Some(path), None) => {
+                        format!("Searching in {} for content: \"{}\"", path, params.pattern)
+                    }
+                    (None, Some(include)) => format!(
+                        "Searching for content: \"{}\" in files matching \"{}\"",
+                        params.pattern, include
+                    ),
+                    (None, None) => format!("Searching for content: \"{}\"", params.pattern),
+                };
+
                 send_tool_notification(
-                    "Grep",
-                    "running",
-                    &search_desc,
-                    metadata,
-                    &tool_id,
-                    start_time,
+                    "Search", "running", &message, metadata, &tool_id, start_time,
                 )
                 .ok();
 
@@ -379,12 +431,12 @@ impl ToolCall {
                             "include": params.include,
                             "path": params.path,
                             "count": results.len(),
-                            "description": format!("Found {} content matches", results.len()),
+                            "description": format!("Found {} files", results.len()),
                         });
                         send_tool_notification(
-                            "Grep",
+                            "Search",
                             "success",
-                            &format!("Found {} content matches", results.len()),
+                            &format!("Found {} files", results.len()),
                             metadata,
                             &tool_id,
                             start_time,
@@ -402,7 +454,7 @@ impl ToolCall {
                             "description": format!("Error searching content: {}", e),
                         });
                         send_tool_notification(
-                            "Grep",
+                            "Search",
                             "error",
                             &format!("Error searching content: {}", e),
                             metadata,
@@ -710,13 +762,17 @@ pub fn get_tool_definitions() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "GlobTool",
-            "description": "Fast file pattern matching tool using glob patterns like '**/*.rs'",
+            "description": "Fast file pattern matching tool using glob patterns like '**/*.rs', supports * (matches characters), ** (recursive directories), {} (alternatives)",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "pattern": {
                         "type": "string",
                         "description": "The glob pattern to match files against"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "The directory to search in (defaults to current directory)"
                     }
                 },
                 "required": ["pattern"]
@@ -724,7 +780,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "GrepTool",
-            "description": "Fast content search tool using regular expressions",
+            "description": "Fast content search tool using regular expressions to find patterns in file contents",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -734,11 +790,11 @@ pub fn get_tool_definitions() -> Vec<Value> {
                     },
                     "include": {
                         "type": "string",
-                        "description": "File pattern to include in the search (e.g. \"*.rs\", \"*.{rs,toml}\")"
+                        "description": "File pattern to filter results (e.g. \"*.rs\", \"*.{ts,tsx}\")"
                     },
                     "path": {
                         "type": "string",
-                        "description": "The directory to search in (optional)"
+                        "description": "The directory to search in (defaults to current directory)"
                     }
                 },
                 "required": ["pattern"]

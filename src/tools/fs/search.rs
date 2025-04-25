@@ -4,11 +4,93 @@ use regex::Regex;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
+use walkdir::{DirEntry, WalkDir};
 
 pub struct SearchTools;
 
 impl SearchTools {
+    // Check if path should be ignored based on common patterns
+    fn is_ignored_path(path: &Path) -> bool {
+        let path_str = path.to_string_lossy();
+
+        // Common directories to ignore
+        let ignored_dirs = [
+            "/target/",
+            "/node_modules/",
+            "/.git/",
+            "/dist/",
+            "/build/",
+            "/.cache/",
+            "/coverage/",
+            "/.next/",
+            "/.nuxt/",
+            "/venv/",
+            "/.venv/",
+            "/env/",
+            "/__pycache__/",
+            "/out/",
+            "/bin/",
+            "/obj/",
+        ];
+
+        // Check if the path contains any of the ignored directories
+        for dir in &ignored_dirs {
+            if path_str.contains(dir) {
+                return true;
+            }
+        }
+
+        // Ignore common generated or binary files
+        let ignored_extensions = [
+            ".pyc",
+            ".pyo",
+            ".so",
+            ".o",
+            ".a",
+            ".lib",
+            ".dll",
+            ".exe",
+            ".jar",
+            ".war",
+            ".ear",
+            ".class",
+            ".min.js",
+            ".min.css",
+            ".map",
+            ".bundle.js",
+            ".swp",
+            ".swo",
+            ".db",
+            ".sqlite",
+            ".sqlite3",
+            ".lock",
+            ".log",
+            ".tmp",
+            ".temp",
+            ".bak",
+        ];
+
+        // First check exact file extensions
+        if let Some(extension) = path.extension() {
+            let ext = format!(".{}", extension.to_string_lossy());
+            if ignored_extensions.contains(&ext.as_str()) {
+                return true;
+            }
+        }
+
+        // Then check path suffixes for special cases like minified files
+        let path_str = path.to_string_lossy();
+        if path_str.ends_with(".min.js")
+            || path_str.ends_with(".min.css")
+            || path_str.ends_with(".bundle.js")
+            || path_str.ends_with(".map")
+        {
+            return true;
+        }
+
+        false
+    }
+
     pub fn glob_search(pattern: &str) -> Result<Vec<PathBuf>> {
         let entries =
             glob(pattern).with_context(|| format!("Invalid glob pattern: {}", pattern))?;
@@ -16,6 +98,12 @@ impl SearchTools {
         let mut matches = Vec::new();
         for entry in entries {
             let path = entry.context("Failed to read glob entry")?;
+
+            // Skip ignored paths
+            if Self::is_ignored_path(&path) {
+                continue;
+            }
+
             matches.push(path);
         }
 
@@ -33,6 +121,46 @@ impl SearchTools {
         let dir_str = dir.to_string_lossy();
         let full_pattern = format!("{}/{}", dir_str, pattern);
         Self::glob_search(&full_pattern)
+    }
+
+    // Helper function for WalkDir to skip ignored directories
+    fn should_skip_dir(entry: &DirEntry) -> bool {
+        let path = entry.path();
+
+        if entry.file_type().is_dir() {
+            let file_name = entry.file_name().to_string_lossy();
+
+            // Skip common directories that should be ignored
+            let ignored_dirs = [
+                "target",
+                "node_modules",
+                ".git",
+                "dist",
+                "build",
+                ".cache",
+                "coverage",
+                ".next",
+                ".nuxt",
+                "venv",
+                ".venv",
+                "env",
+                "__pycache__",
+                "out",
+                "bin",
+                "obj",
+            ];
+
+            if ignored_dirs.contains(&file_name.as_ref()) {
+                return true;
+            }
+        }
+
+        // Use the general path ignoring function for files
+        if entry.file_type().is_file() && Self::is_ignored_path(path) {
+            return true;
+        }
+
+        false
     }
 
     pub fn grep_search(
@@ -66,6 +194,7 @@ impl SearchTools {
         for entry in WalkDir::new(dir)
             .follow_links(true)
             .into_iter()
+            .filter_entry(|e| !Self::should_skip_dir(e))
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
         {
@@ -76,6 +205,28 @@ impl SearchTools {
                 if !include_regex.is_match(&path.to_string_lossy()) {
                     continue;
                 }
+            }
+
+            // Skip binary files and other files that are typically not text
+            if let Some(extension) = path.extension() {
+                let ext = extension.to_string_lossy();
+                let binary_extensions = [
+                    "pyc", "pyo", "so", "o", "a", "lib", "dll", "exe", "jar", "war", "ear",
+                    "class", "db", "sqlite", "sqlite3",
+                ];
+                if binary_extensions.contains(&ext.as_ref()) {
+                    continue;
+                }
+            }
+
+            // Check for minified JS/CSS files and other special cases that require full path check
+            let path_str = path.to_string_lossy();
+            if path_str.ends_with(".min.js")
+                || path_str.ends_with(".min.css")
+                || path_str.ends_with(".bundle.js")
+                || path_str.ends_with(".map")
+            {
+                continue;
             }
 
             // Try to open file

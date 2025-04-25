@@ -453,3 +453,258 @@ fn test_combined_glob_and_grep() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_is_ignored_path() -> Result<()> {
+    let temp_dir = setup_test_directory()?;
+
+    // Create ignored directories
+    let node_modules = temp_dir.path().join("node_modules");
+    let target_dir = temp_dir.path().join("target");
+    let git_dir = temp_dir.path().join(".git");
+    let dist_dir = temp_dir.path().join("dist");
+
+    fs::create_dir(&node_modules)?;
+    fs::create_dir(&target_dir)?;
+    fs::create_dir(&git_dir)?;
+    fs::create_dir(&dist_dir)?;
+
+    // Create files in ignored directories
+    write_file(node_modules.join("package.json"), r#"{"name": "test"}"#)?;
+    write_file(target_dir.join("debug.rs"), "fn main() {}")?;
+    write_file(
+        git_dir.join("config"),
+        "[core]\n\trepositoryformatversion = 0",
+    )?;
+    write_file(dist_dir.join("bundle.js"), "console.log('hello');")?;
+
+    // Create files with ignored extensions
+    write_file(temp_dir.path().join("binary.exe"), "binary content")?;
+    write_file(temp_dir.path().join("library.so"), "library content")?;
+    write_file(temp_dir.path().join("script.min.js"), "minified js")?;
+    write_file(temp_dir.path().join("styles.min.css"), "minified css")?;
+    write_file(temp_dir.path().join("database.sqlite"), "db content")?;
+
+    // Search for all files
+    let all_files_pattern = format!("{}/**/*.*", temp_dir.path().display());
+    let found_files = SearchTools::glob_search(&all_files_pattern)?;
+
+    // Check that none of the files from ignored directories are included
+    for file in &found_files {
+        let path_str = file.to_string_lossy();
+        assert!(
+            !path_str.contains("/node_modules/"),
+            "Should not include node_modules files"
+        );
+        assert!(
+            !path_str.contains("/target/"),
+            "Should not include target directory files"
+        );
+        assert!(
+            !path_str.contains("/.git/"),
+            "Should not include .git directory files"
+        );
+        assert!(
+            !path_str.contains("/dist/"),
+            "Should not include dist directory files"
+        );
+    }
+
+    // Check that none of the ignored file extensions are included
+    for file in &found_files {
+        let extension = file
+            .extension()
+            .map(|ext| ext.to_string_lossy().to_string());
+        if let Some(ext) = extension {
+            assert_ne!(ext, "exe", "Should not include .exe files");
+            assert_ne!(ext, "so", "Should not include .so files");
+            assert!(
+                !file.to_string_lossy().ends_with(".min.js"),
+                "Should not include .min.js files"
+            );
+            assert!(
+                !file.to_string_lossy().ends_with(".min.css"),
+                "Should not include .min.css files"
+            );
+            assert!(
+                !file.to_string_lossy().ends_with(".sqlite"),
+                "Should not include .sqlite files"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_should_skip_dir_function() -> Result<()> {
+    let temp_dir = setup_test_directory()?;
+
+    // Create directories that should be skipped
+    let dirs_to_skip = [
+        "node_modules",
+        "target",
+        ".git",
+        "dist",
+        "build",
+        ".cache",
+        "coverage",
+        ".next",
+        ".nuxt",
+        "venv",
+        ".venv",
+        "env",
+        "__pycache__",
+        "out",
+        "bin",
+        "obj",
+    ];
+
+    // Create a test file in each directory
+    for dir in &dirs_to_skip {
+        let dir_path = temp_dir.path().join(dir);
+        fs::create_dir(&dir_path)?;
+        write_file(dir_path.join("test.txt"), "test content")?;
+    }
+
+    // Create a control directory that should not be skipped
+    let control_dir = temp_dir.path().join("src_extra");
+    fs::create_dir(&control_dir)?;
+    write_file(control_dir.join("test.txt"), "test content")?;
+
+    // Search for all text files
+    let results = SearchTools::grep_search("test content", Some("*.txt"), Some(temp_dir.path()))?;
+
+    // Should only find the file in the control directory, not in any of the skipped directories
+    assert_eq!(
+        results.len(),
+        1,
+        "Should only find one file, not files in ignored directories"
+    );
+
+    // Verify the file found is the one in the control directory
+    let found_path = &results[0].0;
+    assert!(
+        found_path.to_string_lossy().contains("src_extra"),
+        "Found file should be in control directory, got: {}",
+        found_path.display()
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_grep_search_with_binary_files() -> Result<()> {
+    let temp_dir = setup_test_directory()?;
+
+    // Create binary files with text that would match our search if they weren't excluded
+    let binary_files = [
+        ("program.exe", "validate function"),
+        ("library.so", "validate function"),
+        ("script.min.js", "validate function"),
+        ("data.db", "validate function"),
+    ];
+
+    for (filename, content) in &binary_files {
+        write_file(temp_dir.path().join(filename), content)?;
+    }
+
+    // Search for content that exists in both binary and text files
+    let results = SearchTools::grep_search("validate", None, Some(temp_dir.path()))?;
+
+    // Verify none of the binary files are included in results
+    for (path, _, _) in &results {
+        let path_str = path.to_string_lossy();
+        assert!(!path_str.ends_with(".exe"), "Should not match .exe files");
+        assert!(!path_str.ends_with(".so"), "Should not match .so files");
+        assert!(
+            !path_str.ends_with(".min.js"),
+            "Should not match .min.js files"
+        );
+        assert!(!path_str.ends_with(".db"), "Should not match .db files");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_nested_ignored_directories() -> Result<()> {
+    let temp_dir = setup_test_directory()?;
+
+    // Create a nested structure with ignored directories
+    let src_dir = temp_dir.path().join("src_nested");
+    fs::create_dir(&src_dir)?;
+
+    // Create a node_modules nested inside a legitimate directory
+    let nested_node_modules = src_dir.join("node_modules");
+    fs::create_dir(&nested_node_modules)?;
+    write_file(
+        nested_node_modules.join("package.json"),
+        r#"{"name": "nested-test"}"#,
+    )?;
+
+    // Create a legitimate file in the src directory
+    write_file(src_dir.join("index.js"), "function validate() {}")?;
+
+    // Search for validate in all files
+    let results = SearchTools::grep_search("validate", None, Some(temp_dir.path()))?;
+
+    // Should find validate in legitimate files but not in node_modules
+    for (path, _, _) in &results {
+        assert!(
+            !path.to_string_lossy().contains("node_modules"),
+            "Should not find matches in nested node_modules directory"
+        );
+    }
+
+    // Verify we found the legitimate file
+    let found_index_js = results
+        .iter()
+        .any(|(path, _, _)| path.file_name().unwrap().to_string_lossy() == "index.js");
+
+    assert!(found_index_js, "Should find matches in legitimate files");
+
+    Ok(())
+}
+
+#[test]
+fn test_non_ignored_directories_with_similar_names() -> Result<()> {
+    let temp_dir = setup_test_directory()?;
+
+    // Create directories with names similar to ignored ones but that shouldn't be ignored
+    let my_target = temp_dir.path().join("my_target");
+    let target_info = temp_dir.path().join("target_info");
+
+    fs::create_dir(&my_target)?;
+    fs::create_dir(&target_info)?;
+
+    // Create files in these directories
+    write_file(my_target.join("valid.js"), "function validate() {}")?;
+    write_file(
+        target_info.join("info.txt"),
+        "Information about validate function",
+    )?;
+
+    // Search for validate in all files
+    let results = SearchTools::grep_search("validate", None, Some(temp_dir.path()))?;
+
+    // Verify files in these directories are found (since they shouldn't be ignored)
+    let found_in_my_target = results
+        .iter()
+        .any(|(path, _, _)| path.to_string_lossy().contains("my_target"));
+
+    let found_in_target_info = results
+        .iter()
+        .any(|(path, _, _)| path.to_string_lossy().contains("target_info"));
+
+    assert!(
+        found_in_my_target,
+        "Should find matches in my_target directory"
+    );
+    assert!(
+        found_in_target_info,
+        "Should find matches in target_info directory"
+    );
+
+    Ok(())
+}
