@@ -41,23 +41,20 @@ cd oli
 
 ### Development Setup
 
+The development environment can be set up using
+[uv](https://github.com/astral-sh/uv?tab=readme-ov-file#installation). Hence, make sure it is
+installed and then run:
+
+
 ```bash
-# Install Python dependencies (for pre-commit)
-python -m pip install uv
-uv venv
-uv pip install -e .
+uv sync --dev
+source .venv/bin/activate
+```
 
-# Install pre-commit hooks
-pre-commit install
+# Run linting and formatting
 
-# Run Rust linting and formatting
-cargo fmt
-cargo clippy
-
-# Run TypeScript checks in the UI directory
-cd ui
-npm run lint
-npm run format
+```bash
+pre-commit run --all-files
 ```
 
 ### Cloud API Models
