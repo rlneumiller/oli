@@ -137,31 +137,47 @@ if [ -f "$TOOL_RESULTS_FILE" ] && jq -e . "$TOOL_RESULTS_FILE" > /dev/null 2>&1;
   TEST_TIME=$(jq -r '.test_details.test_time_seconds // ""' "$TOOL_RESULTS_FILE")
 fi
 
-# Get the list of passed tests
+# Get the list of passed tests and individual test times
 PASSED_TESTS=()
+declare -A TEST_TIMES
 
-# If all tests passed as indicated in summary file, assume all tests passed
-if [ "$TEST_PASSED" = "$TEST_TOTAL" ] && [ "$TEST_TOTAL" -gt 0 ]; then
-  PASSED_TESTS=("${ALL_TESTS[@]}")
-# Otherwise, if some tests failed, we need to determine which ones passed
-elif [ -f "$TOOL_RESULTS_FILE" ] && jq -e . "$TOOL_RESULTS_FILE" > /dev/null 2>&1; then
+# If the tool results file exists and contains raw output, extract data
+if [ -f "$TOOL_RESULTS_FILE" ] && jq -e . "$TOOL_RESULTS_FILE" > /dev/null 2>&1; then
   # Extract the raw output from the test results file
   RAW_OUTPUT=$(jq -r '.raw_output // ""' "$TOOL_RESULTS_FILE")
 
   # Check each test individually by looking for "test::...::test_name ... ok" pattern in raw output
   for test in "${ALL_TESTS[@]}"; do
+    # Check if the test passed
     if echo "$RAW_OUTPUT" | grep -q "$test.*ok"; then
       PASSED_TESTS+=("$test")
+    fi
+
+    # Extract the test's individual timing information
+    # Look for a pattern like: test agent::test_tools::test_glob_tool_with_llm ... ok (12.34s)
+    # or for any timing pattern associated with this specific test
+    TEST_TIME_PATTERN="$test[^(]*(\([0-9.]+s\))"
+    if TIME_FOUND=$(echo "$RAW_OUTPUT" | grep -o "$TEST_TIME_PATTERN" | grep -o "([0-9.]\+s)"); then
+      # Store the time including parentheses
+      TEST_TIMES["$test"]="$TIME_FOUND"
     fi
   done
 fi
 
-# Generate the checklist using the actual test function names with execution time in brackets if available
+# Fall back to assuming all tests passed if the summary says so
+if [ "$TEST_PASSED" = "$TEST_TOTAL" ] && [ "$TEST_TOTAL" -gt 0 ] && [ ${#PASSED_TESTS[@]} -eq 0 ]; then
+  PASSED_TESTS=("${ALL_TESTS[@]}")
+fi
+
+# Generate the checklist with individual test times
 for test in "${ALL_TESTS[@]}"; do
   test_display="${test}"
 
-  # Add execution time in brackets if available
-  if [ -n "$TEST_TIME" ]; then
+  # Add individual execution time in brackets if available for this test
+  if [ -n "${TEST_TIMES[$test]}" ]; then
+    test_display="${test} ${TEST_TIMES[$test]}"
+  # Fall back to overall time only if individual time not available
+  elif [ -n "$TEST_TIME" ]; then
     test_display="${test} (${TEST_TIME}s)"
   fi
 
