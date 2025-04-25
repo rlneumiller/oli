@@ -146,31 +146,71 @@ if [ -f "$TOOL_RESULTS_FILE" ] && jq -e . "$TOOL_RESULTS_FILE" > /dev/null 2>&1;
   # Extract the raw output from the test results file
   RAW_OUTPUT=$(jq -r '.raw_output // ""' "$TOOL_RESULTS_FILE")
 
-  # Check each test individually by looking for "test::...::test_name ... ok" pattern in raw output
+  # Filter to only keep benchmark tests (those with "_with_llm" in their name)
+  BENCHMARK_TESTS=()
   for test in "${ALL_TESTS[@]}"; do
+    if [[ "$test" == *"_with_llm"* ]]; then
+      BENCHMARK_TESTS+=("$test")
+    fi
+  done
+
+  # Check each benchmark test individually by looking for "test::...::test_name ... ok" pattern in raw output
+  for test in "${BENCHMARK_TESTS[@]}"; do
     # Check if the test passed
     if echo "$RAW_OUTPUT" | grep -q "$test.*ok"; then
       PASSED_TESTS+=("$test")
     fi
 
     # Extract the test's individual timing information
-    # Look for a pattern like: test agent::test_tools::test_glob_tool_with_llm ... ok (12.34s)
-    # or for any timing pattern associated with this specific test
-    TEST_TIME_PATTERN="$test[^(]*(\([0-9.]+s\))"
-    if TIME_FOUND=$(echo "$RAW_OUTPUT" | grep -o "$TEST_TIME_PATTERN" | grep -o "([0-9.]\+s)"); then
-      # Store the time including parentheses
-      TEST_TIMES["$test"]="$TIME_FOUND"
+    # First try to get it from the capabilities JSON section which should have accurate times
+    if jq -e ".test_details.capabilities.${test#test_}.time" "$TOOL_RESULTS_FILE" > /dev/null 2>&1; then
+      TIME_FOUND=$(jq -r ".test_details.capabilities.${test#test_}.time" "$TOOL_RESULTS_FILE")
+      if [ -n "$TIME_FOUND" ] && [ "$TIME_FOUND" != "null" ]; then
+        # Check if the time already has parentheses, add them if not
+        if [[ "$TIME_FOUND" != \(* ]]; then
+          TEST_TIMES["$test"]="($TIME_FOUND)"
+        else
+          TEST_TIMES["$test"]="$TIME_FOUND"
+        fi
+      fi
+    else
+      # Fall back to traditional pattern matching if JSON extraction fails
+      # Look for a pattern like: test agent::test_tools::test_glob_tool_with_llm ... ok (12.34s)
+      TEST_TIME_PATTERN="$test[^(]*(\([0-9.]+s\))"
+      if TIME_FOUND=$(echo "$RAW_OUTPUT" | grep -o "$TEST_TIME_PATTERN" | grep -o "([0-9.]\+s)"); then
+        # Store the time including parentheses
+        TEST_TIMES["$test"]="$TIME_FOUND"
+      fi
     fi
   done
+
+  # If we couldn't find individual test times, extract them from the raw output differently
+  if [ ${#TEST_TIMES[@]} -eq 0 ]; then
+    echo "Attempting to extract individual test times from raw output..."
+    # Look for timing patterns in the raw output for each benchmark test
+    for test in "${BENCHMARK_TESTS[@]}"; do
+      # First try to find our custom timing entries
+      if TIME_FOUND=$(echo "$RAW_OUTPUT" | grep "Individual test time for $test" | grep -o "[0-9]\+ms ([0-9.]\+s)" | head -1); then
+        TEST_TIMES["$test"]="($TIME_FOUND)"
+      # Then try the usual pattern
+      elif TIME_FOUND=$(echo "$RAW_OUTPUT" | grep "$test" | grep -o "finished in [0-9.]\+s" | head -1 | grep -o "[0-9.]\+s"); then
+        TEST_TIMES["$test"]="($TIME_FOUND)"
+      fi
+    done
+  fi
 fi
+
+# Update TEST_TOTAL and TEST_PASSED to reflect only benchmark tests
+TEST_TOTAL=${#BENCHMARK_TESTS[@]}
+TEST_PASSED=${#PASSED_TESTS[@]}
 
 # Fall back to assuming all tests passed if the summary says so
 if [ "$TEST_PASSED" = "$TEST_TOTAL" ] && [ "$TEST_TOTAL" -gt 0 ] && [ ${#PASSED_TESTS[@]} -eq 0 ]; then
-  PASSED_TESTS=("${ALL_TESTS[@]}")
+  PASSED_TESTS=("${BENCHMARK_TESTS[@]}")
 fi
 
-# Generate the checklist with individual test times
-for test in "${ALL_TESTS[@]}"; do
+# Generate the checklist with individual test times - only for benchmark tests
+for test in "${BENCHMARK_TESTS[@]}"; do
   test_display="${test}"
 
   # Add individual execution time in brackets if available for this test

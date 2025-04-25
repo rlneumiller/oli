@@ -126,19 +126,53 @@ jobs:
           echo "Running all benchmark tests..."
           START=$(date +%s%3N)
           set +e  # Don't exit on error
-          RESULT=$(cargo test --release --features benchmark --test mod -- \
-            agent::test_tools \
-            --test-threads=1 -- --nocapture 2>&1)
-          TEST_EXIT_CODE=$?
+
+          # First get the list of all benchmark tests
+          BENCH_TESTS=$(grep -A 1 "cfg_attr.*feature.*benchmark.*ignore" $(find ./tests -type f -name "*.rs") 2>/dev/null |
+                        grep -o "async fn test[a-zA-Z0-9_]*" |
+                        grep "_with_llm" |
+                        sed 's/async fn //g')
+
+          # Run tests one by one to get accurate timing for each
+          RESULT=""
+          TEST_RESULT=0
+          for TEST in $BENCH_TESTS; do
+            echo "Running benchmark test: $TEST"
+            TEST_START=$(date +%s%3N)
+            # Run just this one test
+            TEST_OUTPUT=$(cargo test --release --features benchmark --test mod -- \
+              agent::test_tools::$TEST \
+              --exact --test-threads=1 -- --nocapture 2>&1)
+            TEST_EXIT=$?
+            TEST_END=$(date +%s%3N)
+            TEST_DURATION=$((TEST_END - TEST_START))
+            # If this test failed, mark the overall result as failed
+            if [ $TEST_EXIT -ne 0 ]; then
+              TEST_RESULT=1
+            fi
+            # Add test output to overall result with computed duration
+            RESULT+="$TEST_OUTPUT\n"
+            RESULT+="Individual test time for $TEST: ${TEST_DURATION}ms ($(echo "scale=2; $TEST_DURATION/1000" | bc)s)\n"
+          done
+
+          TEST_EXIT_CODE=$TEST_RESULT
           END=$(date +%s%3N)
           TIME=$((END - START))
           set -e  # Return to exit on error
 
           # Extract test details
-          # Count total and successful tests
-          TOTAL_TESTS=$(echo "$RESULT" | grep -c "test agent::test_tools::" || echo "0")
-          SUCCESS_COUNT=$(echo "$RESULT" | grep "test agent::test_tools::" | grep -c "ok" || echo "0")
-          TEST_TIME=$(echo "$RESULT" | grep -o "finished in [0-9.]\+s" | head -1 | grep -o "[0-9.]\+" || echo "")
+          # Count total benchmark tests and successful tests (based on tests that were actually run)
+          TOTAL_TESTS=$(echo "$BENCH_TESTS" | wc -w | tr -d ' ' || echo "0")
+          # Count successful tests by examining the result for each test
+          SUCCESS_COUNT=0
+          for TEST in $BENCH_TESTS; do
+            if echo "$RESULT" | grep -q "$TEST.*ok"; then
+              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            fi
+          done
+
+          # Get overall time for all tests combined
+          TEST_TIME=$(echo "scale=2; $TIME/1000" | bc)
 
           # Save results as JSON
           cat > benchmark_results/tool_tests/tools_benchmark_results.json << EOF
@@ -149,17 +183,32 @@ jobs:
               "successful_tests": $SUCCESS_COUNT,
               "test_time_seconds": "$TEST_TIME",
               "capabilities": $(
-                # Get all test function names from test pattern
-                ALL_TESTS=$(grep -A 1 "cfg_attr.*feature.*benchmark.*ignore" $(find ./tests -type f -name "*.rs") 2>/dev/null | grep -o "async fn test[a-zA-Z0-9_]*" | sed 's/async fn //g');
+                # Get all benchmark test function names from test pattern (only _with_llm tests)
+                ALL_TESTS=$(grep -A 1 "cfg_attr.*feature.*benchmark.*ignore" $(find ./tests -type f -name "*.rs") 2>/dev/null |
+                           grep -o "async fn test[a-zA-Z0-9_]*" |
+                           grep "_with_llm" |
+                           sed 's/async fn //g');
                 # Start JSON object
                 echo "{";
                 # Process each test
                 FIRST=true;
                 for TEST in $ALL_TESTS; do
                   KEY=$(echo "$TEST" | sed 's/test_//g');
+                  # Extract individual test time from our custom output
+                  TIME_INFO=$(echo "$RESULT" | grep "Individual test time for $TEST" | grep -o "[0-9]\+ms ([0-9.]\+s)" | head -1 || echo "");
+                  # If no time found, try traditional pattern
+                  if [ -z "$TIME_INFO" ]; then
+                    TIME_PATTERN="$TEST[^(]*(\([0-9.]+s\))";
+                    TIME_INFO=$(echo "$RESULT" | grep -o "$TIME_PATTERN" | grep -o "([0-9.]\+s)" || echo "");
+                  fi
+                  # If still no time found, try another alternate pattern
+                  if [ -z "$TIME_INFO" ]; then
+                    TIME_INFO=$(echo "$RESULT" | grep "$TEST" | grep -o "finished in [0-9.]\+s" | head -1 | sed 's/finished in //g' || echo "");
+                  fi
+                  # Check if test passed
                   PASSED=$(if echo "$RESULT" | grep -q "$TEST.*ok"; then echo "true"; else echo "false"; fi);
                   if [ "$FIRST" = true ]; then FIRST=false; else echo ","; fi;
-                  echo "\"$KEY\": $PASSED";
+                  echo "\"$KEY\": {\"passed\": $PASSED, \"time\": \"$TIME_INFO\"}";
                 done;
                 # End JSON object
                 echo "}";
