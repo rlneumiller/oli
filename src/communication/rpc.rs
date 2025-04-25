@@ -209,11 +209,12 @@ impl RpcServer {
             return Ok(());
         }
 
+        // Forward all notifications via stdout
         // For events with subscribers, we'll immediately send a notification through stdout
         let notification = Notification {
             jsonrpc: "2.0".to_string(),
             method: method.to_string(),
-            params,
+            params: params.clone(),
         };
 
         // Send directly to stdout to ensure immediate delivery
