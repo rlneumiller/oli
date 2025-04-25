@@ -122,12 +122,12 @@ jobs:
             export OLLAMA_FUNCTION_CALLING_FORMAT="verbose"
           fi
 
-          # Run the optimized file read tool test
-          echo "Running file read tool benchmark test..."
+          # Run all benchmark tests in agent::test_tools
+          echo "Running all benchmark tests..."
           START=$(date +%s%3N)
           set +e  # Don't exit on error
           RESULT=$(cargo test --release --features benchmark --test mod -- \
-            integration::test_file_read_tool::test_read_file_tool \
+            agent::test_tools \
             --test-threads=1 -- --nocapture 2>&1)
           TEST_EXIT_CODE=$?
           END=$(date +%s%3N)
@@ -136,22 +136,34 @@ jobs:
 
           # Extract test details
           # Count total and successful tests
-          TOTAL_TESTS=$(echo "$RESULT" | grep -c "test integration::test_file_read_tool::" || echo "0")
-          SUCCESS_COUNT=$(echo "$RESULT" | grep "test integration::test_file_read_tool::" | grep -c "ok" || echo "0")
+          TOTAL_TESTS=$(echo "$RESULT" | grep -c "test agent::test_tools::" || echo "0")
+          SUCCESS_COUNT=$(echo "$RESULT" | grep "test agent::test_tools::" | grep -c "ok" || echo "0")
           TEST_TIME=$(echo "$RESULT" | grep -o "finished in [0-9.]\+s" | head -1 | grep -o "[0-9.]\+" || echo "")
 
           # Save results as JSON
-          cat > benchmark_results/tool_tests/file_read_tool_results.json << EOF
+          cat > benchmark_results/tool_tests/tools_benchmark_results.json << EOF
           {
             "raw_output": $(echo "$RESULT" | jq -Rs .),
             "test_details": {
               "total_tests": $TOTAL_TESTS,
               "successful_tests": $SUCCESS_COUNT,
               "test_time_seconds": "$TEST_TIME",
-              "capabilities": {
-                "reads_files": $(if echo "$RESULT" | grep -q "test_read_file_tool.*ok"; then echo "true"; else echo "false"; fi),
-                "extracts_specific_lines": $(if echo "$RESULT" | grep -i -q "line 2"; then echo "true"; else echo "false"; fi)
-              }
+              "capabilities": $(
+                # Get all test function names from test pattern
+                ALL_TESTS=$(grep -A 1 "cfg_attr.*feature.*benchmark.*ignore" $(find ./tests -type f -name "*.rs") 2>/dev/null | grep -o "async fn test[a-zA-Z0-9_]*" | sed 's/async fn //g');
+                # Start JSON object
+                echo "{";
+                # Process each test
+                FIRST=true;
+                for TEST in $ALL_TESTS; do
+                  KEY=$(echo "$TEST" | sed 's/test_//g');
+                  PASSED=$(if echo "$RESULT" | grep -q "$TEST.*ok"; then echo "true"; else echo "false"; fi);
+                  if [ "$FIRST" = true ]; then FIRST=false; else echo ","; fi;
+                  echo "\"$KEY\": $PASSED";
+                done;
+                # End JSON object
+                echo "}";
+                )
             }
           }
           EOF
@@ -167,7 +179,7 @@ jobs:
             "metadata": {
               "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
               "model": "${{ env.MODEL }}",
-              "test_type": "file_read_benchmark"
+              "test_type": "tools_benchmark"
             },
             "metrics": {
               "execution_time_ms": $TIME,
@@ -199,6 +211,24 @@ jobs:
           echo "Duration: ${TIME}ms"
           echo "Status: $TEST_STATUS (exit code: $TEST_EXIT_CODE)"
           echo "Tests: $SUCCESS_COUNT/$TOTAL_TESTS passed"
+
+          # Show which tool tests passed or failed - dynamically generated from available tests
+          echo "Tool Tests:"
+          # Get all benchmark test names
+          ALL_TESTS=$(grep -A 1 "cfg_attr.*feature.*benchmark.*ignore" $(find ./tests -type f -name "*.rs") 2>/dev/null | grep -o "async fn test[a-zA-Z0-9_]*" | sed 's/async fn //g')
+
+          # Format each test result with a checkmark or X
+          for TEST in $ALL_TESTS; do
+            # Create a user-friendly name (removes test_ prefix and converts _ to space)
+            TEST_NAME=$(echo "$TEST" | sed 's/test_//g' | sed 's/_/ /g' | awk '{for(i=1;i<=NF;i++){ $i=toupper(substr($i,1,1)) substr($i,2) }}1')
+
+            # Check if the test passed
+            if echo "$RESULT" | grep -q "$TEST.*ok"; then
+              echo "✓ $TEST_NAME Tool"
+            else
+              echo "✗ $TEST_NAME Tool"
+            fi
+          done
 
           # Store for other steps
           echo "tool_benchmark_time=${TIME}" >> $GITHUB_OUTPUT
