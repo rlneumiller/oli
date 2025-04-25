@@ -6,7 +6,7 @@
 
 # oli - Open Local Intelligent assistant
 
-![demo](https://github.com/user-attachments/assets/c55b7a01-6046-4893-85d3-0a7aa6a0467d)
+![oli_demo](https://github.com/user-attachments/assets/bf7e8bf1-cdac-4256-886a-e1780f779f65)
 
 ---
 
@@ -15,7 +15,7 @@ oli is an open-source alternative to Claude Code with powerful agentic capabilit
 - A modern hybrid architecture:
   - Rust backend for performance and core functionality
   - React/Ink frontend for a beautiful, interactive terminal UI
-- Support for both cloud APIs (Anthropic Claude Sonnet 3.7, OpenAI GPT4o and Google GEMINI) and local LLMs (via Ollama)
+- Support for both cloud APIs (Anthropic Claude Sonnet 3.7, OpenAI GPT4o and Google Gemini) and local LLMs (via Ollama)
 - Strong agentic capabilities including file search, edit, and command execution
 - Tool use support across all model providers (Anthropic, OpenAI, Google and Ollama)
 
