@@ -1,7 +1,5 @@
 use oli_server::agent::core::{Agent, LLMProvider};
-use oli_server::agent::tools::{
-    FileReadToolParams, GlobToolParams, GrepToolParams, LSToolParams, ToolCall,
-};
+use oli_server::agent::tools::{GlobParams, GrepParams, LSParams, ReadParams, ToolCall};
 use std::env;
 use std::fs;
 use tempfile::tempdir;
@@ -59,8 +57,8 @@ async fn test_read_file_tool_direct() {
     let test_content = "Line 1: This is a test file.\nLine 2: With multiple lines.\nLine 3: To verify file reading.";
     fs::write(&test_file_path, test_content).expect("Failed to write test file");
 
-    // Test the FileReadTool directly
-    let read_result = ToolCall::FileReadTool(FileReadToolParams {
+    // Test the Read tool directly
+    let read_result = ToolCall::Read(ReadParams {
         file_path: test_file_path.to_string_lossy().to_string(),
         offset: 0,
         limit: 10,
@@ -106,7 +104,7 @@ async fn test_read_file_tool_with_llm() {
 
     // Test the agent's ability to read a file with a clear directive
     let prompt = format!(
-        "Use the FileReadTool to read {} and tell me what's on line 2",
+        "Use the Read tool to read {} and tell me what's on line 2",
         test_file_path.display()
     );
 
@@ -126,7 +124,7 @@ async fn test_read_file_tool_with_llm() {
             // Show proper failure in benchmark results if success criteria aren't met
             assert!(
                 success,
-                "FileReadTool test failed - response doesn't reference line 2 content: {}",
+                "Read tool test failed - response doesn't reference line 2 content: {}",
                 response
             );
         }
@@ -161,8 +159,8 @@ async fn test_glob_tool_direct() {
     fs::write(temp_dir.path().join("README.md"), "# Test Project")
         .expect("Failed to write README.md");
 
-    // Test the GlobTool directly for Rust files
-    let glob_result = ToolCall::GlobTool(GlobToolParams {
+    // Test the Glob tool directly for Rust files
+    let glob_result = ToolCall::Glob(GlobParams {
         pattern: "*.rs".to_string(),
         path: Some(rs_dir.to_string_lossy().to_string()),
     })
@@ -179,8 +177,8 @@ async fn test_glob_tool_direct() {
         glob_output
     );
 
-    // Test the GlobTool directly for JS files
-    let glob_js_result = ToolCall::GlobTool(GlobToolParams {
+    // Test the Glob tool directly for JS files
+    let glob_js_result = ToolCall::Glob(GlobParams {
         pattern: "*.js".to_string(),
         path: Some(js_dir.to_string_lossy().to_string()),
     })
@@ -236,7 +234,7 @@ async fn test_glob_tool_with_llm() {
 
     // Test the agent's ability to use glob tool with a very explicit prompt
     let prompt = format!(
-        "Use the GlobTool tool to find all Rust files (*.rs) in the {}/src directory. Specifically use the pattern \"*.rs\" and list each filename you find.",
+        "Use the Glob tool to find all Rust files (*.rs) in the {}/src directory. Specifically use the pattern \"*.rs\" and list each filename you find.",
         temp_dir.path().display()
     );
 
@@ -259,13 +257,13 @@ async fn test_glob_tool_with_llm() {
                 || response.contains("utils.rs")
                 || response.contains("*.rs")
                 || response.contains("Rust file")
-                || response.contains("GlobTool")
+                || response.contains("Glob")
                 || response.contains("glob");
 
             // Show proper failure in benchmark results if success criteria aren't met
             assert!(
                 success,
-                "GlobTool test failed - response doesn't show proper tool usage: {}",
+                "Glob tool test failed - response doesn't show proper tool usage: {}",
                 response
             );
         }
@@ -303,8 +301,8 @@ async fn test_grep_tool_direct() {
         "fn important_function() {\n    // This function does important things\n    println!(\"Important operation\");\n}"
     ).expect("Failed to write code.rs");
 
-    // Test the GrepTool with case-sensitive pattern
-    let grep_result = ToolCall::GrepTool(GrepToolParams {
+    // Test the Grep tool with case-sensitive pattern
+    let grep_result = ToolCall::Grep(GrepParams {
         pattern: "IMPORTANT".to_string(),
         path: Some(temp_dir.path().to_string_lossy().to_string()),
         include: None,
@@ -322,8 +320,8 @@ async fn test_grep_tool_direct() {
         grep_output
     );
 
-    // Test the GrepTool with case-insensitive pattern
-    let grep_insensitive_result = ToolCall::GrepTool(GrepToolParams {
+    // Test the Grep tool with case-insensitive pattern
+    let grep_insensitive_result = ToolCall::Grep(GrepParams {
         pattern: "(?i)important".to_string(), // Case-insensitive regex
         path: Some(temp_dir.path().to_string_lossy().to_string()),
         include: None,
@@ -347,7 +345,7 @@ async fn test_grep_tool_direct() {
     );
 
     // Test with file pattern include
-    let grep_txt_result = ToolCall::GrepTool(GrepToolParams {
+    let grep_txt_result = ToolCall::Grep(GrepParams {
         pattern: "important".to_string(),
         path: Some(temp_dir.path().to_string_lossy().to_string()),
         include: Some("*.txt".to_string()),
@@ -410,7 +408,7 @@ async fn test_grep_tool_with_llm() {
 
     // Test the agent's ability to use grep tool with a very explicit prompt
     let prompt = format!(
-        "Use the GrepTool to search files in {} for the exact string 'IMPORTANT' (case sensitive). List the names of files that contain this exact string.",
+        "Use the Grep tool to search files in {} for the exact string 'IMPORTANT' (case sensitive). List the names of files that contain this exact string.",
         temp_dir.path().display()
     );
 
@@ -433,12 +431,12 @@ async fn test_grep_tool_with_llm() {
                 || response.contains("search")
                 || response.contains("grep")
                 || response.contains("IMPORTANT")
-                || response.contains("GrepTool");
+                || response.contains("Grep");
 
             // Show proper failure in benchmark results if success criteria aren't met
             assert!(
                 success,
-                "GrepTool test failed - response doesn't show proper tool usage: {}",
+                "Grep tool test failed - response doesn't show proper tool usage: {}",
                 response
             );
         }
@@ -468,7 +466,7 @@ async fn test_ls_tool_direct() {
         .expect("Failed to write settings.json");
 
     // Test root directory listing
-    let ls_result = ToolCall::LSTool(LSToolParams {
+    let ls_result = ToolCall::LS(LSParams {
         path: temp_dir.path().to_string_lossy().to_string(),
         ignore: None,
     })
@@ -492,7 +490,7 @@ async fn test_ls_tool_direct() {
     );
 
     // Test subdirectory listing
-    let ls_src_result = ToolCall::LSTool(LSToolParams {
+    let ls_src_result = ToolCall::LS(LSParams {
         path: temp_dir.path().join("src").to_string_lossy().to_string(),
         ignore: None,
     })
@@ -511,7 +509,7 @@ async fn test_ls_tool_direct() {
         ls_src_output
     );
 
-    // The ignore parameter in LSToolParams appears to be for internal use
+    // The ignore parameter in LSParams appears to be for internal use
     // and may not be working as expected in the current implementation.
     // Instead of testing the ignore functionality, let's ensure the basic listing works
 
@@ -554,9 +552,9 @@ async fn test_ls_tool_with_llm() {
     // in unexpected ways, we'll make this test more resilient by considering it a success
     // if the model either successfully uses the ls tool or responds in a reasonable way.
 
-    // Test the agent's ability to use LSTool with a clear and explicit prompt
+    // Test the agent's ability to use LS tool with a clear and explicit prompt
     let prompt = format!(
-        "Use the LSTool to list all files and directories in {}. \
+        "Use the LS tool to list all files and directories in {}. \
         Your response should specifically list the directory names you find.",
         temp_dir.path().display()
     );
@@ -579,14 +577,14 @@ async fn test_ls_tool_with_llm() {
                 || response.contains("docs")
                 || response.contains("config")
                 || response.contains("list")
-                || response.contains("LSTool")
+                || response.contains("LS")
                 || response.contains("director")
                 || response.contains("files");
 
             // Show proper failure in benchmark results if success criteria aren't met
             assert!(
                 success,
-                "LSTool test failed - response doesn't show proper tool usage: {}",
+                "LS tool test failed - response doesn't show proper tool usage: {}",
                 response
             );
         }

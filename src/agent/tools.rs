@@ -15,10 +15,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolType {
-    FileReadTool,
-    GlobTool,
-    GrepTool,
-    LSTool,
+    Read,
+    Glob,
+    Grep,
+    LS,
     Edit,
     Replace,
     Bash,
@@ -29,27 +29,27 @@ pub enum ToolType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileReadToolParams {
+pub struct ReadParams {
     pub file_path: String,
     pub offset: usize,
     pub limit: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GlobToolParams {
+pub struct GlobParams {
     pub pattern: String,
     pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GrepToolParams {
+pub struct GrepParams {
     pub pattern: String,
     pub include: Option<String>,
     pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LSToolParams {
+pub struct LSParams {
     pub path: String,
     pub ignore: Option<Vec<String>>,
 }
@@ -76,10 +76,10 @@ pub struct BashParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "tool", content = "params")]
 pub enum ToolCall {
-    FileReadTool(FileReadToolParams),
-    GlobTool(GlobToolParams),
-    GrepTool(GrepToolParams),
-    LSTool(LSToolParams),
+    Read(ReadParams),
+    Glob(GlobParams),
+    Grep(GrepParams),
+    LS(LSParams),
     Edit(EditParams),
     Replace(ReplaceParams),
     Bash(BashParams),
@@ -144,10 +144,10 @@ fn send_tool_notification(
 impl ToolCall {
     pub fn execute(&self) -> Result<String> {
         match self {
-            ToolCall::FileReadTool(params) => {
+            ToolCall::Read(params) => {
                 // Generate a unique ID for this execution
                 let tool_id = format!(
-                    "fileread-direct-{}",
+                    "read-direct-{}",
                     SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
@@ -221,7 +221,7 @@ impl ToolCall {
 
                 result
             }
-            ToolCall::GlobTool(params) => {
+            ToolCall::Glob(params) => {
                 // Generate a unique ID for this execution
                 let tool_id = format!(
                     "glob-direct-{}",
@@ -241,12 +241,12 @@ impl ToolCall {
                     serde_json::json!({
                         "pattern": params.pattern,
                         "path": path,
-                        "description": format!("Search(pattern: \"{}\", path: \"{}\")", params.pattern, path),
+                        "description": format!("Glob(pattern: \"{}\", path: \"{}\")", params.pattern, path),
                     })
                 } else {
                     serde_json::json!({
                         "pattern": params.pattern,
-                        "description": format!("Search(pattern: \"{}\")", params.pattern),
+                        "description": format!("Glob(pattern: \"{}\")", params.pattern),
                     })
                 };
                 let message = if let Some(path) = &params.path {
@@ -255,10 +255,8 @@ impl ToolCall {
                     format!("Searching with pattern: {}", params.pattern)
                 };
 
-                send_tool_notification(
-                    "Search", "running", &message, metadata, &tool_id, start_time,
-                )
-                .ok();
+                send_tool_notification("Glob", "running", &message, metadata, &tool_id, start_time)
+                    .ok();
 
                 // Add a brief delay to ensure the running state is visible
                 std::thread::sleep(std::time::Duration::from_millis(500));
@@ -299,7 +297,7 @@ impl ToolCall {
                             })
                         };
                         send_tool_notification(
-                            "Search",
+                            "Glob",
                             "success",
                             &format!("Found {} files", results.len()),
                             metadata,
@@ -325,7 +323,7 @@ impl ToolCall {
                             })
                         };
                         send_tool_notification(
-                            "Search",
+                            "Glob",
                             "error",
                             &format!("Error searching for pattern: {}", e),
                             metadata,
@@ -338,7 +336,7 @@ impl ToolCall {
                     }
                 }
             }
-            ToolCall::GrepTool(params) => {
+            ToolCall::Grep(params) => {
                 // Generate a unique ID for this execution
                 let tool_id = format!(
                     "grep-direct-{}",
@@ -356,18 +354,17 @@ impl ToolCall {
                 // Construct metadata based on available parameters
                 let description = match (&params.path, &params.include) {
                     (Some(path), Some(include)) => format!(
-                        "Search(pattern: \"{}\", path: \"{}\", include: \"{}\")",
+                        "Grep(pattern: \"{}\", path: \"{}\", include: \"{}\")",
                         params.pattern, path, include
                     ),
-                    (Some(path), None) => format!(
-                        "Search(pattern: \"{}\", path: \"{}\")",
-                        params.pattern, path
-                    ),
+                    (Some(path), None) => {
+                        format!("Grep(pattern: \"{}\", path: \"{}\")", params.pattern, path)
+                    }
                     (None, Some(include)) => format!(
-                        "Search(pattern: \"{}\", include: \"{}\")",
+                        "Grep(pattern: \"{}\", include: \"{}\")",
                         params.pattern, include
                     ),
-                    (None, None) => format!("Search(pattern: \"{}\")", params.pattern),
+                    (None, None) => format!("Grep(pattern: \"{}\")", params.pattern),
                 };
 
                 // Send start notification
@@ -393,10 +390,8 @@ impl ToolCall {
                     (None, None) => format!("Searching for content: \"{}\"", params.pattern),
                 };
 
-                send_tool_notification(
-                    "Search", "running", &message, metadata, &tool_id, start_time,
-                )
-                .ok();
+                send_tool_notification("Grep", "running", &message, metadata, &tool_id, start_time)
+                    .ok();
 
                 // Add a brief delay to ensure the running state is visible
                 std::thread::sleep(std::time::Duration::from_millis(500));
@@ -430,7 +425,7 @@ impl ToolCall {
                             "description": format!("Found {} files", results.len()),
                         });
                         send_tool_notification(
-                            "Search",
+                            "Grep",
                             "success",
                             &format!("Found {} files", results.len()),
                             metadata,
@@ -450,7 +445,7 @@ impl ToolCall {
                             "description": format!("Error searching content: {}", e),
                         });
                         send_tool_notification(
-                            "Search",
+                            "Grep",
                             "error",
                             &format!("Error searching content: {}", e),
                             metadata,
@@ -463,10 +458,10 @@ impl ToolCall {
                     }
                 }
             }
-            ToolCall::LSTool(params) => {
+            ToolCall::LS(params) => {
                 // Generate a unique ID for this execution
                 let tool_id = format!(
-                    "listdir-direct-{}",
+                    "ls-direct-{}",
                     SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
@@ -485,7 +480,7 @@ impl ToolCall {
                     "description": format!("Listing directory: {}", params.path),
                 });
                 send_tool_notification(
-                    "List",
+                    "LS",
                     "running",
                     &format!("Listing directory: {}", params.path),
                     metadata,
@@ -523,7 +518,7 @@ impl ToolCall {
                             "description": format!("Listed {} paths", entries.len()),
                         });
                         send_tool_notification(
-                            "List",
+                            "LS",
                             "success",
                             &format!("Listed {} paths", entries.len()),
                             metadata,
@@ -542,7 +537,7 @@ impl ToolCall {
                             "description": format!("Error listing directory: {}", e),
                         });
                         send_tool_notification(
-                            "List",
+                            "LS",
                             "error",
                             &format!("Error listing directory: {}", e),
                             metadata,
@@ -735,7 +730,7 @@ impl ToolCall {
 pub fn get_tool_definitions() -> Vec<Value> {
     vec![
         serde_json::json!({
-            "name": "FileReadTool",
+            "name": "Read",
             "description": "Reads a file from the local filesystem. The file_path must be an absolute path.",
             "parameters": {
                 "type": "object",
@@ -757,7 +752,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             }
         }),
         serde_json::json!({
-            "name": "GlobTool",
+            "name": "Glob",
             "description": "Fast file pattern matching tool using glob patterns like '**/*.rs', supports * (matches characters), ** (recursive directories), {} (alternatives)",
             "parameters": {
                 "type": "object",
@@ -775,7 +770,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             }
         }),
         serde_json::json!({
-            "name": "GrepTool",
+            "name": "Grep",
             "description": "Fast content search tool using regular expressions to find patterns in file contents",
             "parameters": {
                 "type": "object",
@@ -797,7 +792,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             }
         }),
         serde_json::json!({
-            "name": "LSTool",
+            "name": "LS",
             "description": "Lists files and directories in a given path",
             "parameters": {
                 "type": "object",
