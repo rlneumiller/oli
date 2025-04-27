@@ -360,7 +360,7 @@ const App: React.FC<AppProps> = ({ backend, initialPrompt, initialModelIndex }) 
     return () => {
       backend.removeAllListeners();
     };
-  }, [backend, initialPrompt, initialPromptProcessed]);
+  }, [backend, initialPrompt, initialPromptProcessed, initialModelIndex]);
 
   // Handle model selection - memoized to prevent unnecessary rerenders
   const handleModelSelect = useCallback(
