@@ -6,7 +6,7 @@ import ModelSelector from "./ModelSelector.js";
 import StatusBar from "./StatusBar.js";
 // Theme is used by imported components
 
-import { AppState, ToolExecution, ToolStatusUpdate } from "../types/index.js";
+import { AppState, ToolExecution, ToolStatusUpdate, Model } from "../types/index.js";
 import { isCommand } from "../utils/commandUtils.js";
 import {
   executeCommand,
@@ -16,19 +16,21 @@ import {
 // App props interface
 interface AppProps {
   backend: BackendService;
+  initialPrompt?: string | null;
+  initialModelIndex?: number;
 }
 
 // Main app component
-const App: React.FC<AppProps> = ({ backend }) => {
+const App: React.FC<AppProps> = ({ backend, initialPrompt, initialModelIndex }) => {
   // App state
   const [state, setState] = useState<AppState>({
     models: [],
-    selectedModel: 0,
+    selectedModel: initialModelIndex !== undefined ? initialModelIndex : 0,
     messages: [],
     isProcessing: false,
     error: null,
     backendConnected: false,
-    appMode: "setup", // Start in setup mode
+    appMode: initialModelIndex !== undefined ? "chat" : "setup", // Only skip setup if model explicitly provided
     useAgent: true, // Agent mode is always enabled
   });
 
@@ -36,6 +38,9 @@ const App: React.FC<AppProps> = ({ backend }) => {
   const [toolExecutions, setToolExecutions] = useState<
     Map<string, ToolExecution>
   >(new Map());
+
+  // Track if initial prompt has been processed
+  const [initialPromptProcessed, setInitialPromptProcessed] = useState<boolean>(false);
 
   // UI state
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -129,8 +134,25 @@ const App: React.FC<AppProps> = ({ backend }) => {
 
   // Load initial data
   useEffect(() => {
+    // Check if backend is already connected via the flag
+    if ((backend as any).isConnected) {
+      // If already connected, fetch models directly
+      backend.call("get_available_models").then(result => {
+        const models = (result.models as Model[]) || [];
+
+        setState((prev) => ({
+          ...prev,
+          models: models,
+          backendConnected: true,
+          // If we have an initial prompt or model, go straight to chat mode
+          ...(initialPrompt || initialModelIndex !== undefined ? { appMode: "chat" } : {}),
+        }));
+      }).catch(err => {
+        });
+    }
+
     // Listen for backend connection events
-    backend.on("backend_connected", (params) => {
+    backend.on("backend_connected", async (params) => {
       setState((prev) => ({
         ...prev,
         models: params.models || [],
@@ -138,7 +160,47 @@ const App: React.FC<AppProps> = ({ backend }) => {
         backendInfo: {
           ...params,
         },
+        // If we have an initial prompt or model, go straight to chat mode
+        ...(initialPrompt || initialModelIndex !== undefined ? { appMode: "chat" } : {}),
       }));
+
+      // If an initial model was specified, set it in the backend
+      if (initialModelIndex !== undefined && initialModelIndex !== 0) {
+        try {
+          await backend.call("set_selected_model", { model_index: initialModelIndex });
+        } catch (error) {
+          // Failed to set initial model, but continue anyway
+        }
+      }
+
+      // If there's an initial prompt and we're now connected, process it
+      if (initialPrompt && !initialPromptProcessed) {
+        // Skip model selection and go straight to chat with initial prompt
+        setInitialPromptProcessed(true);
+
+        // Add the user message to the chat history
+        setState((prev) => ({
+          ...prev,
+          appMode: "chat", // Switch to chat mode immediately
+          messages: [
+            ...prev.messages,
+            {
+              id: `user-${Date.now()}`,
+              role: "user",
+              content: initialPrompt,
+              timestamp: Date.now(),
+            },
+          ],
+        }));
+
+        // Process the initial prompt with the selected model
+        backend.call("run", {
+          prompt: initialPrompt,
+          model_index: initialModelIndex
+        }).catch((error) => {
+          // Failed to process initial prompt, but continue
+        });
+      }
     });
 
     backend.on("backend_connection_error", (params) => {
@@ -298,7 +360,7 @@ const App: React.FC<AppProps> = ({ backend }) => {
     return () => {
       backend.removeAllListeners();
     };
-  }, [backend]);
+  }, [backend, initialPrompt, initialPromptProcessed, initialModelIndex]);
 
   // Handle model selection - memoized to prevent unnecessary rerenders
   const handleModelSelect = useCallback(

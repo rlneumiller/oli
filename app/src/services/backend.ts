@@ -25,6 +25,9 @@ export class BackendService extends EventEmitter {
     }
   >;
 
+  // Method to check backend connection health
+  checkConnection!: () => Promise<boolean>;
+
   // Track active subscriptions
   private subscriptions: Map<string, SubscriptionId> = new Map();
 
@@ -76,9 +79,10 @@ export class BackendService extends EventEmitter {
       }
     });
 
-    // Handle errors (silently to avoid stdout pollution)
-    this.process.stderr?.on("data", () => {
-      // Error handling is done via events
+    // Handle errors with better visibility
+    this.process.stderr?.on("data", (data) => {
+      // Log backend errors to console for debugging
+      console.error(`Backend error: ${data.toString().trim()}`);
     });
 
     // Handle process exit (silently)
@@ -167,44 +171,88 @@ export class BackendService extends EventEmitter {
 
 // Spawn a new backend process
 export function spawnBackend(path: string): BackendService {
-  // Create process without logging to stdout
+  // Create process with debugging on stderr
   const process = spawn(path, [], {
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "inherit"],
+    detached: false
+  });
+
+  // Check if the process started correctly
+  if (!process.pid) {
+    console.error("Failed to start backend process");
+    throw new Error("Failed to start backend process");
+  }
+
+
+  // Handle process errors
+  process.on("error", (err) => {
+    console.error("Backend process error:", err);
   });
 
   // Create the backend service
   const backend = new BackendService(process);
 
-  // Perform a health check silently
-  setTimeout(async () => {
+  // Perform a health check function
+  const checkConnection = async () => {
     try {
-      // Try to call a simple method on the backend
-      const result = await backend.call("get_available_models");
+      // Try to call a simple method on the backend with a generous timeout
+      const result = await Promise.race([
+        backend.call("get_available_models"),
+        new Promise<Record<string, unknown>>((_, reject) =>
+          setTimeout(() => reject(new Error("Connection timeout")), 10000)
+        )
+      ]) as Record<string, unknown>;
 
       // Get the version from the backend
       let version;
       try {
         const versionResult = await backend.call("get_version");
         version = versionResult.version as string;
-      } catch {
-        // Don't set version if we can't get it from backend
+      } catch (err) {
+        // Continue anyway if version can't be retrieved
       }
 
-      // Success event
+      // Success event - emit with models data
       backend.emitEvent("backend_connected", {
         success: true,
         message: "Successfully connected to backend",
         models: result.models,
         version,
       });
+
+      return true;
     } catch (error) {
-      // Failure event
+      console.error("Backend connection check failed:",
+        error instanceof Error ? error.message : String(error));
+
+      // Notify of error but don't retry - let the CLI handle retries
       backend.emitEvent("backend_connection_error", {
         success: false,
         message: "Failed to connect to backend server",
         error: error instanceof Error ? error.message : String(error),
       });
+
+      return false;
     }
+  };
+
+  // Create convenience method on the service to check connection
+  backend.checkConnection = checkConnection;
+
+  // Add a connection flag to track state
+  (backend as any).isConnected = false;
+
+  // Listen for connection events to update the flag
+  backend.on("backend_connected", () => {
+    (backend as any).isConnected = true;
+  });
+
+  // CRITICAL: Start the connection check automatically with a slight delay
+  // This ensures the backend process is fully started before we try to connect
+  setTimeout(() => {
+    checkConnection().catch(err => {
+      console.error("Initial connection check failed:", err);
+    });
   }, 1000);
 
   return backend;
