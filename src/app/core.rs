@@ -211,7 +211,7 @@ pub struct App {
     pub logs: Vec<String>,
     pub available_models: Vec<ModelConfig>,
     pub error_message: Option<String>,
-    pub last_query_time: Instant,
+    pub last_run_time: Instant,
     pub use_agent: bool,
     pub agent: Option<Agent>,
     pub tokio_runtime: Option<Runtime>,
@@ -255,7 +255,7 @@ impl App {
             logs: vec![],
             available_models: models::get_available_models(),
             error_message: None,
-            last_query_time: std::time::Instant::now(),
+            last_run_time: std::time::Instant::now(),
             use_agent: false,
             agent: None,
             tokio_runtime,
@@ -277,21 +277,21 @@ impl App {
             .ok_or_else(|| anyhow::anyhow!("Invalid model index"))
     }
 
-    /// Query the model with the given prompt
-    pub fn query_model(&mut self, prompt: &str, model_index: Option<usize>) -> Result<String> {
+    /// Run the model with the given prompt
+    pub fn run(&mut self, prompt: &str, model_index: Option<usize>) -> Result<String> {
         // First gather all the info we need
 
-        // Create a task for this query
+        // Create a task for this run
         let task_id = self.create_task(prompt);
 
         // Add processing message to logs
         eprintln!(
             "{}",
-            format_log_with_color(LogLevel::Info, &format!("Processing query: '{}'", prompt))
+            format_log_with_color(LogLevel::Info, &format!("Processing run: '{}'", prompt))
         );
 
-        // Update query time
-        self.last_query_time = Instant::now();
+        // Update run time
+        self.last_run_time = Instant::now();
 
         // Add to message history
         self.messages.push(format!("[user] {}", prompt));
@@ -883,7 +883,7 @@ impl App {
                 format_log_with_color(
                     LogLevel::Info,
                     &format!(
-                        "Agent query completed, received approximately {} tokens",
+                        "Agent run completed, received approximately {} tokens",
                         estimated_tokens
                     )
                 )
@@ -967,7 +967,7 @@ impl App {
                 format_log_with_color(
                     LogLevel::Info,
                     &format!(
-                        "Query completed, received approximately {} tokens",
+                        "Run completed, received approximately {} tokens",
                         estimated_tokens
                     )
                 )

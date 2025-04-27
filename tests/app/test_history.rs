@@ -144,7 +144,7 @@ fn test_display_session_message_conversion() {
 }
 
 /// Test that verifies the agent correctly receives conversation history
-/// This test mocks parts of the query_model implementation to verify
+/// This test mocks parts of the run implementation to verify
 /// that the conversation history from the session manager is properly
 /// passed to the agent.
 #[test]
@@ -170,7 +170,7 @@ fn test_agent_conversation_history_integration() {
     // Set the session in the app
     app.session_manager = Some(session);
 
-    // Get messages from session manager (simulate what happens in query_model)
+    // Get messages from session manager (simulate what happens in run)
     let session_messages = app.session_manager.as_ref().unwrap().get_messages_for_api();
 
     // Should have 5 messages (system + 2 user + 2 assistant)
