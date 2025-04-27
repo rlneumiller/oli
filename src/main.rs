@@ -61,12 +61,12 @@ fn register_model_interaction_apis(
     app: &Arc<Mutex<App>>,
     event_sender: &std::sync::mpsc::Sender<(String, serde_json::Value)>,
 ) {
-    // Clone app state and event sender for query_model handler
+    // Clone app state and event sender for run handler
     let app_clone = app.clone();
     let event_sender = event_sender.clone();
 
-    // Register query_model method
-    rpc_server.register_method("query_model", move |params| {
+    // Register run method
+    rpc_server.register_method("run", move |params| {
         let mut app = app_clone.lock().unwrap();
 
         // Extract query from params
@@ -104,8 +104,8 @@ fn register_model_interaction_apis(
             }),
         ));
 
-        // Query the model with the selected model index
-        match app.query_model(prompt, Some(model_index)) {
+        // Run the model with the selected model index
+        match app.run(prompt, Some(model_index)) {
             Ok(response) => {
                 // Send processing complete event
                 let _ = event_sender.send(("processing_complete".to_string(), json!({})));
@@ -119,7 +119,7 @@ fn register_model_interaction_apis(
                     json!({ "error": err.to_string() }),
                 ));
 
-                Err(anyhow::anyhow!("Error querying model: {}", err))
+                Err(anyhow::anyhow!("Error running model: {}", err))
             }
         }
     });

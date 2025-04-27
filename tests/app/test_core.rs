@@ -35,12 +35,12 @@ fn test_local_model_no_api_key_required() -> Result<()> {
         app.session_manager = Some(SessionManager::new(100));
     }
 
-    // Mock the query_model function call
+    // Mock the run function call
     // This would normally try to connect to Ollama, but we'll intercept before that happens
     // We're only testing that the API key check doesn't fail for local models
 
     // The test passes if this doesn't panic with an API key error
-    let result = app.query_model("test prompt", Some(0));
+    let result = app.run("test prompt", Some(0));
 
     // The test should fail for other reasons (like Ollama not running)
     // but not because of missing API keys
@@ -91,8 +91,8 @@ fn test_cloud_model_requires_api_key() -> Result<()> {
         app.session_manager = Some(SessionManager::new(100));
     }
 
-    // Try to query the model, which should fail due to missing API key
-    let result = app.query_model("test prompt", Some(0));
+    // Try to run the model, which should fail due to missing API key
+    let result = app.run("test prompt", Some(0));
 
     // Verify the error is about missing API keys
     assert!(

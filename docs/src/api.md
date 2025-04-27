@@ -18,9 +18,9 @@ The server reads JSON-RPC requests from stdin and writes responses to stdout. Ea
 
 ### Model Interaction
 
-#### `query_model`
+#### `run`
 
-Send a prompt to the LLM model and get a response.
+Send a prompt to the LLM model and get a response. This runs the agent to process your query.
 
 **Parameters:**
 - `prompt` (string, required): The prompt to send to the model
@@ -42,7 +42,7 @@ Send a prompt to the LLM model and get a response.
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "query_model",
+  "method": "run",
   "params": {
     "prompt": "Write a function to calculate Fibonacci numbers",
     "model_index": 0,
@@ -525,8 +525,8 @@ class oliClient {
       .catch(e => console.error(`Failed to subscribe to ${eventType}:`, e));
   }
 
-  async queryModel(prompt, modelIndex = 0, useAgent = true) {
-    return this.callMethod('query_model', {
+  async run(prompt, modelIndex = 0, useAgent = true) {
+    return this.callMethod('run', {
       prompt,
       model_index: modelIndex,
       use_agent: useAgent
@@ -564,8 +564,8 @@ async function main() {
     const models = await client.getAvailableModels();
     console.log('Available models:', models);
 
-    // Query the model
-    const result = await client.queryModel('Write a function to calculate the factorial of a number');
+    // Run the model
+    const result = await client.run('Write a function to calculate the factorial of a number');
     console.log('Result:', result.response);
   } catch (e) {
     console.error('Error:', e);

@@ -204,8 +204,8 @@ export const processUserMessage = async (
   }));
 
   try {
-    // Send the query to the backend
-    const result = await backend.call("query_model", {
+    // Send the prompt to the backend
+    const result = await backend.call("run", {
       prompt: input,
       model_index: state.selectedModel,
       use_agent: state.useAgent,
