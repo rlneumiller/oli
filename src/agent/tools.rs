@@ -271,8 +271,16 @@ impl ToolCall {
                     format!("Searching with pattern: {}", params.pattern)
                 };
 
-                send_tool_notification("Glob", "running", &message, metadata, &tool_id, start_time)
-                    .ok();
+                // Use a consistent tool name format with parameters
+                let tool_name = if let Some(path) = &params.path {
+                    format!("Glob (pattern: {}, path: {})", params.pattern, path)
+                } else {
+                    format!("Glob (pattern: {})", params.pattern)
+                };
+                send_tool_notification(
+                    &tool_name, "running", &message, metadata, &tool_id, start_time,
+                )
+                .ok();
 
                 // Add a brief delay to ensure the running state is visible
                 std::thread::sleep(std::time::Duration::from_millis(500));
@@ -312,8 +320,14 @@ impl ToolCall {
                                 "description": format!("Found {} files", results.len()),
                             })
                         };
+                        // Use a consistent tool name format with parameters
+                        let tool_name = if let Some(path) = &params.path {
+                            format!("Glob (pattern: {}, path: {})", params.pattern, path)
+                        } else {
+                            format!("Glob (pattern: {})", params.pattern)
+                        };
                         send_tool_notification(
-                            "Glob",
+                            &tool_name,
                             "success",
                             &format!("Found {} files", results.len()),
                             metadata,
@@ -338,8 +352,14 @@ impl ToolCall {
                                 "description": format!("Error searching for pattern: {}", e),
                             })
                         };
+                        // Use a consistent tool name format with parameters
+                        let tool_name = if let Some(path) = &params.path {
+                            format!("Glob (pattern: {}, path: {})", params.pattern, path)
+                        } else {
+                            format!("Glob (pattern: {})", params.pattern)
+                        };
                         send_tool_notification(
-                            "Glob",
+                            &tool_name,
                             "error",
                             &format!("Error searching for pattern: {}", e),
                             metadata,
@@ -406,8 +426,28 @@ impl ToolCall {
                     (None, None) => format!("Searching for content: \"{}\"", params.pattern),
                 };
 
-                send_tool_notification("Grep", "running", &message, metadata, &tool_id, start_time)
-                    .ok();
+                // Create a tool name with parameters based on available options
+                let tool_name = match (&params.path, &params.include) {
+                    (Some(path), Some(include)) => {
+                        format!(
+                            "Grep (pattern: {}, path: {}, include: {})",
+                            params.pattern, path, include
+                        )
+                    }
+                    (Some(path), None) => {
+                        format!("Grep (pattern: {}, path: {})", params.pattern, path)
+                    }
+                    (None, Some(include)) => {
+                        format!("Grep (pattern: {}, include: {})", params.pattern, include)
+                    }
+                    (None, None) => {
+                        format!("Grep (pattern: {})", params.pattern)
+                    }
+                };
+                send_tool_notification(
+                    &tool_name, "running", &message, metadata, &tool_id, start_time,
+                )
+                .ok();
 
                 // Add a brief delay to ensure the running state is visible
                 std::thread::sleep(std::time::Duration::from_millis(500));
@@ -440,10 +480,28 @@ impl ToolCall {
                             "count": results.len(),
                             "description": format!("Found {} files", results.len()),
                         });
+                        // Create a tool name with parameters based on available options
+                        let tool_name = match (&params.path, &params.include) {
+                            (Some(path), Some(include)) => {
+                                format!(
+                                    "Grep (pattern: {}, path: {}, include: {})",
+                                    params.pattern, path, include
+                                )
+                            }
+                            (Some(path), None) => {
+                                format!("Grep (pattern: {}, path: {})", params.pattern, path)
+                            }
+                            (None, Some(include)) => {
+                                format!("Grep (pattern: {}, include: {})", params.pattern, include)
+                            }
+                            (None, None) => {
+                                format!("Grep (pattern: {})", params.pattern)
+                            }
+                        };
                         send_tool_notification(
-                            "Grep",
+                            &tool_name,
                             "success",
-                            &format!("Found {} files", results.len()),
+                            &format!("Found {} matches", results.len()),
                             metadata,
                             &tool_id,
                             start_time,
@@ -460,8 +518,26 @@ impl ToolCall {
                             "path": params.path,
                             "description": format!("Error searching content: {}", e),
                         });
+                        // Create a tool name with parameters based on available options
+                        let tool_name = match (&params.path, &params.include) {
+                            (Some(path), Some(include)) => {
+                                format!(
+                                    "Grep (pattern: {}, path: {}, include: {})",
+                                    params.pattern, path, include
+                                )
+                            }
+                            (Some(path), None) => {
+                                format!("Grep (pattern: {}, path: {})", params.pattern, path)
+                            }
+                            (None, Some(include)) => {
+                                format!("Grep (pattern: {}, include: {})", params.pattern, include)
+                            }
+                            (None, None) => {
+                                format!("Grep (pattern: {})", params.pattern)
+                            }
+                        };
                         send_tool_notification(
-                            "Grep",
+                            &tool_name,
                             "error",
                             &format!("Error searching content: {}", e),
                             metadata,
