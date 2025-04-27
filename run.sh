@@ -21,16 +21,16 @@ echo -e "${YELLOW}Current directory:${NC} $(pwd)"
 echo -e "${YELLOW}Script directory:${NC} $SCRIPT_DIR"
 echo -e "${YELLOW}Backend path:${NC} $BACKEND_PATH"
 
-# Check if UI directory exists
-if [ ! -d "$SCRIPT_DIR/ui" ]; then
-  echo -e "${RED}Error: UI directory not found${NC}"
+# Check if App directory exists
+if [ ! -d "$SCRIPT_DIR/app" ]; then
+  echo -e "${RED}Error: App directory not found${NC}"
   exit 1
 fi
 
 # Install UI dependencies if needed
-if [ ! -d "$SCRIPT_DIR/ui/node_modules" ]; then
+if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
   echo -e "${YELLOW}Installing UI dependencies...${NC}"
-  cd "$SCRIPT_DIR/ui" || exit 1
+  cd "$SCRIPT_DIR" || exit 1
   npm install
   cd "$SCRIPT_DIR" || exit 1
 fi
@@ -57,7 +57,7 @@ sleep 1
 
 # Start UI with backend path as environment variable
 echo -e "\n${BLUE}=== Starting UI client ===${NC}"
-cd "$SCRIPT_DIR/ui" || exit 1
+cd "$SCRIPT_DIR" || exit 1
 BACKEND_BIN_PATH="$BACKEND_PATH" npm run build && BACKEND_BIN_PATH="$BACKEND_PATH" npm run start
 UI_EXIT_CODE=$?
 

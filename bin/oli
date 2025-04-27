@@ -1,0 +1,41 @@
+#!/bin/bash
+
+# Find the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+PARENT_DIR="$( dirname "$SCRIPT_DIR" )"
+
+# Create logs directory if it doesn't exist
+mkdir -p "$PARENT_DIR/logs"
+LOG_FILE="$PARENT_DIR/logs/backend-$(date +%Y%m%d-%H%M%S).log"
+
+# Find the oli-server binary
+SERVER_BIN="$PARENT_DIR/target/release/oli-server"
+if [ ! -f "$SERVER_BIN" ]; then
+  echo "ERROR: Could not find oli-server binary at $SERVER_BIN"
+  echo "Please build with './build.sh' first."
+  exit 1
+fi
+
+# Only print this in non-print mode
+if [[ ! "$*" == *"--print"* && ! "$*" == *"-p"* ]]; then
+  echo "Backend logs will be saved to: $LOG_FILE"
+fi
+
+# Start the server in the background with logging
+"$SERVER_BIN" > "$LOG_FILE" 2>&1 &
+SERVER_PID=$!
+
+# Give server a moment to start
+sleep 1
+
+# Start the UI with the provided arguments
+cd "$PARENT_DIR"
+NODE_ENV=development NODE_PATH="$PARENT_DIR/node_modules" node --import tsx app/dist/cli.js "$@"
+UI_EXIT_CODE=$?
+
+# Kill the server when the UI exits
+if [ -n "$SERVER_PID" ]; then
+  kill $SERVER_PID 2>/dev/null
+fi
+
+exit $UI_EXIT_CODE

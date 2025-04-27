@@ -1,6 +1,5 @@
 use anyhow::Result;
 use oli_server::app::history::ContextCompressor;
-use oli_server::app::logger::{format_log_with_color, LogLevel};
 use oli_server::communication::rpc::RpcServer;
 use oli_server::App;
 use serde_json::json;
@@ -31,25 +30,9 @@ fn main() -> Result<()> {
     // Register subscription handlers for real-time event streaming
     rpc_server.register_subscription_handlers();
 
-    // Log that we've registered subscription handlers
-    eprintln!(
-        "{}",
-        format_log_with_color(
-            LogLevel::Info,
-            "Registered subscription handlers for real-time event streaming"
-        )
-    );
+    // We've registered subscription handlers but no need to log in UI mode
 
-    // Run the RPC server
-    {
-        // Log with INFO log level for visibility
-        let starting_msg = format_log_with_color(LogLevel::Info, "Starting oli server");
-        eprintln!("{}", starting_msg);
-
-        // Log server started message before starting
-        let success_msg = format_log_with_color(LogLevel::Info, "oli server started successfully");
-        eprintln!("{}", success_msg);
-    }
+    // Run the RPC server - silently to avoid UI interference
     rpc_server.run()?;
 
     Ok(())
@@ -83,17 +66,7 @@ fn register_model_interaction_apis(
         // Update agent usage flag
         app.use_agent = use_agent;
 
-        // Log model selection
-        eprintln!(
-            "{}",
-            format_log_with_color(
-                LogLevel::Info,
-                &format!(
-                    "Using model at index: {} with agent mode: {}",
-                    model_index, use_agent
-                )
-            )
-        );
+        // We'll skip logging model selection to avoid UI clutter
 
         // Send processing started event
         let _ = event_sender.send((
@@ -199,18 +172,8 @@ fn register_model_discovery_apis(rpc_server: &mut RpcServer, app: &Arc<Mutex<App
             ));
         }
 
-        // Log model selection
-        let model_name = app.available_models[model_index].name.clone();
-        eprintln!(
-            "{}",
-            format_log_with_color(
-                LogLevel::Info,
-                &format!(
-                    "Selected model changed to: {} (index: {})",
-                    model_name, model_index
-                )
-            )
-        );
+        // Get model name but don't log selection (to avoid UI clutter)
+        let _model_name = app.available_models[model_index].name.clone();
 
         Ok(json!({
             "success": true,
@@ -273,11 +236,7 @@ fn register_conversation_apis(rpc_server: &mut RpcServer, app: &Arc<Mutex<App>>)
         // This clears messages, summaries, session manager, and agent history
         app.clear_history();
 
-        // Log the action
-        eprintln!(
-            "{}",
-            format_log_with_color(LogLevel::Info, "Conversation history cleared")
-        );
+        // We'll skip logging to avoid UI clutter
 
         // Return success
         Ok(json!({
