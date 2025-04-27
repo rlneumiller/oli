@@ -430,25 +430,25 @@ impl AgentExecutor {
 
 fn parse_tool_call(name: &str, args: &Value) -> Result<ToolCall> {
     match name {
-        "FileReadTool" => {
-            let params = serde_json::from_value(args.clone())
-                .context("Failed to parse FileReadTool parameters")?;
-            Ok(ToolCall::FileReadTool(params))
+        "Read" => {
+            let params =
+                serde_json::from_value(args.clone()).context("Failed to parse Read parameters")?;
+            Ok(ToolCall::Read(params))
         }
-        "GlobTool" => {
-            let params = serde_json::from_value(args.clone())
-                .context("Failed to parse GlobTool parameters")?;
-            Ok(ToolCall::GlobTool(params))
+        "Glob" => {
+            let params =
+                serde_json::from_value(args.clone()).context("Failed to parse Glob parameters")?;
+            Ok(ToolCall::Glob(params))
         }
-        "GrepTool" => {
-            let params = serde_json::from_value(args.clone())
-                .context("Failed to parse GrepTool parameters")?;
-            Ok(ToolCall::GrepTool(params))
+        "Grep" => {
+            let params =
+                serde_json::from_value(args.clone()).context("Failed to parse Grep parameters")?;
+            Ok(ToolCall::Grep(params))
         }
-        "LSTool" => {
-            let params = serde_json::from_value(args.clone())
-                .context("Failed to parse LSTool parameters")?;
-            Ok(ToolCall::LSTool(params))
+        "LS" => {
+            let params =
+                serde_json::from_value(args.clone()).context("Failed to parse LS parameters")?;
+            Ok(ToolCall::LS(params))
         }
         "Edit" => {
             let params =

@@ -15,10 +15,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolType {
-    FileReadTool,
-    GlobTool,
-    GrepTool,
-    LSTool,
+    Read,
+    Glob,
+    Grep,
+    LS,
     Edit,
     Replace,
     Bash,
@@ -29,27 +29,27 @@ pub enum ToolType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileReadToolParams {
+pub struct ReadParams {
     pub file_path: String,
     pub offset: usize,
     pub limit: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GlobToolParams {
+pub struct GlobParams {
     pub pattern: String,
     pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GrepToolParams {
+pub struct GrepParams {
     pub pattern: String,
     pub include: Option<String>,
     pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LSToolParams {
+pub struct LSParams {
     pub path: String,
     pub ignore: Option<Vec<String>>,
 }
@@ -76,10 +76,10 @@ pub struct BashParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "tool", content = "params")]
 pub enum ToolCall {
-    FileReadTool(FileReadToolParams),
-    GlobTool(GlobToolParams),
-    GrepTool(GrepToolParams),
-    LSTool(LSToolParams),
+    Read(ReadParams),
+    Glob(GlobParams),
+    Grep(GrepParams),
+    LS(LSParams),
     Edit(EditParams),
     Replace(ReplaceParams),
     Bash(BashParams),
@@ -89,7 +89,8 @@ pub enum ToolCall {
     Definition(DefinitionParams),
 }
 
-// Helper function to create and send tool status notifications
+// Uses App.start_tool_execution/update_tool_progress/complete_tool_execution from app/core.rs
+// to send tool status notifications.
 fn send_tool_notification(
     tool_name: &str,
     status: &str,
@@ -98,42 +99,57 @@ fn send_tool_notification(
     tool_id: &str,
     start_time: u128,
 ) -> Result<()> {
+    // Convert the metadata to a HashMap
+    let mut meta_map = std::collections::HashMap::new();
+    if let serde_json::Value::Object(obj) = metadata.clone() {
+        for (key, value) in obj {
+            meta_map.insert(key, value);
+        }
+    }
+
+    // We can't directly access App instance here, so we'll use the RPC server instead
     if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
         let notification_type = if status == "running" {
+            // For running state, we create a new tool execution with "started" type
             "started"
         } else {
+            // For other states, we update existing tool execution
             "updated"
         };
 
-        let mut notification = serde_json::json!({
-            "type": notification_type,
-            "execution": {
-                "id": tool_id,
-                "task_id": "direct-task",
-                "name": tool_name,
-                "status": status,
-                "message": message,
-                "metadata": metadata
-            }
-        });
-
-        // Add timestamps based on status
-        if status == "running" {
-            notification["execution"]["startTime"] = serde_json::json!(start_time);
+        // For success or error states, we need both start and end times
+        let end_time = if status != "running" {
+            Some(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+            )
         } else {
-            // For success or error states, we need both start and end times
-            let end_time = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
+            None
+        };
 
-            notification["execution"]["startTime"] = serde_json::json!(start_time);
-            notification["execution"]["endTime"] = serde_json::json!(end_time);
-        }
+        // Create the tool execution object
+        let execution = serde_json::json!({
+            "id": tool_id,
+            "task_id": "direct-task",
+            "name": tool_name,
+            "status": status,
+            "startTime": start_time,
+            "endTime": end_time,
+            "message": message,
+            "metadata": metadata
+        });
 
         // Send notification
         rpc_server
-            .send_notification("tool_status", notification)
+            .send_notification(
+                "tool_status",
+                serde_json::json!({
+                    "type": notification_type,
+                    "execution": execution
+                }),
+            )
             .ok();
         Ok(())
     } else {
@@ -144,10 +160,10 @@ fn send_tool_notification(
 impl ToolCall {
     pub fn execute(&self) -> Result<String> {
         match self {
-            ToolCall::FileReadTool(params) => {
+            ToolCall::Read(params) => {
                 // Generate a unique ID for this execution
                 let tool_id = format!(
-                    "fileread-direct-{}",
+                    "read-direct-{}",
                     SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
@@ -221,7 +237,7 @@ impl ToolCall {
 
                 result
             }
-            ToolCall::GlobTool(params) => {
+            ToolCall::Glob(params) => {
                 // Generate a unique ID for this execution
                 let tool_id = format!(
                     "glob-direct-{}",
@@ -241,12 +257,12 @@ impl ToolCall {
                     serde_json::json!({
                         "pattern": params.pattern,
                         "path": path,
-                        "description": format!("Search(pattern: \"{}\", path: \"{}\")", params.pattern, path),
+                        "description": format!("Glob(pattern: \"{}\", path: \"{}\")", params.pattern, path),
                     })
                 } else {
                     serde_json::json!({
                         "pattern": params.pattern,
-                        "description": format!("Search(pattern: \"{}\")", params.pattern),
+                        "description": format!("Glob(pattern: \"{}\")", params.pattern),
                     })
                 };
                 let message = if let Some(path) = &params.path {
@@ -255,8 +271,14 @@ impl ToolCall {
                     format!("Searching with pattern: {}", params.pattern)
                 };
 
+                // Use a consistent tool name format with parameters
+                let tool_name = if let Some(path) = &params.path {
+                    format!("Glob (pattern: {}, path: {})", params.pattern, path)
+                } else {
+                    format!("Glob (pattern: {})", params.pattern)
+                };
                 send_tool_notification(
-                    "Search", "running", &message, metadata, &tool_id, start_time,
+                    &tool_name, "running", &message, metadata, &tool_id, start_time,
                 )
                 .ok();
 
@@ -298,8 +320,14 @@ impl ToolCall {
                                 "description": format!("Found {} files", results.len()),
                             })
                         };
+                        // Use a consistent tool name format with parameters
+                        let tool_name = if let Some(path) = &params.path {
+                            format!("Glob (pattern: {}, path: {})", params.pattern, path)
+                        } else {
+                            format!("Glob (pattern: {})", params.pattern)
+                        };
                         send_tool_notification(
-                            "Search",
+                            &tool_name,
                             "success",
                             &format!("Found {} files", results.len()),
                             metadata,
@@ -324,8 +352,14 @@ impl ToolCall {
                                 "description": format!("Error searching for pattern: {}", e),
                             })
                         };
+                        // Use a consistent tool name format with parameters
+                        let tool_name = if let Some(path) = &params.path {
+                            format!("Glob (pattern: {}, path: {})", params.pattern, path)
+                        } else {
+                            format!("Glob (pattern: {})", params.pattern)
+                        };
                         send_tool_notification(
-                            "Search",
+                            &tool_name,
                             "error",
                             &format!("Error searching for pattern: {}", e),
                             metadata,
@@ -338,7 +372,7 @@ impl ToolCall {
                     }
                 }
             }
-            ToolCall::GrepTool(params) => {
+            ToolCall::Grep(params) => {
                 // Generate a unique ID for this execution
                 let tool_id = format!(
                     "grep-direct-{}",
@@ -356,18 +390,17 @@ impl ToolCall {
                 // Construct metadata based on available parameters
                 let description = match (&params.path, &params.include) {
                     (Some(path), Some(include)) => format!(
-                        "Search(pattern: \"{}\", path: \"{}\", include: \"{}\")",
+                        "Grep(pattern: \"{}\", path: \"{}\", include: \"{}\")",
                         params.pattern, path, include
                     ),
-                    (Some(path), None) => format!(
-                        "Search(pattern: \"{}\", path: \"{}\")",
-                        params.pattern, path
-                    ),
+                    (Some(path), None) => {
+                        format!("Grep(pattern: \"{}\", path: \"{}\")", params.pattern, path)
+                    }
                     (None, Some(include)) => format!(
-                        "Search(pattern: \"{}\", include: \"{}\")",
+                        "Grep(pattern: \"{}\", include: \"{}\")",
                         params.pattern, include
                     ),
-                    (None, None) => format!("Search(pattern: \"{}\")", params.pattern),
+                    (None, None) => format!("Grep(pattern: \"{}\")", params.pattern),
                 };
 
                 // Send start notification
@@ -393,8 +426,26 @@ impl ToolCall {
                     (None, None) => format!("Searching for content: \"{}\"", params.pattern),
                 };
 
+                // Create a tool name with parameters based on available options
+                let tool_name = match (&params.path, &params.include) {
+                    (Some(path), Some(include)) => {
+                        format!(
+                            "Grep (pattern: {}, path: {}, include: {})",
+                            params.pattern, path, include
+                        )
+                    }
+                    (Some(path), None) => {
+                        format!("Grep (pattern: {}, path: {})", params.pattern, path)
+                    }
+                    (None, Some(include)) => {
+                        format!("Grep (pattern: {}, include: {})", params.pattern, include)
+                    }
+                    (None, None) => {
+                        format!("Grep (pattern: {})", params.pattern)
+                    }
+                };
                 send_tool_notification(
-                    "Search", "running", &message, metadata, &tool_id, start_time,
+                    &tool_name, "running", &message, metadata, &tool_id, start_time,
                 )
                 .ok();
 
@@ -429,10 +480,28 @@ impl ToolCall {
                             "count": results.len(),
                             "description": format!("Found {} files", results.len()),
                         });
+                        // Create a tool name with parameters based on available options
+                        let tool_name = match (&params.path, &params.include) {
+                            (Some(path), Some(include)) => {
+                                format!(
+                                    "Grep (pattern: {}, path: {}, include: {})",
+                                    params.pattern, path, include
+                                )
+                            }
+                            (Some(path), None) => {
+                                format!("Grep (pattern: {}, path: {})", params.pattern, path)
+                            }
+                            (None, Some(include)) => {
+                                format!("Grep (pattern: {}, include: {})", params.pattern, include)
+                            }
+                            (None, None) => {
+                                format!("Grep (pattern: {})", params.pattern)
+                            }
+                        };
                         send_tool_notification(
-                            "Search",
+                            &tool_name,
                             "success",
-                            &format!("Found {} files", results.len()),
+                            &format!("Found {} matches", results.len()),
                             metadata,
                             &tool_id,
                             start_time,
@@ -449,8 +518,26 @@ impl ToolCall {
                             "path": params.path,
                             "description": format!("Error searching content: {}", e),
                         });
+                        // Create a tool name with parameters based on available options
+                        let tool_name = match (&params.path, &params.include) {
+                            (Some(path), Some(include)) => {
+                                format!(
+                                    "Grep (pattern: {}, path: {}, include: {})",
+                                    params.pattern, path, include
+                                )
+                            }
+                            (Some(path), None) => {
+                                format!("Grep (pattern: {}, path: {})", params.pattern, path)
+                            }
+                            (None, Some(include)) => {
+                                format!("Grep (pattern: {}, include: {})", params.pattern, include)
+                            }
+                            (None, None) => {
+                                format!("Grep (pattern: {})", params.pattern)
+                            }
+                        };
                         send_tool_notification(
-                            "Search",
+                            &tool_name,
                             "error",
                             &format!("Error searching content: {}", e),
                             metadata,
@@ -463,10 +550,10 @@ impl ToolCall {
                     }
                 }
             }
-            ToolCall::LSTool(params) => {
+            ToolCall::LS(params) => {
                 // Generate a unique ID for this execution
                 let tool_id = format!(
-                    "listdir-direct-{}",
+                    "ls-direct-{}",
                     SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
@@ -485,7 +572,7 @@ impl ToolCall {
                     "description": format!("Listing directory: {}", params.path),
                 });
                 send_tool_notification(
-                    "List",
+                    "LS",
                     "running",
                     &format!("Listing directory: {}", params.path),
                     metadata,
@@ -523,7 +610,7 @@ impl ToolCall {
                             "description": format!("Listed {} paths", entries.len()),
                         });
                         send_tool_notification(
-                            "List",
+                            "LS",
                             "success",
                             &format!("Listed {} paths", entries.len()),
                             metadata,
@@ -542,7 +629,7 @@ impl ToolCall {
                             "description": format!("Error listing directory: {}", e),
                         });
                         send_tool_notification(
-                            "List",
+                            "LS",
                             "error",
                             &format!("Error listing directory: {}", e),
                             metadata,
@@ -556,16 +643,184 @@ impl ToolCall {
                 }
             }
             ToolCall::Edit(params) => {
+                // Generate a unique ID for this execution
+                let tool_id = format!(
+                    "edit-direct-{}",
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                );
+
+                let start_time = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+
+                // Send start notification
+                let metadata = serde_json::json!({
+                    "file_path": params.file_path,
+                    "description": format!("Editing file: {}", params.file_path),
+                });
+                send_tool_notification(
+                    "Edit",
+                    "running",
+                    &format!("Editing file: {}", params.file_path),
+                    metadata,
+                    &tool_id,
+                    start_time,
+                )
+                .ok();
+
+                // Add a brief delay to ensure the running state is visible
+                std::thread::sleep(std::time::Duration::from_millis(500));
+
+                // Edit the file
                 let path = PathBuf::from(&params.file_path);
-                let diff = FileOps::edit_file(&path, &params.old_string, &params.new_string)?;
-                Ok(diff)
+                match FileOps::edit_file(&path, &params.old_string, &params.new_string) {
+                    Ok(diff) => {
+                        // Send success notification
+                        let metadata = serde_json::json!({
+                            "file_path": params.file_path,
+                            "description": format!("Successfully edited file: {}", params.file_path),
+                        });
+                        send_tool_notification(
+                            "Edit",
+                            "success",
+                            &format!("Successfully edited file: {}", params.file_path),
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
+
+                        Ok(diff)
+                    }
+                    Err(e) => {
+                        // Send error notification
+                        let metadata = serde_json::json!({
+                            "file_path": params.file_path,
+                            "description": format!("Error editing file: {}", e),
+                        });
+                        send_tool_notification(
+                            "Edit",
+                            "error",
+                            &format!("Error editing file: {}", e),
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
+
+                        Err(e)
+                    }
+                }
             }
             ToolCall::Replace(params) => {
+                // Generate a unique ID for this execution
+                let tool_id = format!(
+                    "replace-direct-{}",
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                );
+
+                let start_time = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+
+                // Send start notification
+                let metadata = serde_json::json!({
+                    "file_path": params.file_path,
+                    "description": format!("Replacing file: {}", params.file_path),
+                });
+                send_tool_notification(
+                    "Replace",
+                    "running",
+                    &format!("Replacing file: {}", params.file_path),
+                    metadata,
+                    &tool_id,
+                    start_time,
+                )
+                .ok();
+
+                // Add a brief delay to ensure the running state is visible
+                std::thread::sleep(std::time::Duration::from_millis(500));
+
+                // Replace the file
                 let path = PathBuf::from(&params.file_path);
-                let diff = FileOps::write_file_with_diff(&path, &params.content)?;
-                Ok(diff)
+                match FileOps::write_file_with_diff(&path, &params.content) {
+                    Ok(diff) => {
+                        // Send success notification
+                        let metadata = serde_json::json!({
+                            "file_path": params.file_path,
+                            "description": format!("Successfully replaced file: {}", params.file_path),
+                        });
+                        send_tool_notification(
+                            "Replace",
+                            "success",
+                            &format!("Successfully replaced file: {}", params.file_path),
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
+
+                        Ok(diff)
+                    }
+                    Err(e) => {
+                        // Send error notification
+                        let metadata = serde_json::json!({
+                            "file_path": params.file_path,
+                            "description": format!("Error replacing file: {}", e),
+                        });
+                        send_tool_notification(
+                            "Replace",
+                            "error",
+                            &format!("Error replacing file: {}", e),
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
+
+                        Err(e)
+                    }
+                }
             }
             ToolCall::Bash(params) => {
+                // Generate a unique ID for this execution
+                let tool_id = format!(
+                    "bash-direct-{}",
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                );
+
+                let start_time = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+
+                // Send start notification with command in the tool name
+                let message = "Executing...";
+                let metadata = serde_json::json!({
+                    "command": params.command,
+                    "description": format!("Executing command: {}", params.command),
+                });
+                send_tool_notification(
+                    &format!("Bash ({})", params.command),
+                    "running",
+                    message,
+                    metadata,
+                    &tool_id,
+                    start_time,
+                )
+                .ok();
+
                 use std::process::{Command, Stdio};
 
                 // Use a simpler execution model to avoid issues with wait_timeout and async
@@ -574,159 +829,510 @@ impl ToolCall {
                     .arg(&params.command)
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
-                    .output()?;
+                    .output();
 
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                match output {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-                let result = if output.status.success() {
-                    stdout
-                } else {
-                    format!(
-                        "Command failed with exit code: {}\nStdout: {}\nStderr: {}",
-                        output.status.code().unwrap_or(-1),
-                        stdout,
-                        stderr
-                    )
-                };
+                        let result = if output.status.success() {
+                            // Send success notification with command as the name and output in the message
+                            let metadata = serde_json::json!({
+                                "command": params.command,
+                                "exit_code": output.status.code().unwrap_or(0),
+                                "description": format!("Command executed: {}", params.command),
+                            });
+                            send_tool_notification(
+                                &format!("Bash ({})", params.command),
+                                "success",
+                                &stdout,
+                                metadata,
+                                &tool_id,
+                                start_time,
+                            )
+                            .ok();
 
-                Ok(result)
+                            stdout
+                        } else {
+                            // Send error notification with command as the name and error details in the message
+                            let error_output = format!(
+                                "Failed with exit code: {}\nStdout: {}\nStderr: {}",
+                                output.status.code().unwrap_or(-1),
+                                stdout,
+                                stderr
+                            );
+                            let metadata = serde_json::json!({
+                                "command": params.command,
+                                "exit_code": output.status.code().unwrap_or(-1),
+                                "description": format!("Command failed: {}", params.command),
+                            });
+                            send_tool_notification(
+                                &format!("Bash ({})", params.command),
+                                "error",
+                                &error_output,
+                                metadata,
+                                &tool_id,
+                                start_time,
+                            )
+                            .ok();
+
+                            format!(
+                                "Command failed with exit code: {}\nStdout: {}\nStderr: {}",
+                                output.status.code().unwrap_or(-1),
+                                stdout,
+                                stderr
+                            )
+                        };
+
+                        Ok(result)
+                    }
+                    Err(e) => {
+                        // Send error notification with command as the name and error details in the message
+                        let error_message = format!("Error: {}", e);
+                        let metadata = serde_json::json!({
+                            "command": params.command,
+                            "description": format!("Command failed: {}", params.command),
+                        });
+                        send_tool_notification(
+                            &format!("Bash ({})", params.command),
+                            "error",
+                            &error_message,
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
+
+                        Err(e.into())
+                    }
+                }
             }
             ToolCall::DocumentSymbol(params) => {
+                // Generate a unique ID for this execution
+                let tool_id = format!(
+                    "docsymbol-direct-{}",
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                );
+
+                let start_time = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+
+                // Send start notification
+                let metadata = serde_json::json!({
+                    "file_path": params.file_path,
+                    "server_type": params.server_type,
+                    "description": format!("Getting document symbols for: {}", params.file_path),
+                });
+                send_tool_notification(
+                    "DocumentSymbol",
+                    "running",
+                    &format!("Getting document symbols for: {}", params.file_path),
+                    metadata,
+                    &tool_id,
+                    start_time,
+                )
+                .ok();
+
                 // Initialize LSP server manager
                 let lsp_manager = LspServerManager::new();
 
                 // Get document symbols
-                let symbols =
-                    lsp_manager.document_symbol(&params.file_path, &params.server_type)?;
+                match lsp_manager.document_symbol(&params.file_path, &params.server_type) {
+                    Ok(symbols) => {
+                        // Format the result
+                        let mut output =
+                            format!("Document symbols for '{}':\n\n", params.file_path);
 
-                // Format the result
-                let mut output = format!("Document symbols for '{}':\n\n", params.file_path);
+                        fn format_symbols(
+                            symbols: &[crate::tools::lsp::DocumentSymbol],
+                            depth: usize,
+                            output: &mut String,
+                        ) {
+                            for symbol in symbols {
+                                // Add indentation based on depth
+                                let indent = "  ".repeat(depth);
 
-                fn format_symbols(
-                    symbols: &[crate::tools::lsp::DocumentSymbol],
-                    depth: usize,
-                    output: &mut String,
-                ) {
-                    for symbol in symbols {
-                        // Add indentation based on depth
-                        let indent = "  ".repeat(depth);
+                                // Add symbol information
+                                output.push_str(&format!(
+                                    "{}{} - {}\n",
+                                    indent,
+                                    symbol
+                                        .kind
+                                        .to_string()
+                                        .unwrap_or_else(|| format!("{:?}", symbol.kind)),
+                                    symbol.name
+                                ));
 
-                        // Add symbol information
-                        output.push_str(&format!(
-                            "{}{} - {}\n",
-                            indent,
-                            symbol
-                                .kind
-                                .to_string()
-                                .unwrap_or_else(|| format!("{:?}", symbol.kind)),
-                            symbol.name
-                        ));
+                                // Add detail if available
+                                if let Some(ref detail) = symbol.detail {
+                                    output.push_str(&format!("{}  Detail: {}\n", indent, detail));
+                                }
 
-                        // Add detail if available
-                        if let Some(ref detail) = symbol.detail {
-                            output.push_str(&format!("{}  Detail: {}\n", indent, detail));
+                                // Recursively add children
+                                if let Some(ref children) = symbol.children {
+                                    format_symbols(children, depth + 1, output);
+                                }
+                            }
                         }
 
-                        // Recursively add children
-                        if let Some(ref children) = symbol.children {
-                            format_symbols(children, depth + 1, output);
-                        }
+                        format_symbols(&symbols, 0, &mut output);
+
+                        // Send success notification
+                        let symbol_count = symbols.len();
+                        let metadata = serde_json::json!({
+                            "file_path": params.file_path,
+                            "server_type": params.server_type,
+                            "count": symbol_count,
+                            "description": format!("Found {} symbols", symbol_count),
+                        });
+                        send_tool_notification(
+                            "DocumentSymbol",
+                            "success",
+                            &format!("Found {} symbols", symbol_count),
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
+
+                        Ok(output)
+                    }
+                    Err(e) => {
+                        // Send error notification
+                        let metadata = serde_json::json!({
+                            "file_path": params.file_path,
+                            "server_type": params.server_type,
+                            "description": format!("Error getting document symbols: {}", e),
+                        });
+                        send_tool_notification(
+                            "DocumentSymbol",
+                            "error",
+                            &format!("Error getting document symbols: {}", e),
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
+
+                        Err(e)
                     }
                 }
-
-                format_symbols(&symbols, 0, &mut output);
-                Ok(output)
             }
             ToolCall::SemanticTokens(params) => {
+                // Generate a unique ID for this execution
+                let tool_id = format!(
+                    "semantictokens-direct-{}",
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                );
+
+                let start_time = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+
+                // Send start notification
+                let metadata = serde_json::json!({
+                    "file_path": params.file_path,
+                    "server_type": params.server_type,
+                    "description": format!("Getting semantic tokens for: {}", params.file_path),
+                });
+                send_tool_notification(
+                    "SemanticTokens",
+                    "running",
+                    &format!("Getting semantic tokens for: {}", params.file_path),
+                    metadata,
+                    &tool_id,
+                    start_time,
+                )
+                .ok();
+
                 // Initialize LSP server manager
                 let lsp_manager = LspServerManager::new();
 
                 // Get semantic tokens
-                let tokens = lsp_manager.semantic_tokens(&params.file_path, &params.server_type)?;
+                match lsp_manager.semantic_tokens(&params.file_path, &params.server_type) {
+                    Ok(tokens) => {
+                        // Format the result
+                        let mut output = format!("Semantic tokens for '{}':\n\n", params.file_path);
 
-                // Format the result
-                let mut output = format!("Semantic tokens for '{}':\n\n", params.file_path);
+                        // Add tokens data
+                        let token_count = tokens.data.len() / 5;
+                        output.push_str(&format!("Received {} token data points\n", token_count));
 
-                // Add tokens data
-                output.push_str(&format!(
-                    "Received {} token data points\n",
-                    tokens.data.len() / 5
-                ));
+                        // LSP semantic tokens are encoded as 5-tuples
+                        for chunk in tokens.data.chunks(5) {
+                            if chunk.len() == 5 {
+                                output.push_str(&format!(
+                                    "Token: delta_line={}, delta_start={}, length={}, token_type={}, token_modifiers={}\n",
+                                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4]
+                                ));
+                            }
+                        }
 
-                // LSP semantic tokens are encoded as 5-tuples
-                for chunk in tokens.data.chunks(5) {
-                    if chunk.len() == 5 {
-                        output.push_str(&format!(
-                            "Token: delta_line={}, delta_start={}, length={}, token_type={}, token_modifiers={}\n",
-                            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4]
-                        ));
+                        // Send success notification
+                        let metadata = serde_json::json!({
+                            "file_path": params.file_path,
+                            "server_type": params.server_type,
+                            "count": token_count,
+                            "description": format!("Found {} semantic tokens", token_count),
+                        });
+                        send_tool_notification(
+                            "SemanticTokens",
+                            "success",
+                            &format!("Found {} semantic tokens", token_count),
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
+
+                        Ok(output)
+                    }
+                    Err(e) => {
+                        // Send error notification
+                        let metadata = serde_json::json!({
+                            "file_path": params.file_path,
+                            "server_type": params.server_type,
+                            "description": format!("Error getting semantic tokens: {}", e),
+                        });
+                        send_tool_notification(
+                            "SemanticTokens",
+                            "error",
+                            &format!("Error getting semantic tokens: {}", e),
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
+
+                        Err(e)
                     }
                 }
-
-                Ok(output)
             }
             ToolCall::CodeLens(params) => {
+                // Generate a unique ID for this execution
+                let tool_id = format!(
+                    "codelens-direct-{}",
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                );
+
+                let start_time = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+
+                // Send start notification
+                let metadata = serde_json::json!({
+                    "file_path": params.file_path,
+                    "server_type": params.server_type,
+                    "description": format!("Getting code lenses for: {}", params.file_path),
+                });
+                send_tool_notification(
+                    "CodeLens",
+                    "running",
+                    &format!("Getting code lenses for: {}", params.file_path),
+                    metadata,
+                    &tool_id,
+                    start_time,
+                )
+                .ok();
+
                 // Initialize LSP server manager
                 let lsp_manager = LspServerManager::new();
 
                 // Get code lenses
-                let lenses = lsp_manager.code_lens(&params.file_path, &params.server_type)?;
+                match lsp_manager.code_lens(&params.file_path, &params.server_type) {
+                    Ok(lenses) => {
+                        // Format the result
+                        let mut output = format!("Code lenses for '{}':\n\n", params.file_path);
 
-                // Format the result
-                let mut output = format!("Code lenses for '{}':\n\n", params.file_path);
+                        for (i, lens) in lenses.iter().enumerate() {
+                            output.push_str(&format!(
+                                "{}. Range: {}:{} to {}:{}\n",
+                                i + 1,
+                                lens.range.start.line,
+                                lens.range.start.character,
+                                lens.range.end.line,
+                                lens.range.end.character
+                            ));
 
-                for (i, lens) in lenses.iter().enumerate() {
-                    output.push_str(&format!(
-                        "{}. Range: {}:{} to {}:{}\n",
-                        i + 1,
-                        lens.range.start.line,
-                        lens.range.start.character,
-                        lens.range.end.line,
-                        lens.range.end.character
-                    ));
+                            if let Some(ref command) = lens.command {
+                                output.push_str(&format!("   Command: {}\n", command.title));
+                                output.push_str(&format!("   Action: {}\n", command.command));
+                            }
 
-                    if let Some(ref command) = lens.command {
-                        output.push_str(&format!("   Command: {}\n", command.title));
-                        output.push_str(&format!("   Action: {}\n", command.command));
+                            output.push('\n');
+                        }
+
+                        // Send success notification
+                        let lens_count = lenses.len();
+                        let metadata = serde_json::json!({
+                            "file_path": params.file_path,
+                            "server_type": params.server_type,
+                            "count": lens_count,
+                            "description": format!("Found {} code lenses", lens_count),
+                        });
+                        send_tool_notification(
+                            "CodeLens",
+                            "success",
+                            &format!("Found {} code lenses", lens_count),
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
+
+                        Ok(output)
                     }
+                    Err(e) => {
+                        // Send error notification
+                        let metadata = serde_json::json!({
+                            "file_path": params.file_path,
+                            "server_type": params.server_type,
+                            "description": format!("Error getting code lenses: {}", e),
+                        });
+                        send_tool_notification(
+                            "CodeLens",
+                            "error",
+                            &format!("Error getting code lenses: {}", e),
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
 
-                    output.push('\n');
+                        Err(e)
+                    }
                 }
-
-                Ok(output)
             }
             ToolCall::Definition(params) => {
+                // Generate a unique ID for this execution
+                let tool_id = format!(
+                    "definition-direct-{}",
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                );
+
+                let start_time = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+
+                // Send start notification
+                let metadata = serde_json::json!({
+                    "file_path": params.file_path,
+                    "server_type": params.server_type,
+                    "position": {
+                        "line": params.position.line,
+                        "character": params.position.character
+                    },
+                    "description": format!("Finding definition at {}:{} in {}",
+                        params.position.line, params.position.character, params.file_path),
+                });
+                send_tool_notification(
+                    "Definition",
+                    "running",
+                    &format!(
+                        "Finding definition at {}:{} in {}",
+                        params.position.line, params.position.character, params.file_path
+                    ),
+                    metadata,
+                    &tool_id,
+                    start_time,
+                )
+                .ok();
+
                 // Initialize LSP server manager
                 let lsp_manager = LspServerManager::new();
 
                 // Get definition
-                let locations = lsp_manager.definition(
+                match lsp_manager.definition(
                     &params.file_path,
                     &params.position,
                     &params.server_type,
-                )?;
+                ) {
+                    Ok(locations) => {
+                        // Format the result
+                        let mut output = format!(
+                            "Definitions for position {}:{} in '{}':\n\n",
+                            params.position.line, params.position.character, params.file_path
+                        );
 
-                // Format the result
-                let mut output = format!(
-                    "Definitions for position {}:{} in '{}':\n\n",
-                    params.position.line, params.position.character, params.file_path
-                );
+                        for (i, location) in locations.iter().enumerate() {
+                            let uri = location.uri.replace("file://", "");
 
-                for (i, location) in locations.iter().enumerate() {
-                    let uri = location.uri.replace("file://", "");
+                            output.push_str(&format!("{}. File: {}\n", i + 1, uri));
+                            output.push_str(&format!(
+                                "   Range: {}:{} to {}:{}\n\n",
+                                location.range.start.line,
+                                location.range.start.character,
+                                location.range.end.line,
+                                location.range.end.character
+                            ));
+                        }
 
-                    output.push_str(&format!("{}. File: {}\n", i + 1, uri));
-                    output.push_str(&format!(
-                        "   Range: {}:{} to {}:{}\n\n",
-                        location.range.start.line,
-                        location.range.start.character,
-                        location.range.end.line,
-                        location.range.end.character
-                    ));
+                        // Send success notification
+                        let location_count = locations.len();
+                        let metadata = serde_json::json!({
+                            "file_path": params.file_path,
+                            "server_type": params.server_type,
+                            "position": {
+                                "line": params.position.line,
+                                "character": params.position.character
+                            },
+                            "count": location_count,
+                            "description": format!("Found {} definition locations", location_count),
+                        });
+                        send_tool_notification(
+                            "Definition",
+                            "success",
+                            &format!("Found {} definition locations", location_count),
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
+
+                        Ok(output)
+                    }
+                    Err(e) => {
+                        // Send error notification
+                        let metadata = serde_json::json!({
+                            "file_path": params.file_path,
+                            "server_type": params.server_type,
+                            "position": {
+                                "line": params.position.line,
+                                "character": params.position.character
+                            },
+                            "description": format!("Error finding definition: {}", e),
+                        });
+                        send_tool_notification(
+                            "Definition",
+                            "error",
+                            &format!("Error finding definition: {}", e),
+                            metadata,
+                            &tool_id,
+                            start_time,
+                        )
+                        .ok();
+
+                        Err(e)
+                    }
                 }
-
-                Ok(output)
             }
         }
     }
@@ -735,7 +1341,7 @@ impl ToolCall {
 pub fn get_tool_definitions() -> Vec<Value> {
     vec![
         serde_json::json!({
-            "name": "FileReadTool",
+            "name": "Read",
             "description": "Reads a file from the local filesystem. The file_path must be an absolute path.",
             "parameters": {
                 "type": "object",
@@ -757,7 +1363,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             }
         }),
         serde_json::json!({
-            "name": "GlobTool",
+            "name": "Glob",
             "description": "Fast file pattern matching tool using glob patterns like '**/*.rs', supports * (matches characters), ** (recursive directories), {} (alternatives)",
             "parameters": {
                 "type": "object",
@@ -775,7 +1381,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             }
         }),
         serde_json::json!({
-            "name": "GrepTool",
+            "name": "Grep",
             "description": "Fast content search tool using regular expressions to find patterns in file contents",
             "parameters": {
                 "type": "object",
@@ -797,7 +1403,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             }
         }),
         serde_json::json!({
-            "name": "LSTool",
+            "name": "LS",
             "description": "Lists files and directories in a given path",
             "parameters": {
                 "type": "object",

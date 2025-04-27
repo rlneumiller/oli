@@ -141,7 +141,7 @@ pub enum ToolExecutionStatus {
 pub struct ToolExecution {
     pub id: String,                                   // Unique ID for this tool execution
     pub task_id: String,                              // ID of the parent task
-    pub name: String,                                 // Tool name (FileReadTool, GlobTool, etc.)
+    pub name: String,                                 // Tool name (Read, Glob, etc.)
     pub status: ToolExecutionStatus,                  // Running, Success, Error
     pub start_time: u64,                              // Start timestamp (milliseconds)
     pub end_time: Option<u64>, // End timestamp (milliseconds), None if still running
@@ -718,8 +718,8 @@ impl App {
                                                 "Reading file".to_string()
                                             }
                                         }
-                                        "GlobTool" => "Finding files by pattern".to_string(),
-                                        "GrepTool" => "Searching code for pattern".to_string(),
+                                        "Glob" => "Finding files by pattern".to_string(),
+                                        "Grep" => "Searching code for pattern".to_string(),
                                         "LS" => "Listing directory contents".to_string(),
                                         "Edit" => "Modifying file".to_string(),
                                         "Replace" => "Replacing file contents".to_string(),
