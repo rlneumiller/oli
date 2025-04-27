@@ -48,7 +48,8 @@ Examples:
 
 // Check for version flag
 if (args.includes("--version") || args.includes("-v")) {
-  const packageJson = require('../../../package.json');
+  const packageJsonPath = path.resolve(__dirname, "../../../package.json");
+  const packageJson = require(packageJsonPath);
   console.log(`oli v${packageJson.version}`);
   process.exit(0);
 }
