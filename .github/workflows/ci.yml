@@ -12,10 +12,12 @@ on:
       - '**.rs'
       - Cargo.lock
       - Cargo.toml
-      - 'ui/**.ts'
-      - 'ui/**.tsx'
-      - 'ui/package.json'
-      - 'ui/package-lock.json'
+      - 'app/**.ts'
+      - 'app/**.tsx'
+      - 'app/package.json'
+      - 'app/package-lock.json'
+      - 'package.json'
+      - 'package-lock.json'
       - '.pre-commit-config.yaml'
       - 'pyproject.toml'
   pull_request:
@@ -26,10 +28,12 @@ on:
       - '**.rs'
       - Cargo.lock
       - Cargo.toml
-      - 'ui/**.ts'
-      - 'ui/**.tsx'
-      - 'ui/package.json'
-      - 'ui/package-lock.json'
+      - 'app/**.ts'
+      - 'app/**.tsx'
+      - 'app/package.json'
+      - 'app/package-lock.json'
+      - 'package.json'
+      - 'package-lock.json'
       - '.pre-commit-config.yaml'
       - 'pyproject.toml'
 
@@ -54,10 +58,10 @@ jobs:
         with:
           node-version: '23.10.0'
           cache: 'npm'
-          cache-dependency-path: ui/package-lock.json
+          cache-dependency-path: app/package-lock.json
 
       - name: Install Node dependencies
-        working-directory: ui
+        working-directory: app
         run: npm ci
 
       - name: Install uv
@@ -94,7 +98,7 @@ jobs:
         run: cargo check --all-features
 
       - name: Check TypeScript build
-        working-directory: ui
+        working-directory: app
         run: npm run build
 
   test:
