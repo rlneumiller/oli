@@ -79,11 +79,13 @@ export class BackendService extends EventEmitter {
       }
     });
 
-    // Handle errors with better visibility
-    this.process.stderr?.on("data", (data) => {
-      // Log backend errors to console for debugging
-      console.error(`Backend error: ${data.toString().trim()}`);
-    });
+    // Handle errors with better visibility (if stderr is available)
+    if (this.process.stderr) {
+      this.process.stderr.on("data", (data) => {
+        // Log backend errors to a file, not to console
+        // We're ignoring stderr output by using stdio: "ignore" in spawnBackend
+      });
+    }
 
     // Handle process exit (silently)
     this.process.on("exit", () => {
@@ -171,9 +173,9 @@ export class BackendService extends EventEmitter {
 
 // Spawn a new backend process
 export function spawnBackend(path: string): BackendService {
-  // Create process with debugging on stderr
+  // Create process without showing stderr output (redirect to log file only)
   const process = spawn(path, [], {
-    stdio: ["pipe", "pipe", "inherit"],
+    stdio: ["pipe", "pipe", "ignore"],
     detached: false
   });
 

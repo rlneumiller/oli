@@ -48,8 +48,8 @@ mkdir -p "$SCRIPT_DIR/logs"
 LOG_FILE="$SCRIPT_DIR/logs/backend-$(date +%Y%m%d-%H%M%S).log"
 echo -e "${YELLOW}Backend logs will be saved to:${NC} $LOG_FILE"
 
-# Start the server in the background with logging
-"$BACKEND_PATH" > "$LOG_FILE" 2>&1 &
+# Start the server in the background with logging (suppress terminal output)
+"$BACKEND_PATH" > "$LOG_FILE" 2>> "$LOG_FILE" &
 SERVER_PID=$!
 
 # Give server a moment to start
