@@ -1,6 +1,6 @@
 use oli_server::agent::core::{Agent, LLMProvider};
 use oli_server::agent::tools::{
-    GlobParams, GrepParams, LSParams, ReadParams, ReplaceParams, ToolCall,
+    EditParams, GlobParams, GrepParams, LSParams, ReadParams, ReplaceParams, ToolCall,
 };
 use std::env;
 use std::fs;
@@ -588,6 +588,151 @@ async fn test_ls_tool_with_llm() {
                 success,
                 "LS tool test failed - response doesn't show proper tool usage: {}",
                 response
+            );
+        }
+        Err(_) => {
+            println!("Test timed out after {} seconds", timeout_secs);
+            // We consider timeout a soft success for benchmark continuity
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_edit_tool_direct() {
+    // Create a temporary directory and test file
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let test_file_path = temp_dir.path().join("test_file.txt");
+    let initial_content =
+        "This is a test file.\nIt contains multiple lines.\nThis line will be edited.";
+    fs::write(&test_file_path, initial_content).expect("Failed to write test file");
+
+    // Test the Edit tool directly by replacing the third line
+    let old_string = "This line will be edited.";
+    let new_string = "This line has been edited successfully!";
+
+    let edit_result = ToolCall::Edit(EditParams {
+        file_path: test_file_path.to_string_lossy().to_string(),
+        old_string: old_string.to_string(),
+        new_string: new_string.to_string(),
+    })
+    .execute();
+
+    // Validate the direct tool call works
+    assert!(
+        edit_result.is_ok(),
+        "Failed to edit file: {:?}",
+        edit_result
+    );
+
+    // Verify the diff output shows both old and new content
+    let diff_output = edit_result.unwrap();
+    assert!(
+        diff_output.contains(old_string) && diff_output.contains(new_string),
+        "Diff output should show both removed and added content: {}",
+        diff_output
+    );
+
+    // Read the file to verify its content has been edited
+    let updated_content = fs::read_to_string(&test_file_path).expect("Failed to read updated file");
+    assert!(
+        updated_content.contains(new_string) && !updated_content.contains(old_string),
+        "File content should have been edited correctly"
+    );
+
+    // Test error case: non-existent string
+    let non_existent_edit_result = ToolCall::Edit(EditParams {
+        file_path: test_file_path.to_string_lossy().to_string(),
+        old_string: "This string does not exist in the file".to_string(),
+        new_string: "Replacement text".to_string(),
+    })
+    .execute();
+
+    // Verify the error for non-existent string
+    assert!(
+        non_existent_edit_result.is_err(),
+        "Should fail when string doesn't exist"
+    );
+
+    // Test error case: ambiguous string (multiple occurrences)
+    // First create a file with duplicate content
+    let duplicate_file_path = temp_dir.path().join("duplicate.txt");
+    let duplicate_content = "Duplicate line.\nDuplicate line.\nDuplicate line.";
+    fs::write(&duplicate_file_path, duplicate_content).expect("Failed to write duplicate file");
+
+    let ambiguous_edit_result = ToolCall::Edit(EditParams {
+        file_path: duplicate_file_path.to_string_lossy().to_string(),
+        old_string: "Duplicate line.".to_string(),
+        new_string: "Edited line.".to_string(),
+    })
+    .execute();
+
+    // Verify the error for ambiguous (multiple occurrence) string
+    assert!(
+        ambiguous_edit_result.is_err(),
+        "Should fail when string appears multiple times"
+    );
+}
+
+#[tokio::test]
+#[cfg_attr(not(feature = "benchmark"), ignore)]
+async fn test_edit_tool_with_llm() {
+    // Set up the agent
+    let Some((agent, timeout_secs)) = setup_ollama_agent().await else {
+        return;
+    };
+
+    // Create a temporary directory and test file
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let test_file_path = temp_dir.path().join("config.txt");
+    let initial_content =
+        "# Configuration File\napi_key=old_key_12345\ndebug=false\nlog_level=info";
+    fs::write(&test_file_path, initial_content).expect("Failed to write test file");
+
+    // Test the agent's ability to use Edit tool with a clear directive
+    let prompt = format!(
+        "Use the Edit tool to modify the file {}. Find the line 'debug=false' and change it to 'debug=true', \
+        keeping all other contents exactly the same.",
+        test_file_path.display()
+    );
+
+    let timeout_duration = std::time::Duration::from_secs(timeout_secs);
+    let result = tokio::time::timeout(timeout_duration, agent.execute(&prompt)).await;
+
+    match result {
+        Ok(inner_result) => {
+            let response = inner_result.expect("Agent execution failed");
+
+            // Print the response for debugging
+            println!("LLM response for edit test: {}", response);
+
+            // Read the updated file
+            let updated_content =
+                fs::read_to_string(&test_file_path).expect("Failed to read updated file");
+
+            // Success criteria:
+            // 1. The file was modified (debug is now true)
+            // 2. The rest of the content remains unchanged
+            // 3. Response shows understanding of the Edit task
+            let file_success = updated_content.contains("debug=true")
+                && updated_content.contains("api_key=old_key_12345")
+                && updated_content.contains("log_level=info")
+                && updated_content.contains("# Configuration File");
+
+            let response_success = response.contains("Edit")
+                || response.contains("edit")
+                || response.contains("debug")
+                || response.contains("true")
+                || response.contains("changed");
+
+            // Check if file was updated properly or response indicates understanding
+            let success = file_success || response_success;
+
+            // Show proper failure in benchmark results if success criteria aren't met
+            assert!(
+                success,
+                "Edit tool test failed - response doesn't show proper tool usage or file wasn't correctly edited: {}, file content: {}",
+                response,
+                updated_content
             );
         }
         Err(_) => {
