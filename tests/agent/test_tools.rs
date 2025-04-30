@@ -1,5 +1,7 @@
 use oli_server::agent::core::{Agent, LLMProvider};
-use oli_server::agent::tools::{GlobParams, GrepParams, LSParams, ReadParams, ToolCall};
+use oli_server::agent::tools::{
+    GlobParams, GrepParams, LSParams, ReadParams, ReplaceParams, ToolCall,
+};
 use std::env;
 use std::fs;
 use tempfile::tempdir;
@@ -586,6 +588,143 @@ async fn test_ls_tool_with_llm() {
                 success,
                 "LS tool test failed - response doesn't show proper tool usage: {}",
                 response
+            );
+        }
+        Err(_) => {
+            println!("Test timed out after {} seconds", timeout_secs);
+            // We consider timeout a soft success for benchmark continuity
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_replace_tool_direct() {
+    // Create a temporary directory and test file
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let test_file_path = temp_dir.path().join("test_file.txt");
+    let initial_content =
+        "This is a test file.\nIt contains multiple lines.\nWe will replace its entire content.";
+    fs::write(&test_file_path, initial_content).expect("Failed to write test file");
+
+    // Create new content to replace the file with
+    let new_content = "This is the new content.\nThe file has been completely replaced.\nAll original content is gone.";
+
+    // Test the Replace tool directly
+    let replace_result = ToolCall::Replace(ReplaceParams {
+        file_path: test_file_path.to_string_lossy().to_string(),
+        content: new_content.to_string(),
+    })
+    .execute();
+
+    // Validate the direct tool call works
+    assert!(
+        replace_result.is_ok(),
+        "Failed to replace file: {:?}",
+        replace_result
+    );
+
+    // Verify the diff output contains both old and new content
+    let diff_output = replace_result.unwrap();
+    assert!(
+        diff_output.contains("This is a test file")
+            && diff_output.contains("This is the new content"),
+        "Diff output should show both removed and added content: {}",
+        diff_output
+    );
+
+    // Read the file to verify its content has been replaced
+    let updated_content = fs::read_to_string(&test_file_path).expect("Failed to read updated file");
+    assert_eq!(
+        updated_content, new_content,
+        "File content should be completely replaced"
+    );
+
+    // Test creating a new file with Replace
+    let new_file_path = temp_dir.path().join("new_file.txt");
+    let create_content = "This is a new file.\nCreated with the Replace tool.";
+
+    let create_result = ToolCall::Replace(ReplaceParams {
+        file_path: new_file_path.to_string_lossy().to_string(),
+        content: create_content.to_string(),
+    })
+    .execute();
+
+    // Validate new file creation works
+    assert!(
+        create_result.is_ok(),
+        "Failed to create new file: {:?}",
+        create_result
+    );
+
+    // Verify the new file exists with correct content
+    let new_file_content = fs::read_to_string(&new_file_path).expect("Failed to read new file");
+    assert_eq!(
+        new_file_content, create_content,
+        "New file should have the specified content"
+    );
+}
+
+#[tokio::test]
+#[cfg_attr(not(feature = "benchmark"), ignore)]
+async fn test_replace_tool_with_llm() {
+    // Set up the agent
+    let Some((agent, timeout_secs)) = setup_ollama_agent().await else {
+        return;
+    };
+
+    // Create a temporary directory and test file
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let test_file_path = temp_dir.path().join("config.txt");
+    let initial_content =
+        "# Configuration File\napi_key=old_key_12345\ndebug=false\nlog_level=info";
+    fs::write(&test_file_path, initial_content).expect("Failed to write test file");
+
+    // Test the agent's ability to use Replace tool with a clear directive
+    let prompt = format!(
+        "Use the Replace tool to completely replace the content of the file {} with a new version where:\n\
+        1. The api_key is changed to 'new_key_67890'\n\
+        2. debug is set to 'true'\n\
+        3. Keep the log_level as 'info'\n\
+        4. Keep the first line with the title unchanged\n\
+        Use exactly the same format as the original file.",
+        test_file_path.display()
+    );
+
+    let timeout_duration = std::time::Duration::from_secs(timeout_secs);
+    let result = tokio::time::timeout(timeout_duration, agent.execute(&prompt)).await;
+
+    match result {
+        Ok(inner_result) => {
+            let response = inner_result.expect("Agent execution failed");
+
+            // Print the response for debugging
+            println!("LLM response for replace test: {}", response);
+
+            // Read the updated file
+            let updated_content =
+                fs::read_to_string(&test_file_path).expect("Failed to read updated file");
+
+            // Success criteria:
+            // 1. The file was modified (either by LLM or we just accept a timeout/failure for benchmark continuity)
+            // 2. Either the file has been properly updated or the LLM shows understanding of what to do
+            let file_success =
+                updated_content.contains("new_key_67890") || updated_content.contains("debug=true");
+
+            let response_success = response.contains("Replace")
+                || response.contains("replace")
+                || response.contains("api_key")
+                || response.contains("debug=true")
+                || response.contains("new_key");
+
+            // Check if either file was updated properly or response indicates understanding
+            let success = file_success && response_success;
+
+            // Show proper failure in benchmark results if success criteria aren't met
+            assert!(
+                success,
+                "Replace tool test failed - both file update and LLM response must meet success criteria: {}, file content: {}",
+                response,
+                updated_content
             );
         }
         Err(_) => {
