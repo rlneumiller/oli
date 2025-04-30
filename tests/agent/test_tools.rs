@@ -717,12 +717,12 @@ async fn test_replace_tool_with_llm() {
                 || response.contains("new_key");
 
             // Check if either file was updated properly or response indicates understanding
-            let success = file_success || response_success;
+            let success = file_success && response_success;
 
             // Show proper failure in benchmark results if success criteria aren't met
             assert!(
                 success,
-                "Replace tool test failed - neither file was updated correctly nor response shows understanding: {}, file content: {}",
+                "Replace tool test failed - both file update and LLM response must meet success criteria: {}, file content: {}",
                 response,
                 updated_content
             );
