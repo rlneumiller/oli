@@ -1,6 +1,6 @@
-use crate::agent::tools::{get_tool_definitions, ToolCall};
+use crate::agent::tools::{get_tool_definitions, ToolCall as AgentToolCall};
 use crate::apis::api_client::{
-    CompletionOptions, DynApiClient, Message, ToolDefinition, ToolResult,
+    CompletionOptions, DynApiClient, Message, ToolCall as ApiToolCall, ToolDefinition, ToolResult,
 };
 use anyhow::{Context, Result};
 use serde_json::{self, Value};
@@ -57,14 +57,14 @@ impl AgentExecutor {
     }
 
     pub async fn execute(&mut self) -> Result<String> {
-        // Create options with tools enabled and optimized parameters for Claude 3.7
+        // Create options with tools enabled and optimized parameters
         let options = CompletionOptions {
-            temperature: Some(0.5), // Lower temperature for more precise outputs
-            top_p: Some(0.95),      // Slightly higher top_p for better quality
-            max_tokens: Some(4096), // Generous token limit
+            temperature: Some(0.5),
+            top_p: Some(0.95),
+            max_tokens: Some(4096),
             tools: Some(self.tool_definitions.clone()),
-            require_tool_use: false, // Let the model decide when to use tools
-            json_schema: None,       // No structured format for initial response
+            require_tool_use: false,
+            json_schema: None,
         };
 
         // Execute the first completion with tools
@@ -79,37 +79,12 @@ impl AgentExecutor {
             return Ok(content);
         }
 
-        // Add the assistant's message with tool calls to the conversation - important for OpenAI API
-        // We need to preserve all the context including tool calls for proper API behavior
-
-        // For OpenAI compatibility, store the tool calls in the message content as structured JSON
-        // This allows for proper serialization/deserialization of tool calls in the message history
-        if let Some(calls) = &tool_calls {
-            // Create a JSON object with both content and tool calls
-            let message_with_tools = serde_json::json!({
-                "content": content,
-                "tool_calls": calls.iter().map(|call| {
-                    serde_json::json!({
-                        "id": call.id.clone().unwrap_or_default(),
-                        "name": call.name,
-                        "arguments": call.arguments
-                    })
-                }).collect::<Vec<_>>()
-            });
-
-            // Store as JSON string in the message
-            self.conversation.push(Message::assistant(
-                serde_json::to_string(&message_with_tools).unwrap_or_else(|_| content.clone()),
-            ));
-        } else {
-            // No tool calls, just store the content directly
-            self.conversation.push(Message::assistant(content.clone()));
-        }
+        // Add the assistant's message with tool calls to the conversation
+        add_assistant_message_to_conversation(&mut self.conversation, &content, &tool_calls);
 
         // Process tool calls in a loop until no more tools are called
         let mut current_content = content;
         let mut current_tool_calls = tool_calls;
-        let mut tool_results = Vec::new();
         let mut loop_count = 0;
         const MAX_LOOPS: usize = 10; // Safety limit for tool call loops
 
@@ -125,268 +100,288 @@ impl AgentExecutor {
                 break;
             }
 
-            // We don't need this summary since each tool call will have its own message
-            // This improves the async nature of the tool execution
+            // Execute all tool calls
+            let tool_results = self.execute_tool_calls(calls, loop_count).await;
 
-            // Execute each tool call and collect results
-            for (i, call) in calls.iter().enumerate() {
-                // Send basic tool execution message to UI
-                if let Some(sender) = &self.progress_sender {
-                    let _ = sender
-                        .send(format!("⏺ [{}] Executing {}...", call.name, call.name))
-                        .await;
-                }
-
-                // Parse the tool call into our enum
-                let tool_call: ToolCall = match parse_tool_call(&call.name, &call.arguments) {
-                    Ok(tc) => tc,
-                    Err(e) => {
-                        let error_msg = format!("Failed to parse tool call: {}", e);
-                        if let Some(sender) = &self.progress_sender {
-                            let _ = sender.send(format!("[error] {}", error_msg)).await;
-                        }
-
-                        // Instead of returning error, provide helpful error message to the model
-                        // Use the ID from the tool call if available (ensuring it's valid for Anthropic API)
-                        tool_results.push(ToolResult {
-                            tool_call_id: call.id.clone().unwrap_or_else(|| format!("tool_{}", i)),
-                            output: format!("ERROR PARSING TOOL CALL: {}. Please check the format of your arguments and try again.", e),
-                        });
-                        continue;
-                    }
-                };
-
-                // No need for additional tool selection message since we already show it above
-                // This prevents redundant messages about tool usage
-
-                // For Edit and Replace tools, show diff preview before executing
-                let needs_diff_preview = matches!(call.name.as_str(), "Edit" | "Replace");
-
-                // Execute the tool
-                let result = match if needs_diff_preview {
-                    // For file modifications, preview the diff first, then request permission and execute
-                    match &tool_call {
-                        ToolCall::Edit(params) => {
-                            use crate::tools::fs::file_ops::FileOps;
-                            use std::path::PathBuf;
-
-                            // Generate the diff without making changes yet
-                            let path = PathBuf::from(&params.file_path);
-                            match FileOps::generate_edit_diff(
-                                &path,
-                                &params.old_string,
-                                &params.new_string,
-                                params.expected_replacements,
-                            ) {
-                                Ok((_, diff)) => {
-                                    // Send the diff as a progress message for the permission system to pick up
-                                    if let Some(sender) = &self.progress_sender {
-                                        let _ = sender.send(diff.clone()).await;
-                                    }
-                                    // Now execute the actual tool to make the changes
-                                    tool_call.execute()
-                                }
-                                Err(e) => Err(e),
-                            }
-                        }
-                        ToolCall::Replace(params) => {
-                            use crate::tools::fs::file_ops::FileOps;
-                            use std::path::PathBuf;
-
-                            // Generate the diff without making changes yet
-                            let path = PathBuf::from(&params.file_path);
-                            match FileOps::generate_write_diff(&path, &params.content) {
-                                Ok((diff, _)) => {
-                                    // Send the diff as a progress message for the permission system to pick up
-                                    if let Some(sender) = &self.progress_sender {
-                                        let _ = sender.send(diff.clone()).await;
-                                    }
-                                    // Now execute the actual tool to make the changes
-                                    tool_call.execute()
-                                }
-                                Err(e) => Err(e),
-                            }
-                        }
-                        _ => tool_call.execute(), // Shouldn't happen, but fallback
-                    }
-                } else {
-                    // For non-file operations, execute normally
-                    tool_call.execute()
-                } {
-                    Ok(output) => {
-                        // Send a special marker for tool counting that's easy to detect
-                        if let Some(sender) = &self.progress_sender {
-                            let _ = sender.send("[TOOL_EXECUTED]".to_string()).await;
-                        }
-
-                        // No need for additional notifications here - tools.rs already sends detailed notifications
-                        // through the RPC system with proper tool status updates
-
-                        output
-                    }
-                    Err(e) => {
-                        // The tools.rs implementation already sends detailed error notifications via RPC
-                        // Return error message as tool result without additional notifications
-                        format!("ERROR EXECUTING TOOL: {}", e)
-                    }
-                };
-
-                // Create a valid tool result ID (for Anthropic API: only alphanumeric, underscore, hyphen)
-                let tool_call_id = call.id.clone().unwrap_or_else(|| format!("tool_{}", i));
-
-                // Add tool result with proper ID for API compatibility
-                tool_results.push(ToolResult {
-                    tool_call_id: tool_call_id.clone(),
-                    output: result.clone(),
-                });
-
-                // Also add a user message with the tool result to maintain history properly
-                self.conversation.push(Message {
-                    role: "user".to_string(),
-                    content: format!("Tool result for call {}: {}", tool_call_id, result),
-                });
-            }
-
-            // Don't show "processing" message to reduce UI noise
-
-            // For subsequent calls, add the tool results and use JSON schema to get more reliable output
-            let next_options = if loop_count >= MAX_LOOPS - 1 {
-                // On the last loop, request a final summary with no further tool calls
-                CompletionOptions {
-                    require_tool_use: false,
-                    json_schema: Some(
-                        r#"
-                    {
-                        "type": "object",
-                        "properties": {
-                            "finalSummary": {
-                                "type": "string",
-                                "description": "Final comprehensive summary of findings and results"
-                            }
-                        },
-                        "required": ["finalSummary"]
-                    }
-                    "#
-                        .to_string(),
-                    ),
-                    ..options.clone()
-                }
-            } else {
-                // For intermediate calls, continue with normal options
-                options.clone()
-            };
+            // Determine completion options based on loop count
+            let next_options = get_next_completion_options(loop_count, MAX_LOOPS, &options);
 
             // Request another completion with the tool results
             let (next_content, next_tool_calls) = self
                 .api_client
-                .complete_with_tools(
-                    self.conversation.clone(),
-                    next_options,
-                    Some(tool_results.clone()),
-                )
+                .complete_with_tools(self.conversation.clone(), next_options, Some(tool_results))
                 .await?;
 
-            // Extract JSON content if present
-            current_content = if next_content.trim().starts_with('{')
-                && next_content.trim().ends_with('}')
-            {
-                // Try to parse as JSON to extract the finalSummary if available
-                match serde_json::from_str::<serde_json::Value>(&next_content) {
-                    Ok(json) => {
-                        if let Some(summary) = json.get("finalSummary").and_then(|s| s.as_str()) {
-                            summary.to_string()
-                        } else {
-                            next_content
-                        }
-                    }
-                    Err(_) => next_content,
-                }
-            } else {
-                next_content
-            };
-
+            // Extract JSON content if present (for finalSummary if available)
+            current_content = extract_content_from_response(&next_content);
             current_tool_calls = next_tool_calls;
 
             // If no more tool calls, break the loop
             if current_tool_calls.is_none() {
                 break;
             }
-
-            // Clear previous tool results
-            tool_results.clear();
         }
 
         // Add final response to conversation
-        // Handle the case where there might still be tool calls
-        if let Some(calls) = &current_tool_calls {
-            // Create a JSON object with both content and tool calls
-            let message_with_tools = serde_json::json!({
-                "content": current_content,
-                "tool_calls": calls.iter().map(|call| {
-                    serde_json::json!({
-                        "id": call.id.clone().unwrap_or_default(),
-                        "name": call.name,
-                        "arguments": call.arguments
-                    })
-                }).collect::<Vec<_>>()
-            });
-
-            // Store as JSON string in the message
-            self.conversation.push(Message::assistant(
-                serde_json::to_string(&message_with_tools)
-                    .unwrap_or_else(|_| current_content.clone()),
-            ));
-        } else {
-            // No tool calls, just store the content directly
-            self.conversation
-                .push(Message::assistant(current_content.clone()));
-        }
+        add_assistant_message_to_conversation(
+            &mut self.conversation,
+            &current_content,
+            &current_tool_calls,
+        );
 
         Ok(current_content)
     }
+
+    async fn execute_tool_calls(
+        &mut self,
+        calls: &[ApiToolCall],
+        _loop_count: usize,
+    ) -> Vec<ToolResult> {
+        let mut results = Vec::with_capacity(calls.len());
+
+        for (i, call) in calls.iter().enumerate() {
+            // Send tool execution progress message
+            if let Some(sender) = &self.progress_sender {
+                let _ = sender
+                    .send(format!("⏺ [{}] Executing {}...", call.name, call.name))
+                    .await;
+            }
+
+            // Parse the tool call into our enum
+            let tool_call: AgentToolCall = match parse_tool_call(&call.name, &call.arguments) {
+                Ok(tc) => tc,
+                Err(e) => {
+                    send_error_message(
+                        &self.progress_sender,
+                        &format!("Failed to parse tool call: {}", e),
+                    )
+                    .await;
+
+                    // Add error result and continue to next tool call
+                    let tool_call_id = call.id.clone().unwrap_or_else(|| format!("tool_{}", i));
+                    let error_message = format!("ERROR PARSING TOOL CALL: {}. Please check the format of your arguments and try again.", e);
+
+                    self.add_tool_result_to_conversation(&tool_call_id, &error_message);
+                    results.push(ToolResult {
+                        tool_call_id,
+                        output: error_message,
+                    });
+
+                    continue;
+                }
+            };
+
+            // Execute the tool with preview for file modification tools
+            let result = execute_tool_with_preview(&tool_call, call, &self.progress_sender).await;
+
+            // Create a valid tool result ID
+            let tool_call_id = call.id.clone().unwrap_or_else(|| format!("tool_{}", i));
+
+            // Send tool execution completed message
+            if let Some(sender) = &self.progress_sender {
+                let _ = sender.send("[TOOL_EXECUTED]".to_string()).await;
+            }
+
+            // Add tool result to conversation and results collection
+            self.add_tool_result_to_conversation(&tool_call_id, &result);
+            results.push(ToolResult {
+                tool_call_id,
+                output: result,
+            });
+        }
+
+        results
+    }
+
+    fn add_tool_result_to_conversation(&mut self, tool_call_id: &str, result: &str) {
+        self.conversation.push(Message {
+            role: "user".to_string(),
+            content: format!("Tool result for call {}: {}", tool_call_id, result),
+        });
+    }
 }
 
-fn parse_tool_call(name: &str, args: &Value) -> Result<ToolCall> {
+// Helper functions to improve readability
+
+fn add_assistant_message_to_conversation(
+    conversation: &mut Vec<Message>,
+    content: &str,
+    tool_calls: &Option<Vec<ApiToolCall>>,
+) {
+    if let Some(calls) = tool_calls {
+        // Create a JSON object with both content and tool calls
+        let message_with_tools = serde_json::json!({
+            "content": content,
+            "tool_calls": calls.iter().map(|call| {
+                serde_json::json!({
+                    "id": call.id.clone().unwrap_or_default(),
+                    "name": call.name.clone(),
+                    "arguments": call.arguments.clone()
+                })
+            }).collect::<Vec<_>>()
+        });
+
+        // Store as JSON string in the message
+        conversation.push(Message::assistant(
+            serde_json::to_string(&message_with_tools).unwrap_or_else(|_| content.to_string()),
+        ));
+    } else {
+        // No tool calls, just store the content directly
+        conversation.push(Message::assistant(content.to_string()));
+    }
+}
+
+fn get_next_completion_options(
+    loop_count: usize,
+    max_loops: usize,
+    base_options: &CompletionOptions,
+) -> CompletionOptions {
+    if loop_count >= max_loops - 1 {
+        // On the last loop, request a final summary with no further tool calls
+        CompletionOptions {
+            require_tool_use: false,
+            json_schema: Some(
+                r#"{
+                    "type": "object",
+                    "properties": {
+                        "finalSummary": {
+                            "type": "string",
+                            "description": "Final comprehensive summary of findings and results"
+                        }
+                    },
+                    "required": ["finalSummary"]
+                }"#
+                .to_string(),
+            ),
+            ..base_options.clone()
+        }
+    } else {
+        // For intermediate calls, continue with normal options
+        base_options.clone()
+    }
+}
+
+fn extract_content_from_response(content: &str) -> String {
+    if content.trim().starts_with('{') && content.trim().ends_with('}') {
+        // Try to parse as JSON to extract the finalSummary if available
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(content) {
+            if let Some(summary) = json.get("finalSummary").and_then(|s| s.as_str()) {
+                return summary.to_string();
+            }
+        }
+    }
+
+    content.to_string()
+}
+
+async fn send_error_message(sender: &Option<mpsc::Sender<String>>, message: &str) {
+    if let Some(sender) = sender {
+        let _ = sender.send(format!("[error] {}", message)).await;
+    }
+}
+
+async fn execute_tool_with_preview(
+    tool_call: &AgentToolCall,
+    call: &ApiToolCall,
+    progress_sender: &Option<mpsc::Sender<String>>,
+) -> String {
+    // Check if tool needs diff preview
+    let needs_diff_preview = matches!(call.name.as_str(), "Edit" | "Replace");
+
+    let result = if needs_diff_preview {
+        // Handle file modification tools with diff preview
+        match tool_call {
+            AgentToolCall::Edit(params) => {
+                use crate::tools::fs::file_ops::FileOps;
+                use std::path::PathBuf;
+
+                // Generate diff without making changes
+                let path = PathBuf::from(&params.file_path);
+                match FileOps::generate_edit_diff(
+                    &path,
+                    &params.old_string,
+                    &params.new_string,
+                    params.expected_replacements,
+                ) {
+                    Ok((_, diff)) => {
+                        // Send diff as progress message
+                        if let Some(sender) = progress_sender {
+                            let _ = sender.send(diff.clone()).await;
+                        }
+                        // Execute the tool
+                        tool_call.execute()
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            AgentToolCall::Replace(params) => {
+                use crate::tools::fs::file_ops::FileOps;
+                use std::path::PathBuf;
+
+                // Generate diff without making changes
+                let path = PathBuf::from(&params.file_path);
+                match FileOps::generate_write_diff(&path, &params.content) {
+                    Ok((diff, _)) => {
+                        // Send diff as progress message
+                        if let Some(sender) = progress_sender {
+                            let _ = sender.send(diff.clone()).await;
+                        }
+                        // Execute the tool
+                        tool_call.execute()
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            _ => tool_call.execute(), // Shouldn't happen, but fallback
+        }
+    } else {
+        // For non-file operations, execute normally
+        tool_call.execute()
+    };
+
+    match result {
+        Ok(output) => output,
+        Err(e) => format!("ERROR EXECUTING TOOL: {}", e),
+    }
+}
+
+fn parse_tool_call(name: &str, args: &Value) -> Result<AgentToolCall> {
     match name {
         "Read" => {
             let params =
                 serde_json::from_value(args.clone()).context("Failed to parse Read parameters")?;
-            Ok(ToolCall::Read(params))
+            Ok(AgentToolCall::Read(params))
         }
         "Glob" => {
             let params =
                 serde_json::from_value(args.clone()).context("Failed to parse Glob parameters")?;
-            Ok(ToolCall::Glob(params))
+            Ok(AgentToolCall::Glob(params))
         }
         "Grep" => {
             let params =
                 serde_json::from_value(args.clone()).context("Failed to parse Grep parameters")?;
-            Ok(ToolCall::Grep(params))
+            Ok(AgentToolCall::Grep(params))
         }
         "LS" => {
             let params =
                 serde_json::from_value(args.clone()).context("Failed to parse LS parameters")?;
-            Ok(ToolCall::LS(params))
+            Ok(AgentToolCall::LS(params))
         }
         "Edit" => {
             let params =
                 serde_json::from_value(args.clone()).context("Failed to parse Edit parameters")?;
-            Ok(ToolCall::Edit(params))
+            Ok(AgentToolCall::Edit(params))
         }
         "Replace" => {
             let params = serde_json::from_value(args.clone())
                 .context("Failed to parse Replace parameters")?;
-            Ok(ToolCall::Replace(params))
+            Ok(AgentToolCall::Replace(params))
         }
         "Bash" => {
             let params =
                 serde_json::from_value(args.clone()).context("Failed to parse Bash parameters")?;
-            Ok(ToolCall::Bash(params))
+            Ok(AgentToolCall::Bash(params))
         }
         _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),
     }
 }
-
-// Note: For future improvements, we could extract actual token usage from the API responses
-// rather than estimating them based on string length. This would involve parsing the
-// response JSON to extract token counts from both Anthropic and OpenAI formats.
