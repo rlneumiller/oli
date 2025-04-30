@@ -59,7 +59,7 @@ impl AgentExecutor {
     pub async fn execute(&mut self) -> Result<String> {
         // Create options with tools enabled and optimized parameters
         let options = CompletionOptions {
-            temperature: Some(0.5),
+            temperature: Some(0.25),
             top_p: Some(0.95),
             max_tokens: Some(4096),
             tools: Some(self.tool_definitions.clone()),
