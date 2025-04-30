@@ -424,11 +424,13 @@ impl LspServerManager {
             .to_path_buf();
 
         // For Python standalone files, check the file extension
-        if file_path.extension().is_some_and(|ext| ext == "py") {
-            // For standalone .py files without a project structure,
-            // we'll use the file's parent directory directly
-            eprintln!("Python file detected: {}", file_path.display());
-            return Ok(current_dir);
+        if let Some(ext) = file_path.extension() {
+            if ext == "py" {
+                // For standalone .py files without a project structure,
+                // we'll use the file's parent directory directly
+                eprintln!("Python file detected: {}", file_path.to_string_lossy());
+                return Ok(current_dir);
+            }
         }
 
         // Look for common project indicators
