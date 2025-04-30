@@ -4,7 +4,7 @@ on:
     inputs:
       model:
         description: 'Model to benchmark'
-        default: 'qwen2.5-coder:14b'
+        default: 'qwen2.5-coder:7b'
         required: true
   push:
     branches: [main]
@@ -49,7 +49,7 @@ jobs:
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "MODEL=${{ github.event.inputs.model }}" >> $GITHUB_ENV
           else
-            echo "MODEL=qwen2.5-coder:14b" >> $GITHUB_ENV
+            echo "MODEL=qwen2.5-coder:7b" >> $GITHUB_ENV
           fi
 
       - name: Check Ollama server
