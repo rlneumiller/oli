@@ -43,63 +43,6 @@ impl AgentExecutor {
         self.conversation.clone()
     }
 
-    /// Analyze conversation to determine if code parsing might be needed
-    /// Uses the LLM directly to make this determination rather than keyword matching
-    async fn might_need_codebase_parsing(&self) -> Result<bool> {
-        // Get the latest user message
-        if let Some(last_user_msg) = self
-            .conversation
-            .iter()
-            .rev()
-            .find(|msg| msg.role == "user")
-        {
-            let content = &last_user_msg.content;
-
-            // Create a system message explaining the task
-            let system_message = Message::system(
-                "You are an assistant that analyzes user queries to determine if they require \
-                code structure understanding. Respond with only 'yes' or 'no'. Answer 'yes' if \
-                the query involves understanding, modifying, or implementing code structures like \
-                functions, classes, modules, etc. Answer 'no' for general information queries, tool \
-                usage questions, or non-code tasks.".to_string()
-            );
-
-            // Create a user message with the query
-            let query_message = Message::user(format!(
-                "Based solely on this query, would understanding the code structure be helpful? \
-                Query: '{}'",
-                content
-            ));
-
-            // Create a mini-conversation for this specific task
-            let mini_conversation = vec![system_message, query_message];
-
-            // Create LLM options with minimal settings
-            let options = CompletionOptions {
-                temperature: Some(0.1), // Low temperature for deterministic response
-                top_p: Some(0.95),
-                max_tokens: Some(10), // Very small response needed
-                tools: None,          // No tools needed
-                require_tool_use: false,
-                json_schema: None,
-            };
-
-            // Call the API to get the determination - using a separate client call
-            // that doesn't affect our main conversation history
-            let (response, _) = self
-                .api_client
-                .complete_with_tools(mini_conversation, options, None)
-                .await?;
-
-            // Check the response - looking for a "yes" answer
-            let response_lower = response.to_lowercase();
-            Ok(response_lower.contains("yes") || response_lower.contains("true"))
-        } else {
-            // No user message found
-            Ok(false)
-        }
-    }
-
     pub fn with_progress_sender(mut self, sender: mpsc::Sender<String>) -> Self {
         self.progress_sender = Some(sender);
         self
@@ -124,37 +67,11 @@ impl AgentExecutor {
             json_schema: None,       // No structured format for initial response
         };
 
-        // Check if the query might need codebase parsing using the LLM
-        // This initial check helps determine if we should suggest code parsing to the model
-
-        let needs_parsing = self.might_need_codebase_parsing().await?;
-
-        // If this query potentially needs code parsing, suggest it to the model
-        // by adding a system hint for better context understanding
-        if needs_parsing {
-            // Add a temporary system message suggesting code parsing
-            self.conversation.push(Message::system(
-                "The user's query appears to be related to code. Consider using the ParseCode tool \
-                to understand the codebase structure before responding, if you need to understand \
-                the code to provide a solution. The ParseCode tool will generate an AST \
-                (Abstract Syntax Tree) that helps you understand the code structure.".to_string()
-            ));
-        }
-
         // Execute the first completion with tools
         let (content, tool_calls) = self
             .api_client
             .complete_with_tools(self.conversation.clone(), options.clone(), None)
             .await?;
-
-        // Remove the temporary system message if it was added
-        if needs_parsing {
-            if let Some(last) = self.conversation.last() {
-                if last.role == "system" && last.content.contains("ParseCode tool") {
-                    self.conversation.pop();
-                }
-            }
-        }
 
         // If there are no tool calls, add the content to conversation and return
         if tool_calls.is_none() {
