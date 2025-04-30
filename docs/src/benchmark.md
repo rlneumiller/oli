@@ -13,19 +13,20 @@ Ollama models. The benchmark evaluates every tool's performance using simple tes
 _This section is automatically updated by CI/CD pipelines._
 
 <!-- BENCHMARK_RESULTS -->
-## Latest Results (as of 2025-04-30 14:21:18 UTC)
+## Latest Results (as of 2025-04-30 15:08:29 UTC)
 
 | Category | Details |
 |----------|---------|
 | Model | `qwen2.5-coder:7b` |
-| Tool Benchmark Time | 108566 ms |
-| Tool Tests | 5/5 tests passed |
+| Tool Benchmark Time | 137716 ms |
+| Tool Tests | 5/6 tests passed |
 
 ### Tool Performance Tests
-- [x] test_read_file_tool_with_llm (40178ms (40.17s))
-- [x] test_glob_tool_with_llm (13533ms (13.53s))
-- [x] test_grep_tool_with_llm (24222ms (24.22s))
-- [x] test_ls_tool_with_llm (11519ms (11.51s))
-- [x] test_replace_tool_with_llm (19085ms (19.08s))
+- [x] test_read_file_tool_with_llm (31212ms (31.21s))
+- [x] test_glob_tool_with_llm (5863ms (5.86s))
+- [x] test_grep_tool_with_llm (10867ms (10.86s))
+- [x] test_ls_tool_with_llm (10060ms (10.06s))
+- [x] test_edit_tool_with_llm (12127ms (12.12s))
+- [ ] test_replace_tool_with_llm (67549ms (67.54s))
 
 <!-- END_BENCHMARK_RESULTS -->
