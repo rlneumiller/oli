@@ -131,7 +131,7 @@ fn test_estimate_tokens() -> Result<()> {
     let test_cases = vec![
         ("", 0),                                                      // Empty text
         ("Hello", 2),                                                 // Short text
-        ("This is a longer text that should be about 10 tokens", 13), // Medium text
+        ("This is a longer text that should be about 13 tokens", 13), // Medium text
     ];
 
     for (text, expected) in test_cases {
