@@ -725,7 +725,7 @@ async fn test_edit_tool_with_llm() {
                 || response.contains("changed");
 
             // Check if file was updated properly or response indicates understanding
-            let success = file_success || response_success;
+            let success = file_success && response_success;
 
             // Show proper failure in benchmark results if success criteria aren't met
             assert!(
