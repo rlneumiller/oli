@@ -176,6 +176,7 @@ impl AgentExecutor {
                                 &path,
                                 &params.old_string,
                                 &params.new_string,
+                                params.expected_replacements,
                             ) {
                                 Ok((_, diff)) => {
                                     // Send the diff as a progress message for the permission system to pick up

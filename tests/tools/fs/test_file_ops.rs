@@ -83,7 +83,7 @@ fn test_edit_file() {
     // Edit the file by replacing a string
     let old_string = "original content";
     let new_string = "modified content";
-    FileOps::edit_file(&file_path, old_string, new_string).unwrap();
+    FileOps::edit_file(&file_path, old_string, new_string, None).unwrap();
 
     // Read back the content to verify
     let result = FileOps::read_file(&file_path).unwrap();
@@ -162,7 +162,12 @@ fn test_edit_file_with_multiple_occurrences() {
     let file_path = create_test_file(dir.path(), "duplicate.txt", content);
 
     // This should fail because the pattern occurs multiple times
-    let result = FileOps::edit_file(&file_path, "This pattern appears twice", "Replacement");
+    let result = FileOps::edit_file(
+        &file_path,
+        "This pattern appears twice",
+        "Replacement",
+        None,
+    );
     assert!(result.is_err());
 
     // The error message should mention multiple occurrences
@@ -178,10 +183,41 @@ fn test_edit_file_with_non_existent_pattern() {
     let file_path = create_test_file(dir.path(), "edit_test.txt", content);
 
     // This should fail because the pattern doesn't exist
-    let result = FileOps::edit_file(&file_path, "non-existent pattern", "Replacement");
+    let result = FileOps::edit_file(&file_path, "non-existent pattern", "Replacement", None);
     assert!(result.is_err());
 
     // The error message should indicate that the pattern wasn't found
     let err_msg = result.unwrap_err().to_string();
     assert!(err_msg.contains("not found"));
+}
+
+// Test edit file with expected_replacements parameter
+#[test]
+fn test_edit_file_with_expected_replacements() {
+    let dir = tempdir().unwrap();
+    let content = "Repeat this.\nRepeat this.\nRepeat this.\nEnd of file.";
+    let file_path = create_test_file(dir.path(), "expected_replacements.txt", content);
+
+    // This should work because we specified the exact number of occurrences
+    let result = FileOps::edit_file(&file_path, "Repeat this.", "Changed line.", Some(3));
+    assert!(result.is_ok());
+
+    // Read back the content to verify all occurrences were replaced
+    let result = FileOps::read_file(&file_path).unwrap();
+    let expected = "Changed line.\nChanged line.\nChanged line.\nEnd of file.\n";
+    assert_eq!(result, expected);
+
+    // Test with incorrect expected count
+    let incorrect_file_path = create_test_file(dir.path(), "wrong_count.txt", content);
+    let result = FileOps::edit_file(
+        &incorrect_file_path,
+        "Repeat this.",
+        "Changed line.",
+        Some(2), // There are actually 3 occurrences
+    );
+    assert!(result.is_err());
+
+    // The error message should mention the mismatch in counts
+    let err_msg = result.unwrap_err().to_string();
+    assert!(err_msg.contains("Found 3 occurrences") && err_msg.contains("expected exactly 2"));
 }

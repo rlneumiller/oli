@@ -59,6 +59,7 @@ pub struct EditParams {
     pub file_path: String,
     pub old_string: String,
     pub new_string: String,
+    pub expected_replacements: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -677,7 +678,12 @@ impl ToolCall {
 
                 // Edit the file
                 let path = PathBuf::from(&params.file_path);
-                match FileOps::edit_file(&path, &params.old_string, &params.new_string) {
+                match FileOps::edit_file(
+                    &path,
+                    &params.old_string,
+                    &params.new_string,
+                    params.expected_replacements,
+                ) {
                     Ok(diff) => {
                         // Send success notification
                         let metadata = serde_json::json!({
@@ -1440,6 +1446,10 @@ pub fn get_tool_definitions() -> Vec<Value> {
                     "new_string": {
                         "type": "string",
                         "description": "The text to replace it with"
+                    },
+                    "expected_replacements": {
+                        "type": "integer",
+                        "description": "Optional. The expected number of replacements to perform. If not specified, the string must be unique in the file."
                     }
                 },
                 "required": ["file_path", "old_string", "new_string"]

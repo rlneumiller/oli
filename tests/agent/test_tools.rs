@@ -614,6 +614,7 @@ async fn test_edit_tool_direct() {
         file_path: test_file_path.to_string_lossy().to_string(),
         old_string: old_string.to_string(),
         new_string: new_string.to_string(),
+        expected_replacements: None,
     })
     .execute();
 
@@ -644,6 +645,7 @@ async fn test_edit_tool_direct() {
         file_path: test_file_path.to_string_lossy().to_string(),
         old_string: "This string does not exist in the file".to_string(),
         new_string: "Replacement text".to_string(),
+        expected_replacements: None,
     })
     .execute();
 
@@ -663,6 +665,7 @@ async fn test_edit_tool_direct() {
         file_path: duplicate_file_path.to_string_lossy().to_string(),
         old_string: "Duplicate line.".to_string(),
         new_string: "Edited line.".to_string(),
+        expected_replacements: None,
     })
     .execute();
 
@@ -670,6 +673,50 @@ async fn test_edit_tool_direct() {
     assert!(
         ambiguous_edit_result.is_err(),
         "Should fail when string appears multiple times"
+    );
+
+    // Test successful case with expected_replacements parameter
+    let expected_edit_result = ToolCall::Edit(EditParams {
+        file_path: duplicate_file_path.to_string_lossy().to_string(),
+        old_string: "Duplicate line.".to_string(),
+        new_string: "Edited line.".to_string(),
+        expected_replacements: Some(3), // We know there are exactly 3 occurrences
+    })
+    .execute();
+
+    // Verify the edit with expected_replacements works
+    assert!(
+        expected_edit_result.is_ok(),
+        "Should succeed with correct expected_replacements: {:?}",
+        expected_edit_result
+    );
+
+    // Read the file to verify that all occurrences were replaced
+    let updated_duplicate_content =
+        fs::read_to_string(&duplicate_file_path).expect("Failed to read updated duplicate file");
+    assert_eq!(
+        updated_duplicate_content, "Edited line.\nEdited line.\nEdited line.",
+        "All occurrences should be replaced with expected_replacements"
+    );
+
+    // Test error case: wrong number of expected_replacements
+    let wrong_count_file_path = temp_dir.path().join("wrong_count.txt");
+    let wrong_count_content = "Replace me.\nReplace me.\nKeep me.";
+    fs::write(&wrong_count_file_path, wrong_count_content)
+        .expect("Failed to write wrong_count file");
+
+    let wrong_count_result = ToolCall::Edit(EditParams {
+        file_path: wrong_count_file_path.to_string_lossy().to_string(),
+        old_string: "Replace me.".to_string(),
+        new_string: "Replaced!".to_string(),
+        expected_replacements: Some(3), // But there are only 2
+    })
+    .execute();
+
+    // Verify the error for wrong expected_replacements
+    assert!(
+        wrong_count_result.is_err(),
+        "Should fail when expected_replacements doesn't match actual count"
     );
 }
 

@@ -87,6 +87,7 @@ impl FileOps {
         path: &Path,
         old_string: &str,
         new_string: &str,
+        expected_replacements: Option<usize>,
     ) -> Result<(String, String)> {
         let content = Self::read_file(path)?;
 
@@ -95,8 +96,21 @@ impl FileOps {
         if occurrences == 0 {
             anyhow::bail!("The string to replace was not found in the file");
         }
-        if occurrences > 1 {
-            anyhow::bail!("The string to replace appears multiple times in the file ({}). Please provide more context to ensure a unique match.", occurrences);
+
+        match expected_replacements {
+            // If expected_replacements is specified, verify we have exactly that many matches
+            Some(expected) => {
+                if occurrences != expected {
+                    anyhow::bail!("Found {} occurrences of the string, but expected exactly {}. Aborting to prevent unintended replacements.",
+                        occurrences, expected);
+                }
+            }
+            // If not specified, default to requiring exactly 1 match for safety
+            None => {
+                if occurrences > 1 {
+                    anyhow::bail!("The string to replace appears multiple times in the file ({}). Please provide more context to ensure a unique match or use expected_replacements parameter.", occurrences);
+                }
+            }
         }
 
         let new_content = content.replace(old_string, new_string);
@@ -108,8 +122,14 @@ impl FileOps {
         Ok((new_content, formatted_diff))
     }
 
-    pub fn edit_file(path: &Path, old_string: &str, new_string: &str) -> Result<String> {
-        let (new_content, diff) = Self::generate_edit_diff(path, old_string, new_string)?;
+    pub fn edit_file(
+        path: &Path,
+        old_string: &str,
+        new_string: &str,
+        expected_replacements: Option<usize>,
+    ) -> Result<String> {
+        let (new_content, diff) =
+            Self::generate_edit_diff(path, old_string, new_string, expected_replacements)?;
         Self::write_file(path, &new_content)?;
         Ok(diff)
     }
