@@ -286,7 +286,7 @@ async fn execute_tool_with_preview(
     progress_sender: &Option<mpsc::Sender<String>>,
 ) -> String {
     // Check if tool needs diff preview
-    let needs_diff_preview = matches!(call.name.as_str(), "Edit" | "Replace");
+    let needs_diff_preview = matches!(call.name.as_str(), "Edit" | "Write");
 
     let result = if needs_diff_preview {
         // Handle file modification tools with diff preview
@@ -314,7 +314,7 @@ async fn execute_tool_with_preview(
                     Err(e) => Err(e),
                 }
             }
-            AgentToolCall::Replace(params) => {
+            AgentToolCall::Write(params) => {
                 use crate::tools::fs::file_ops::FileOps;
                 use std::path::PathBuf;
 
@@ -372,10 +372,10 @@ fn parse_tool_call(name: &str, args: &Value) -> Result<AgentToolCall> {
                 serde_json::from_value(args.clone()).context("Failed to parse Edit parameters")?;
             Ok(AgentToolCall::Edit(params))
         }
-        "Replace" => {
-            let params = serde_json::from_value(args.clone())
-                .context("Failed to parse Replace parameters")?;
-            Ok(AgentToolCall::Replace(params))
+        "Write" => {
+            let params =
+                serde_json::from_value(args.clone()).context("Failed to parse Write parameters")?;
+            Ok(AgentToolCall::Write(params))
         }
         "Bash" => {
             let params =

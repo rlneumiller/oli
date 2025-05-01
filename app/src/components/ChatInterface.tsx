@@ -36,7 +36,7 @@ const MessagesDisplay: React.FC<MessagesDisplayProps> = React.memo(
         ) : (
           <Box flexDirection="column" flexGrow={1}>
             {visibleMessages.map((message) => (
-              <Box key={message.id} marginY={1}>
+              <Box key={message.id} marginY={0}>
                 {formatMessage(message)}
               </Box>
             ))}
@@ -487,7 +487,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const style = getMessageStyle(message.role);
 
     return (
-      <Box marginY={1} paddingX={1} flexDirection="column">
+      <Box marginY={message.role === "assistant" ? 1 : 0} paddingX={1} flexDirection="column">
         {message.role === "user" ? (
           <Box flexDirection="row">
             <Text color={theme.colors.dark.blue} bold>

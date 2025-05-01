@@ -1,6 +1,6 @@
 use oli_server::agent::core::{Agent, LLMProvider};
 use oli_server::agent::tools::{
-    BashParams, EditParams, GlobParams, GrepParams, LSParams, ReadParams, ReplaceParams, ToolCall,
+    BashParams, EditParams, GlobParams, GrepParams, LSParams, ReadParams, ToolCall, WriteParams,
 };
 use std::env;
 use std::fs;
@@ -828,7 +828,7 @@ async fn test_bash_tool_direct() {
 }
 
 #[tokio::test]
-async fn test_replace_tool_direct() {
+async fn test_write_tool_direct() {
     // Create a temporary directory and test file
     let temp_dir = tempdir().expect("Failed to create temp dir");
     let test_file_path = temp_dir.path().join("test_file.txt");
@@ -836,11 +836,11 @@ async fn test_replace_tool_direct() {
         "This is a test file.\nIt contains multiple lines.\nWe will replace its entire content.";
     fs::write(&test_file_path, initial_content).expect("Failed to write test file");
 
-    // Create new content to replace the file with
+    // Create new content to write to the file
     let new_content = "This is the new content.\nThe file has been completely replaced.\nAll original content is gone.";
 
-    // Test the Replace tool directly
-    let replace_result = ToolCall::Replace(ReplaceParams {
+    // Test the Write tool directly
+    let write_result = ToolCall::Write(WriteParams {
         file_path: test_file_path.to_string_lossy().to_string(),
         content: new_content.to_string(),
     })
@@ -848,13 +848,13 @@ async fn test_replace_tool_direct() {
 
     // Validate the direct tool call works
     assert!(
-        replace_result.is_ok(),
-        "Failed to replace file: {:?}",
-        replace_result
+        write_result.is_ok(),
+        "Failed to write file: {:?}",
+        write_result
     );
 
     // Verify the diff output contains both old and new content
-    let diff_output = replace_result.unwrap();
+    let diff_output = write_result.unwrap();
     assert!(
         diff_output.contains("This is a test file")
             && diff_output.contains("This is the new content"),
@@ -862,18 +862,18 @@ async fn test_replace_tool_direct() {
         diff_output
     );
 
-    // Read the file to verify its content has been replaced
+    // Read the file to verify its content has been written
     let updated_content = fs::read_to_string(&test_file_path).expect("Failed to read updated file");
     assert_eq!(
         updated_content, new_content,
-        "File content should be completely replaced"
+        "File content should be completely written"
     );
 
-    // Test creating a new file with Replace
+    // Test creating a new file with Write
     let new_file_path = temp_dir.path().join("new_file.txt");
-    let create_content = "This is a new file.\nCreated with the Replace tool.";
+    let create_content = "This is a new file.\nCreated with the Write tool.";
 
-    let create_result = ToolCall::Replace(ReplaceParams {
+    let create_result = ToolCall::Write(WriteParams {
         file_path: new_file_path.to_string_lossy().to_string(),
         content: create_content.to_string(),
     })
@@ -944,7 +944,7 @@ async fn test_bash_tool_with_llm() {
 
 #[tokio::test]
 #[cfg_attr(not(feature = "benchmark"), ignore)]
-async fn test_replace_tool_with_llm() {
+async fn test_write_tool_with_llm() {
     // Set up the agent
     let Some((agent, timeout_secs)) = setup_ollama_agent().await else {
         return;
@@ -957,9 +957,9 @@ async fn test_replace_tool_with_llm() {
         "# Configuration File\napi_key=old_key_12345\ndebug=false\nlog_level=info";
     fs::write(&test_file_path, initial_content).expect("Failed to write test file");
 
-    // Test the agent's ability to use Replace tool with a clear directive
+    // Test the agent's ability to use Write tool with a clear directive
     let prompt = format!(
-        "Use the Replace tool to completely replace the content of the file {} with a new version where:\n\
+        "Use the Write tool to completely replace the content of the file {} with a new version where:\n\
         1. The api_key is changed to 'new_key_67890'\n\
         2. debug is set to 'true'\n\
         3. Keep the log_level as 'info'\n\
@@ -976,7 +976,7 @@ async fn test_replace_tool_with_llm() {
             let response = inner_result.expect("Agent execution failed");
 
             // Print the response for debugging
-            println!("LLM response for replace test: {}", response);
+            println!("LLM response for write test: {}", response);
 
             // Read the updated file
             let updated_content =
@@ -988,8 +988,8 @@ async fn test_replace_tool_with_llm() {
             let file_success =
                 updated_content.contains("new_key_67890") || updated_content.contains("debug=true");
 
-            let response_success = response.contains("Replace")
-                || response.contains("replace")
+            let response_success = response.contains("Write")
+                || response.contains("write")
                 || response.contains("api_key")
                 || response.contains("debug=true")
                 || response.contains("new_key");
@@ -1000,7 +1000,7 @@ async fn test_replace_tool_with_llm() {
             // Show proper failure in benchmark results if success criteria aren't met
             assert!(
                 success,
-                "Replace tool test failed - both file update and LLM response must meet success criteria: {}, file content: {}",
+                "Write tool test failed - both file update and LLM response must meet success criteria: {}, file content: {}",
                 response,
                 updated_content
             );
