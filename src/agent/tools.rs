@@ -20,7 +20,7 @@ pub enum ToolType {
     Grep,
     LS,
     Edit,
-    Replace,
+    Write,
     Bash,
     DocumentSymbol,
     SemanticTokens,
@@ -63,7 +63,7 @@ pub struct EditParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReplaceParams {
+pub struct WriteParams {
     pub file_path: String,
     pub content: String,
 }
@@ -83,7 +83,7 @@ pub enum ToolCall {
     Grep(GrepParams),
     LS(LSParams),
     Edit(EditParams),
-    Replace(ReplaceParams),
+    Write(WriteParams),
     Bash(BashParams),
     DocumentSymbol(DocumentSymbolParams),
     SemanticTokens(SemanticTokensParams),
@@ -723,10 +723,10 @@ impl ToolCall {
                     }
                 }
             }
-            ToolCall::Replace(params) => {
+            ToolCall::Write(params) => {
                 // Generate a unique ID for this execution
                 let tool_id = format!(
-                    "replace-direct-{}",
+                    "write-direct-{}",
                     SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
@@ -741,12 +741,12 @@ impl ToolCall {
                 // Send start notification
                 let metadata = serde_json::json!({
                     "file_path": params.file_path,
-                    "description": format!("Replacing file: {}", params.file_path),
+                    "description": format!("Writing file: {}", params.file_path),
                 });
                 send_tool_notification(
-                    "Replace",
+                    "Write",
                     "running",
-                    &format!("Replacing file: {}", params.file_path),
+                    &format!("Writing file: {}", params.file_path),
                     metadata,
                     &tool_id,
                     start_time,
@@ -756,19 +756,19 @@ impl ToolCall {
                 // Add a brief delay to ensure the running state is visible
                 std::thread::sleep(std::time::Duration::from_millis(500));
 
-                // Replace the file
+                // Write the file
                 let path = PathBuf::from(&params.file_path);
                 match FileOps::write_file_with_diff(&path, &params.content) {
                     Ok(diff) => {
                         // Send success notification
                         let metadata = serde_json::json!({
                             "file_path": params.file_path,
-                            "description": format!("Successfully replaced file: {}", params.file_path),
+                            "description": format!("Successfully wrote file: {}", params.file_path),
                         });
                         send_tool_notification(
-                            "Replace",
+                            "Write",
                             "success",
-                            &format!("Successfully replaced file: {}", params.file_path),
+                            &format!("Successfully wrote file: {}", params.file_path),
                             metadata,
                             &tool_id,
                             start_time,
@@ -781,12 +781,12 @@ impl ToolCall {
                         // Send error notification
                         let metadata = serde_json::json!({
                             "file_path": params.file_path,
-                            "description": format!("Error replacing file: {}", e),
+                            "description": format!("Error writing file: {}", e),
                         });
                         send_tool_notification(
-                            "Replace",
+                            "Write",
                             "error",
-                            &format!("Error replacing file: {}", e),
+                            &format!("Error writing file: {}", e),
                             metadata,
                             &tool_id,
                             start_time,
@@ -1472,14 +1472,14 @@ pub fn get_tool_definitions() -> Vec<Value> {
             }
         }),
         serde_json::json!({
-            "name": "Replace",
-            "description": "Completely replaces a file with new content",
+            "name": "Write",
+            "description": "Write a file to the local filesystem. Overwrites the existing file if there is one.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "The absolute path to the file to write"
+                        "description": "The absolute path to the file to write (must be absolute, not relative)"
                     },
                     "content": {
                         "type": "string",

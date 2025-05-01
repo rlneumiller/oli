@@ -118,7 +118,7 @@ const ToolStatusIndicator: React.FC<ToolStatusIndicatorProps> = ({
   }, [status]);
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" marginY={0}>
       <Box flexDirection="row">
         {statusIndicator}
         <Text color={statusColor} bold>
@@ -128,7 +128,7 @@ const ToolStatusIndicator: React.FC<ToolStatusIndicatorProps> = ({
       </Box>
 
       {details && (
-        <Box marginLeft={2} flexDirection="row">
+        <Box marginLeft={2} flexDirection="row" marginBottom={0}>
           <Text color={theme.colors.dark.gray}> ⎿ {details}</Text>
         </Box>
       )}
