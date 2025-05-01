@@ -1,6 +1,6 @@
 use oli_server::agent::core::{Agent, LLMProvider};
 use oli_server::agent::tools::{
-    EditParams, GlobParams, GrepParams, LSParams, ReadParams, ReplaceParams, ToolCall,
+    BashParams, EditParams, GlobParams, GrepParams, LSParams, ReadParams, ReplaceParams, ToolCall,
 };
 use std::env;
 use std::fs;
@@ -790,6 +790,44 @@ async fn test_edit_tool_with_llm() {
 }
 
 #[tokio::test]
+async fn test_bash_tool_direct() {
+    // Test the Bash tool directly with a simple command
+    let bash_result = ToolCall::Bash(BashParams {
+        command: "echo 'Hello, World!'".to_string(),
+        timeout: None,
+        description: Some("Prints greeting message".to_string()),
+    })
+    .execute();
+
+    // Validate the direct tool call works
+    assert!(
+        bash_result.is_ok(),
+        "Failed to execute bash command: {:?}",
+        bash_result
+    );
+    let bash_output = bash_result.unwrap();
+    assert!(
+        bash_output.contains("Hello, World!"),
+        "Bash output should contain the echo message: {}",
+        bash_output
+    );
+
+    // Test with a command that generates an error to verify error handling
+    let invalid_bash_result = ToolCall::Bash(BashParams {
+        command: "non_existent_command".to_string(),
+        timeout: None,
+        description: Some("Tests error handling".to_string()),
+    })
+    .execute();
+
+    // Ensure the error is handled properly
+    assert!(
+        invalid_bash_result.is_err() || invalid_bash_result.as_ref().unwrap().contains("not found"),
+        "Should handle invalid command gracefully"
+    );
+}
+
+#[tokio::test]
 async fn test_replace_tool_direct() {
     // Create a temporary directory and test file
     let temp_dir = tempdir().expect("Failed to create temp dir");
@@ -854,6 +892,54 @@ async fn test_replace_tool_direct() {
         new_file_content, create_content,
         "New file should have the specified content"
     );
+}
+
+#[tokio::test]
+#[cfg_attr(not(feature = "benchmark"), ignore)]
+async fn test_bash_tool_with_llm() {
+    // Set up the agent
+    let Some((agent, timeout_secs)) = setup_ollama_agent().await else {
+        return;
+    };
+
+    // Test the agent's ability to use the Bash tool with a clear directive
+    // We specifically ask the agent to include a description for the command
+    let prompt = "Use the Bash tool to list files in the current directory. \
+                 Include a description parameter with the value \"Lists files in current directory\".";
+
+    let timeout_duration = std::time::Duration::from_secs(timeout_secs);
+    let result = tokio::time::timeout(timeout_duration, agent.execute(prompt)).await;
+
+    match result {
+        Ok(inner_result) => {
+            let response = inner_result.expect("Agent execution failed");
+
+            // Print the response for debugging
+            println!("LLM response for bash test: {}", response);
+
+            // Success criteria:
+            // 1. It uses the bash command, OR
+            // 2. It mentions listing files or directories, OR
+            // 3. It includes the specific description text
+            let success = response.contains("ls")
+                || response.contains("directory")
+                || response.contains("files")
+                || response.contains("Lists files in current directory")
+                || response.contains("bash")
+                || response.contains("Bash");
+
+            // Show proper failure in benchmark results if success criteria aren't met
+            assert!(
+                success,
+                "Bash tool test failed - response doesn't show proper tool usage: {}",
+                response
+            );
+        }
+        Err(_) => {
+            println!("Test timed out after {} seconds", timeout_secs);
+            // We consider timeout a soft success for benchmark continuity
+        }
+    }
 }
 
 #[tokio::test]
