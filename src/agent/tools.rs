@@ -72,6 +72,7 @@ pub struct ReplaceParams {
 pub struct BashParams {
     pub command: String,
     pub timeout: Option<u64>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -813,9 +814,13 @@ impl ToolCall {
 
                 // Send start notification with command in the tool name
                 let message = "Executing...";
+                let description = params
+                    .description
+                    .clone()
+                    .unwrap_or_else(|| format!("Executing command: {}", params.command));
                 let metadata = serde_json::json!({
                     "command": params.command,
-                    "description": format!("Executing command: {}", params.command),
+                    "description": description,
                 });
                 send_tool_notification(
                     &format!("Bash ({})", params.command),
@@ -842,63 +847,74 @@ impl ToolCall {
                         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-                        let result = if output.status.success() {
-                            // Send success notification with command as the name and output in the message
-                            let metadata = serde_json::json!({
-                                "command": params.command,
-                                "exit_code": output.status.code().unwrap_or(0),
-                                "description": format!("Command executed: {}", params.command),
-                            });
-                            send_tool_notification(
-                                &format!("Bash ({})", params.command),
-                                "success",
-                                &stdout,
-                                metadata,
-                                &tool_id,
-                                start_time,
-                            )
-                            .ok();
+                        let result =
+                            if output.status.success() {
+                                // Send success notification with command as the name and output in the message
+                                let description = params.description.clone().unwrap_or_else(|| {
+                                    format!("Command executed: {}", params.command)
+                                });
+                                let metadata = serde_json::json!({
+                                    "command": params.command,
+                                    "exit_code": output.status.code().unwrap_or(0),
+                                    "description": description,
+                                });
+                                send_tool_notification(
+                                    &format!("Bash ({})", params.command),
+                                    "success",
+                                    &stdout,
+                                    metadata,
+                                    &tool_id,
+                                    start_time,
+                                )
+                                .ok();
 
-                            stdout
-                        } else {
-                            // Send error notification with command as the name and error details in the message
-                            let error_output = format!(
-                                "Failed with exit code: {}\nStdout: {}\nStderr: {}",
-                                output.status.code().unwrap_or(-1),
-                                stdout,
-                                stderr
-                            );
-                            let metadata = serde_json::json!({
-                                "command": params.command,
-                                "exit_code": output.status.code().unwrap_or(-1),
-                                "description": format!("Command failed: {}", params.command),
-                            });
-                            send_tool_notification(
-                                &format!("Bash ({})", params.command),
-                                "error",
-                                &error_output,
-                                metadata,
-                                &tool_id,
-                                start_time,
-                            )
-                            .ok();
+                                stdout
+                            } else {
+                                // Send error notification with command as the name and error details in the message
+                                let error_output = format!(
+                                    "Failed with exit code: {}\nStdout: {}\nStderr: {}",
+                                    output.status.code().unwrap_or(-1),
+                                    stdout,
+                                    stderr
+                                );
+                                let description = params.description.clone().unwrap_or_else(|| {
+                                    format!("Command failed: {}", params.command)
+                                });
+                                let metadata = serde_json::json!({
+                                    "command": params.command,
+                                    "exit_code": output.status.code().unwrap_or(-1),
+                                    "description": description,
+                                });
+                                send_tool_notification(
+                                    &format!("Bash ({})", params.command),
+                                    "error",
+                                    &error_output,
+                                    metadata,
+                                    &tool_id,
+                                    start_time,
+                                )
+                                .ok();
 
-                            format!(
-                                "Command failed with exit code: {}\nStdout: {}\nStderr: {}",
-                                output.status.code().unwrap_or(-1),
-                                stdout,
-                                stderr
-                            )
-                        };
+                                format!(
+                                    "Command failed with exit code: {}\nStdout: {}\nStderr: {}",
+                                    output.status.code().unwrap_or(-1),
+                                    stdout,
+                                    stderr
+                                )
+                            };
 
                         Ok(result)
                     }
                     Err(e) => {
                         // Send error notification with command as the name and error details in the message
                         let error_message = format!("Error: {}", e);
+                        let description = params
+                            .description
+                            .clone()
+                            .unwrap_or_else(|| format!("Command failed: {}", params.command));
                         let metadata = serde_json::json!({
                             "command": params.command,
-                            "description": format!("Command failed: {}", params.command),
+                            "description": description,
                         });
                         send_tool_notification(
                             &format!("Bash ({})", params.command),
@@ -1486,6 +1502,10 @@ pub fn get_tool_definitions() -> Vec<Value> {
                     "timeout": {
                         "type": "integer",
                         "description": "Optional timeout in milliseconds (max 600000)"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "A short (5-10 word) description of what this command does"
                     }
                 },
                 "required": ["command"]
