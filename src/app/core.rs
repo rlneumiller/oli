@@ -890,6 +890,11 @@ impl App {
             let mut agent = crate::agent::core::Agent::new(provider);
             agent = agent.with_model(agent_model);
 
+            // Pass current working directory to the agent
+            if let Some(cwd) = &self.current_working_dir {
+                agent = agent.with_working_directory(cwd.clone());
+            }
+
             // Set up agent progress handling
             let (progress_tx_sender, mut progress_rx_receiver) =
                 tokio::sync::mpsc::channel::<String>(100);

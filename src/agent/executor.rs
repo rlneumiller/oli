@@ -11,6 +11,7 @@ pub struct AgentExecutor {
     conversation: Vec<Message>,
     tool_definitions: Vec<ToolDefinition>,
     progress_sender: Option<mpsc::Sender<String>>,
+    working_directory: Option<String>,
 }
 
 impl AgentExecutor {
@@ -29,10 +30,49 @@ impl AgentExecutor {
             conversation: Vec::new(),
             tool_definitions: tool_defs,
             progress_sender: None,
+            working_directory: None,
         }
     }
 
-    pub fn set_conversation_history(&mut self, history: Vec<Message>) {
+    pub fn set_working_directory(&mut self, working_dir: String) {
+        self.working_directory = Some(working_dir.clone());
+
+        // Update any existing system message with working directory information
+        let has_system = self.conversation.iter().any(|msg| msg.role == "system");
+        if has_system {
+            // Find and update the system message with working directory info
+            for msg in &mut self.conversation {
+                if msg.role == "system" {
+                    // Only add working directory if it's not already there
+                    if !msg.content.contains("## WORKING DIRECTORY") {
+                        // Add working directory section to end of system message
+                        msg.content = format!(
+                            "{}\n\n## WORKING DIRECTORY\nYour current working directory is: {}\nWhen using file system tools such as Read, Glob, Grep, LS, Edit, and Write, you should use absolute paths. You can use this working directory to construct them when needed.",
+                            msg.content,
+                            working_dir
+                        );
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    pub fn set_conversation_history(&mut self, mut history: Vec<Message>) {
+        // If we have a working directory, ensure any system message includes it
+        if let Some(cwd) = &self.working_directory {
+            for msg in &mut history {
+                if msg.role == "system" && !msg.content.contains("## WORKING DIRECTORY") {
+                    // Add working directory section
+                    msg.content = format!(
+                        "{}\n\n## WORKING DIRECTORY\nYour current working directory is: {}\nWhen using file system tools such as Read, Glob, Grep, LS, Edit, and Write, you should use absolute paths. You can use this working directory to construct them when needed.",
+                        msg.content,
+                        cwd
+                    );
+                }
+            }
+        }
+
         self.conversation = history;
     }
 
@@ -46,7 +86,37 @@ impl AgentExecutor {
     }
 
     pub fn add_system_message(&mut self, content: String) {
-        self.conversation.push(Message::system(content));
+        // If we have a working directory, ensure it's included in the system message
+        let system_content = if let Some(cwd) = &self.working_directory {
+            if !content.contains("## WORKING DIRECTORY") {
+                format!(
+                    "{}\n\n## WORKING DIRECTORY\nYour current working directory is: {}\nWhen using file system tools such as Read, Glob, Grep, LS, Edit, and Write, you should use absolute paths. You can use this working directory to construct them when needed.",
+                    content,
+                    cwd
+                )
+            } else {
+                content
+            }
+        } else {
+            content
+        };
+
+        // Remove any existing system message to avoid duplicates
+        self.conversation.retain(|msg| msg.role != "system");
+
+        // Add the new system message
+        self.conversation.push(Message::system(system_content));
+
+        // Make sure system message is at the beginning
+        self.conversation.sort_by(|a, b| {
+            if a.role == "system" {
+                std::cmp::Ordering::Less
+            } else if b.role == "system" {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        });
     }
 
     pub fn add_user_message(&mut self, content: String) {
@@ -54,6 +124,15 @@ impl AgentExecutor {
     }
 
     pub async fn execute(&mut self) -> Result<String> {
+        // Debug log working directory if available
+        if let Some(cwd) = &self.working_directory {
+            if let Some(sender) = &self.progress_sender {
+                let _ = sender
+                    .send(format!("[debug] Working directory: {}", cwd))
+                    .await;
+            }
+        }
+
         // Create options with tools enabled and optimized parameters
         let options = CompletionOptions {
             temperature: Some(0.25),

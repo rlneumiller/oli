@@ -163,13 +163,21 @@ fn test_conversation_history_management() {
     executor.add_system_message("New system message".to_string());
     executor.add_user_message("New user message".to_string());
 
-    // Verify messages were added
+    // Verify messages were added - note: our new implementation replaces system messages rather than adding new ones
     let updated_history = executor.get_conversation_history();
-    assert_eq!(updated_history.len(), 4);
-    assert_eq!(updated_history[2].role, "system");
-    assert_eq!(updated_history[2].content, "New system message");
-    assert_eq!(updated_history[3].role, "user");
-    assert_eq!(updated_history[3].content, "New user message");
+    assert_eq!(updated_history.len(), 3);
+
+    // The first message should be system (replacing the old one)
+    assert_eq!(updated_history[0].role, "system");
+    assert_eq!(updated_history[0].content, "New system message");
+
+    // The user messages should still be there
+    assert!(updated_history
+        .iter()
+        .any(|msg| msg.role == "user" && msg.content == "User message"));
+    assert!(updated_history
+        .iter()
+        .any(|msg| msg.role == "user" && msg.content == "New user message"));
 }
 
 // Test progress sender functionality
