@@ -86,15 +86,18 @@ impl AgentExecutor {
         let mut current_content = content;
         let mut current_tool_calls = tool_calls;
         let mut loop_count = 0;
-        const MAX_LOOPS: usize = 10; // Safety limit for tool call loops
+        const MAX_LOOPS: usize = 100; // Increased limit for tool call loops - was 10 before
 
         while let Some(ref calls) = current_tool_calls {
-            // Safety check to prevent infinite loops
+            // Safety check to prevent truly infinite loops, but allow many more iterations
             loop_count += 1;
             if loop_count > MAX_LOOPS {
                 if let Some(sender) = &self.progress_sender {
                     let _ = sender
-                        .send("Reached maximum number of tool call loops. Stopping.".to_string())
+                        .send(
+                            "Reached maximum number of tool call loops (100). Stopping."
+                                .to_string(),
+                        )
                         .await;
                 }
                 break;
