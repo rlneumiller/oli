@@ -2,6 +2,7 @@ use crate::agent::tools::{get_tool_definitions, ToolCall as AgentToolCall};
 use crate::apis::api_client::{
     CompletionOptions, DynApiClient, Message, ToolCall as ApiToolCall, ToolDefinition, ToolResult,
 };
+use crate::prompts::add_working_directory_to_prompt;
 use anyhow::{Context, Result};
 use serde_json::{self, Value};
 use tokio::sync::mpsc;
@@ -46,11 +47,7 @@ impl AgentExecutor {
                     // Only add working directory if it's not already there
                     if !msg.content.contains("## WORKING DIRECTORY") {
                         // Add working directory section to end of system message
-                        msg.content = format!(
-                            "{}\n\n## WORKING DIRECTORY\nYour current working directory is: {}\nWhen using file system tools such as Read, Glob, Grep, LS, Edit, and Write, you should use absolute paths. You can use this working directory to construct them when needed.",
-                            msg.content,
-                            working_dir
-                        );
+                        msg.content = add_working_directory_to_prompt(&msg.content, &working_dir);
                     }
                     break;
                 }
@@ -64,11 +61,7 @@ impl AgentExecutor {
             for msg in &mut history {
                 if msg.role == "system" && !msg.content.contains("## WORKING DIRECTORY") {
                     // Add working directory section
-                    msg.content = format!(
-                        "{}\n\n## WORKING DIRECTORY\nYour current working directory is: {}\nWhen using file system tools such as Read, Glob, Grep, LS, Edit, and Write, you should use absolute paths. You can use this working directory to construct them when needed.",
-                        msg.content,
-                        cwd
-                    );
+                    msg.content = add_working_directory_to_prompt(&msg.content, cwd);
                 }
             }
         }
@@ -88,15 +81,7 @@ impl AgentExecutor {
     pub fn add_system_message(&mut self, content: String) {
         // If we have a working directory, ensure it's included in the system message
         let system_content = if let Some(cwd) = &self.working_directory {
-            if !content.contains("## WORKING DIRECTORY") {
-                format!(
-                    "{}\n\n## WORKING DIRECTORY\nYour current working directory is: {}\nWhen using file system tools such as Read, Glob, Grep, LS, Edit, and Write, you should use absolute paths. You can use this working directory to construct them when needed.",
-                    content,
-                    cwd
-                )
-            } else {
-                content
-            }
+            add_working_directory_to_prompt(&content, cwd)
         } else {
             content
         };

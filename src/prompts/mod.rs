@@ -1,12 +1,29 @@
 //! This module contains all the prompts used in the application.
 //! Centralizing prompts helps maintain consistency and makes them easier to update.
 
+/// Format the working directory prompt with the provided directory
+pub fn format_working_directory_prompt(working_dir: &str) -> String {
+    // We need to use a string literal for the format! macro
+    format!("## WORKING DIRECTORY\nYour current working directory is: {}\nWhen using file system tools such as Read, Glob, Grep, LS, Edit, and Write, you should use absolute paths. You can use this working directory to construct them when needed.", working_dir)
+}
+
+/// Add the working directory section to a system prompt if it doesn't already have it
+pub fn add_working_directory_to_prompt(prompt: &str, working_dir: &str) -> String {
+    if prompt.contains("## WORKING DIRECTORY") {
+        prompt.to_string()
+    } else {
+        // Create the working directory section using the helper function
+        let working_dir_section = format_working_directory_prompt(working_dir);
+        format!("{}\n\n{}", prompt, working_dir_section)
+    }
+}
+
 /// Default system prompt for the agent including working directory information
 pub fn get_agent_prompt_with_cwd(working_dir: Option<&str>) -> String {
     let base_prompt = DEFAULT_AGENT_PROMPT.to_string();
 
     if let Some(cwd) = working_dir {
-        format!("{}\n\n## WORKING DIRECTORY\nYour current working directory is: {}\nWhen using file system tools such as Read, Glob, Grep, LS, Edit, and Write, you should use absolute paths. You can use this working directory to construct them when needed.", base_prompt, cwd)
+        add_working_directory_to_prompt(&base_prompt, cwd)
     } else {
         base_prompt
     }
