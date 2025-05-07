@@ -1,9 +1,6 @@
 //! This module contains all the prompts used in the application.
 //! Centralizing prompts helps maintain consistency and makes them easier to update.
 
-/// Working directory prompt template
-pub const WORKING_DIRECTORY_PROMPT_TEMPLATE: &str = "## WORKING DIRECTORY\nYour current working directory is: {}\nWhen using file system tools such as Read, Glob, Grep, LS, Edit, and Write, you should use absolute paths. You can use this working directory to construct them when needed.";
-
 /// Format the working directory prompt with the provided directory
 pub fn format_working_directory_prompt(working_dir: &str) -> String {
     // We need to use a string literal for the format! macro
