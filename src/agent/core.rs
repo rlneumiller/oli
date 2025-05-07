@@ -4,6 +4,7 @@ use crate::apis::api_client::{ApiClientEnum, DynApiClient, Message};
 use crate::apis::gemini::GeminiClient;
 use crate::apis::ollama::OllamaClient;
 use crate::apis::openai::OpenAIClient;
+use crate::prompts::add_working_directory_to_prompt;
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -217,10 +218,9 @@ impl Agent {
                     // Check if the existing system message already contains CWD info
                     if !existing_system_msg.content.contains("## WORKING DIRECTORY") {
                         // Create updated system message with CWD
-                        let updated_content = format!(
-                            "{}\n\n## WORKING DIRECTORY\nYour current working directory is: {}\nWhen using file system tools such as Read, Glob, Grep, LS, Edit, and Write, you should use absolute paths. You can use this working directory to construct them when needed.",
-                            existing_system_msg.content,
-                            working_dir
+                        let updated_content = add_working_directory_to_prompt(
+                            &existing_system_msg.content,
+                            working_dir,
                         );
                         // Replace the existing system message
                         executor.add_system_message(updated_content);
@@ -262,11 +262,8 @@ impl Agent {
                 if let Some(working_dir) = &mutable_self.working_directory {
                     if !system_content.contains("## WORKING DIRECTORY") {
                         // Add the working directory section if it doesn't exist
-                        system_content = format!(
-                            "{}\n\n## WORKING DIRECTORY\nYour current working directory is: {}\nWhen using file system tools such as Read, Glob, Grep, LS, Edit, and Write, you should use absolute paths. You can use this working directory to construct them when needed.",
-                            system_content,
-                            working_dir
-                        );
+                        system_content =
+                            add_working_directory_to_prompt(&system_content, working_dir);
                     }
                 }
 
