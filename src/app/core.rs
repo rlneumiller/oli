@@ -2,6 +2,7 @@ use crate::agent::core::Agent;
 use crate::apis::api_client::{ApiClient, SessionManager};
 use crate::app::history::ConversationSummary;
 use crate::app::logger::{format_log_with_color, LogLevel};
+use crate::app::memory::MemoryManager;
 use crate::models;
 use crate::models::{ModelConfig, ANTHROPIC_MODEL_NAME, GEMINI_MODEL_NAME, OPENAI_MODEL_NAME};
 use anyhow::Result;
@@ -222,6 +223,8 @@ pub struct App {
     pub conversation_summaries: Vec<ConversationSummary>,
     pub session_manager: Option<SessionManager>,
     pub session_id: String,
+    // Memory manager for the oli.md memory file
+    pub memory_manager: MemoryManager,
     // Add tracking for tool executions
     pub tool_executions: HashMap<String, ToolExecution>,
 }
@@ -249,6 +252,16 @@ impl App {
         // Generate a unique session ID
         let session_id = Uuid::new_v4().to_string();
 
+        // Initialize memory manager with oli.md in the current directory
+        let memory_manager = MemoryManager::new();
+
+        // Create the memory file if it doesn't exist
+        if !memory_manager.memory_exists() {
+            if let Err(e) = memory_manager.write_memory(&MemoryManager::default_memory_template()) {
+                eprintln!("Failed to create memory file: {}", e);
+            }
+        }
+
         Self {
             state: AppState::Setup,
             messages: vec![],
@@ -266,6 +279,7 @@ impl App {
             conversation_summaries: Vec::new(),
             session_manager,
             session_id,
+            memory_manager,
             tool_executions: HashMap::new(),
         }
     }
@@ -277,61 +291,19 @@ impl App {
             .ok_or_else(|| anyhow::anyhow!("Invalid model index"))
     }
 
-    /// Run the model with the given prompt
-    pub fn run(&mut self, prompt: &str, model_index: Option<usize>) -> Result<String> {
-        // First gather all the info we need
+    /// Helper function to get the current timestamp in milliseconds
+    pub fn get_timestamp_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
 
-        // Create a task for this run
-        let task_id = self.create_task(prompt);
-
-        // Add processing message to logs
-        eprintln!(
-            "{}",
-            format_log_with_color(LogLevel::Info, &format!("Processing run: '{}'", prompt))
-        );
-
-        // Update run time
-        self.last_run_time = Instant::now();
-
-        // Add to message history
-        self.messages.push(format!("[user] {}", prompt));
-
-        // Check for runtime
-        if self.tokio_runtime.is_none() {
-            return Err(anyhow::anyhow!("Async runtime not available"));
-        }
-
-        // Clone and collect all necessary data before any async calls
-
-        // Use model_index from parameter (default to first model)
-        let model_index = model_index.unwrap_or(0);
-        eprintln!(
-            "{}",
-            format_log_with_color(
-                LogLevel::Info,
-                &format!("Using model at index: {}", model_index)
-            )
-        );
-        let model = match self.available_models.get(model_index) {
-            Some(m) => m,
-            None => return Err(anyhow::anyhow!("No models available")),
-        };
-
-        let model_name = model.name.clone();
-        let model_file_name = model.file_name.clone();
-        let supports_agent = model.has_agent_support();
-
-        // Log model info
-        eprintln!(
-            "{}",
-            format_log_with_color(LogLevel::Info, &format!("Using model: {}", model_name))
-        );
-
-        // Determine which API key to use based on the model name
+    /// Helper function to get an API key for a given model
+    fn get_api_key_for_model(&self, model_name: &str) -> String {
         let model_name_lower = model_name.to_lowercase();
 
-        // Get the appropriate API key for the selected model
-        let api_key = self.api_key.clone().unwrap_or_else(|| {
+        self.api_key.clone().unwrap_or_else(|| {
             if model_name_lower.contains("claude") {
                 std::env::var("ANTHROPIC_API_KEY").unwrap_or_default()
             } else if model_name_lower.contains("gpt") {
@@ -348,8 +320,27 @@ impl App {
                     .or_else(|_| std::env::var("GEMINI_API_KEY"))
                     .unwrap_or_default()
             }
-        });
+        })
+    }
 
+    /// Helper function to determine API source based on model name
+    pub fn get_api_source(model_name_lower: &str) -> &'static str {
+        if model_name_lower.contains("claude") {
+            "Anthropic"
+        } else if model_name_lower.contains("gpt") {
+            "OpenAI"
+        } else if model_name_lower.contains("gemini") {
+            "Google"
+        } else if model_name_lower.contains("local") {
+            "Local"
+        } else {
+            "Unknown"
+        }
+    }
+
+    /// Helper function to validate API key for a given model
+    pub fn validate_api_key(model_name: &str, api_key: &str) -> Result<()> {
+        let model_name_lower = model_name.to_lowercase();
         if api_key.is_empty() && !model_name_lower.contains("local") {
             let api_env_var = if model_name_lower.contains("claude") {
                 "ANTHROPIC_API_KEY"
@@ -367,20 +358,476 @@ impl App {
                 api_env_var
             ));
         }
+        Ok(())
+    }
 
-        // Log API key source (without exposing the key)
-        let api_source = if model_name_lower.contains("claude") {
-            "Anthropic"
+    /// Helper function to determine LLM provider and validate availability
+    fn determine_provider(
+        model_name: &str,
+        api_key: &str,
+        model_file_name: &str,
+    ) -> Result<(crate::agent::core::LLMProvider, String)> {
+        use crate::agent::core::LLMProvider;
+
+        let model_name_lower = model_name.to_lowercase();
+        let has_key = !api_key.is_empty();
+
+        // Determine the provider based on model name
+        let provider = match model_name_lower.as_str() {
+            name if name.contains("claude") => {
+                if has_key {
+                    Some(LLMProvider::Anthropic)
+                } else {
+                    None
+                }
+            }
+            name if name.contains("gpt") => {
+                if has_key {
+                    Some(LLMProvider::OpenAI)
+                } else {
+                    None
+                }
+            }
+            name if name.contains("gemini") => {
+                if has_key {
+                    Some(LLMProvider::Gemini)
+                } else {
+                    None
+                }
+            }
+            name if name.contains("local") => Some(LLMProvider::Ollama),
+            _ => {
+                if has_key {
+                    if model_name_lower.contains("claude") {
+                        Some(LLMProvider::Anthropic)
+                    } else if model_name_lower.contains("gpt") {
+                        Some(LLMProvider::OpenAI)
+                    } else if model_name_lower.contains("gemini") {
+                        Some(LLMProvider::Gemini)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+        }
+        .ok_or_else(|| anyhow::anyhow!("Could not determine provider for agent"))?;
+
+        // Determine the agent model
+        let agent_model = match model_name_lower.as_str() {
+            name if name.contains("claude") => {
+                if has_key {
+                    Some(ANTHROPIC_MODEL_NAME.to_string())
+                } else {
+                    None
+                }
+            }
+            name if name.contains("gpt") => {
+                if has_key {
+                    Some(OPENAI_MODEL_NAME.to_string())
+                } else {
+                    None
+                }
+            }
+            name if name.contains("gemini") => {
+                if has_key {
+                    Some(GEMINI_MODEL_NAME.to_string())
+                } else {
+                    None
+                }
+            }
+            name if name.contains("local") => Some(model_file_name.to_string()),
+            _ => None,
+        }
+        .ok_or_else(|| anyhow::anyhow!("Could not determine model for agent"))?;
+
+        Ok((provider, agent_model))
+    }
+
+    /// Helper function to create API client based on model type
+    async fn create_api_client(
+        model_type: &str,
+        api_key: String,
+        model_file_name: String,
+    ) -> Result<Box<dyn ApiClient>> {
+        let model_name_lower = model_type.to_lowercase();
+
+        if model_name_lower.contains("claude") {
+            // Use Anthropic API for Claude models
+            let client = crate::apis::anthropic::AnthropicClient::with_api_key(
+                api_key,
+                Some(model_file_name),
+            )?;
+            Ok(Box::new(client))
         } else if model_name_lower.contains("gpt") {
-            "OpenAI"
+            // Use OpenAI API for GPT models
+            let client =
+                crate::apis::openai::OpenAIClient::with_api_key(api_key, Some(model_file_name))?;
+            Ok(Box::new(client))
         } else if model_name_lower.contains("gemini") {
-            "Google"
+            // Use Gemini API for Gemini models
+            let client =
+                crate::apis::gemini::GeminiClient::with_api_key(api_key, Some(model_file_name))?;
+            Ok(Box::new(client))
         } else if model_name_lower.contains("local") {
-            "Local"
+            // Use Ollama API for local models
+            let client = crate::apis::ollama::OllamaClient::new(Some(model_file_name))?;
+            Ok(Box::new(client))
         } else {
-            "Unknown"
+            Err(anyhow::anyhow!("Unsupported model type: {}", model_type))
+        }
+    }
+
+    /// Helper function to estimate token count from text
+    pub fn estimate_tokens(text: &str) -> u32 {
+        (text.len() as f64 / 4.0).ceil() as u32
+    }
+
+    /// Handle progress messages from agent threads
+    async fn handle_agent_progress(
+        message: String,
+        task_id: String,
+        progress_tx: std::sync::mpsc::Sender<String>,
+    ) {
+        // Forward to main progress handler
+        let _ = progress_tx.send(message.clone());
+
+        // Special detection for View tool output
+        let is_view_output = message
+            .lines()
+            .next()
+            .map(|first_line| {
+                first_line.contains(" | ")
+                    && first_line
+                        .trim()
+                        .chars()
+                        .take(5)
+                        .all(|c| c.is_ascii_digit() || c.is_whitespace() || c == '|')
+            })
+            .unwrap_or(false);
+
+        if is_view_output {
+            if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
+                // Count the number of lines in the output
+                let line_count = message.lines().count();
+
+                // Create a unique ID for this View tool execution
+                let tool_id = format!("{}.view-{}", task_id, Self::get_timestamp_ms());
+
+                // Send tool status notification for View
+                let tool_status = serde_json::json!({
+                    "type": "updated",
+                    "execution": {
+                        "id": tool_id,
+                        "task_id": task_id,
+                        "name": "View",
+                        "status": "success",
+                        "startTime": Self::get_timestamp_ms(),
+                        "endTime": Self::get_timestamp_ms() + 100, // Add 100ms to ensure endTime > startTime
+                        "message": format!("Read {} lines", line_count),
+                        "metadata": {
+                            "lines": line_count,
+                            "description": format!("Read {} lines", line_count),
+                            "file_path": "view-result", // Add a placeholder file path
+                        }
+                    }
+                });
+
+                // Send the notification
+                rpc_server
+                    .send_notification("tool_status", tool_status)
+                    .ok();
+            }
+        }
+
+        // Process standard tool execution events
+        if message.starts_with('[') && message.contains(']') {
+            if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
+                let parts: Vec<&str> = message.splitn(2, ']').collect();
+                if parts.len() == 2 {
+                    let tool_name = parts[0].trim_start_matches('[').trim();
+                    let tool_message = parts[1].trim();
+
+                    // Log tool detection for debugging
+                    eprintln!("Detected tool message: [{}] {}", tool_name, tool_message);
+
+                    // Determine tool execution status - default to running
+                    let status = if message.contains("[error]") || message.contains("ERROR") {
+                        "error"
+                    } else if message.contains("[completed]")
+                        || message.contains("completed")
+                        || message.contains("success")
+                    {
+                        "success"
+                    } else {
+                        "running"
+                    };
+
+                    let (file_path, lines) = Self::extract_tool_metadata(tool_message);
+                    let description = Self::get_tool_description(tool_name, &file_path, lines);
+
+                    // Generate a unique ID for this tool execution
+                    let tool_id = format!("tool-{}-{}", tool_name, uuid::Uuid::new_v4().simple());
+
+                    // Create timestamp
+                    let now = Self::get_timestamp_ms();
+
+                    // Create a ToolExecution structure
+                    let tool_execution = ToolExecution {
+                        id: tool_id.clone(),
+                        task_id: task_id.clone(),
+                        name: tool_name.to_string(),
+                        status: match status {
+                            "running" => ToolExecutionStatus::Running,
+                            "success" => ToolExecutionStatus::Success,
+                            "error" => ToolExecutionStatus::Error,
+                            _ => ToolExecutionStatus::Running,
+                        },
+                        start_time: now,
+                        end_time: if status != "running" { Some(now) } else { None },
+                        message: tool_message.to_string(),
+                        metadata: {
+                            let mut meta = std::collections::HashMap::new();
+                            if let Some(path) = &file_path {
+                                meta.insert(
+                                    "file_path".to_string(),
+                                    serde_json::Value::String(path.clone()),
+                                );
+                            }
+                            if let Some(line_count) = lines {
+                                meta.insert(
+                                    "lines".to_string(),
+                                    serde_json::Value::Number(serde_json::Number::from(line_count)),
+                                );
+                            }
+                            meta.insert(
+                                "description".to_string(),
+                                serde_json::Value::String(description.clone()),
+                            );
+                            meta
+                        },
+                    };
+
+                    // Send as a tool_status notification directly
+                    let _ = rpc_server.send_notification(
+                        "tool_status",
+                        serde_json::json!({
+                            "type": "started",
+                            "execution": tool_execution
+                        }),
+                    );
+
+                    // Also send the legacy tool_execution event for backward compatibility
+                    let _ = rpc_server.event_sender().send((
+                        "tool_execution".to_string(),
+                        serde_json::json!({
+                            "task_id": task_id,
+                            "tool": tool_name,
+                            "message": tool_message,
+                            "status": status,
+                            "description": description,
+                            "file_path": file_path,
+                            "lines": lines,
+                            "timestamp": now
+                        }),
+                    ));
+                }
+            }
+        }
+
+        // Log to stderr for debugging
+        eprintln!(
+            "{}",
+            format_log_with_color(LogLevel::Debug, &format!("Agent: {}", message))
+        );
+    }
+
+    /// Extract file path and line count from tool message
+    pub fn extract_tool_metadata(tool_message: &str) -> (Option<String>, Option<usize>) {
+        // Extract file path
+        let file_path = if tool_message.contains("file_path:") {
+            let path_parts: Vec<&str> = tool_message.split("file_path:").collect();
+            if path_parts.len() > 1 {
+                let path_with_quotes = path_parts[1].trim();
+                // Extract the path from quotes if present
+                if path_with_quotes.starts_with('"') && path_with_quotes.contains('"') {
+                    let end_quote_pos = path_with_quotes[1..].find('"').map(|pos| pos + 1);
+                    end_quote_pos.map(|pos| path_with_quotes[1..pos].to_string())
+                } else {
+                    Some(
+                        path_with_quotes
+                            .split_whitespace()
+                            .next()
+                            .unwrap_or("")
+                            .to_string(),
+                    )
+                }
+            } else {
+                None
+            }
+        } else {
+            None
         };
 
+        // Extract line count
+        let lines = if tool_message.contains("lines") {
+            let line_parts: Vec<&str> = tool_message.split("lines").collect();
+            if line_parts.len() > 1 {
+                // Look for number right before or after "lines"
+                let numbers: Vec<&str> = line_parts[0]
+                    .split_whitespace()
+                    .chain(line_parts[1].split_whitespace())
+                    .filter(|word| word.parse::<usize>().is_ok())
+                    .collect();
+
+                numbers.first().and_then(|num| num.parse::<usize>().ok())
+            } else {
+                // Fallback to original implementation
+                tool_message
+                    .split_whitespace()
+                    .find(|word| word.parse::<usize>().is_ok())
+                    .and_then(|num| num.parse::<usize>().ok())
+            }
+        } else {
+            None
+        };
+
+        (file_path, lines)
+    }
+
+    /// Get description for tool type
+    pub fn get_tool_description(
+        tool_name: &str,
+        file_path: &Option<String>,
+        lines: Option<usize>,
+    ) -> String {
+        match tool_name {
+            "View" => {
+                if file_path.is_some() {
+                    if let Some(line_count) = lines {
+                        format!("Read {} lines (ctrl+r to expand)", line_count)
+                    } else {
+                        "Reading file contents (ctrl+r to expand)".to_string()
+                    }
+                } else {
+                    "Reading file".to_string()
+                }
+            }
+            "Glob" => "Finding files by pattern".to_string(),
+            "Grep" => "Searching code for pattern".to_string(),
+            "LS" => "Listing directory contents".to_string(),
+            "Edit" => "Modifying file".to_string(),
+            "Replace" => "Replacing file contents".to_string(),
+            "Bash" => "Executing command".to_string(),
+            _ => "Executing tool".to_string(),
+        }
+    }
+
+    /// Set up a progress tracking thread for UI notifications
+    fn setup_progress_tracking(task_id: String) -> std::sync::mpsc::Sender<String> {
+        let (progress_tx, progress_rx) = std::sync::mpsc::channel();
+        let task_id_clone = task_id.clone();
+
+        std::thread::spawn(move || {
+            while let Ok(message) = progress_rx.recv() {
+                // Emit progress events for the UI to pick up
+                if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
+                    let _ = rpc_server.event_sender().send((
+                        "processing_progress".to_string(),
+                        serde_json::json!({
+                            "task_id": task_id_clone,
+                            "message": message
+                        }),
+                    ));
+                }
+            }
+        });
+
+        progress_tx
+    }
+
+    /// Process model response and update app state
+    fn process_model_response(&mut self, response: String) -> String {
+        // Add the assistant response to the session
+        if let Some(session) = &mut self.session_manager {
+            session.add_assistant_message(response.clone());
+        }
+
+        // Add the response to the message history
+        self.messages.push(format!("[assistant] {}", response));
+
+        // Complete the task with estimated tokens
+        let estimated_tokens = Self::estimate_tokens(&response);
+        self.complete_current_task(estimated_tokens);
+
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Info,
+                &format!(
+                    "Run completed, received approximately {} tokens",
+                    estimated_tokens
+                )
+            )
+        );
+
+        response
+    }
+
+    /// Run the model with the given prompt
+    pub fn run(&mut self, prompt: &str, model_index: Option<usize>) -> Result<String> {
+        // Create a task for this run
+        let task_id = self.create_task(prompt);
+
+        // Log processing message
+        eprintln!(
+            "{}",
+            format_log_with_color(LogLevel::Info, &format!("Processing run: '{}'", prompt))
+        );
+
+        // Update run time and add to message history
+        self.last_run_time = Instant::now();
+        self.messages.push(format!("[user] {}", prompt));
+
+        // Check for runtime
+        if self.tokio_runtime.is_none() {
+            return Err(anyhow::anyhow!("Async runtime not available"));
+        }
+
+        // Use model_index from parameter (default to first model)
+        let model_index = model_index.unwrap_or(0);
+        eprintln!(
+            "{}",
+            format_log_with_color(
+                LogLevel::Info,
+                &format!("Using model at index: {}", model_index)
+            )
+        );
+
+        // Get model info
+        let model = self
+            .available_models
+            .get(model_index)
+            .ok_or_else(|| anyhow::anyhow!("No models available"))?;
+
+        let model_name = model.name.clone();
+        let model_file_name = model.file_name.clone();
+        let supports_agent = model.has_agent_support();
+        let model_name_lower = model_name.to_lowercase();
+
+        // Log model info
+        eprintln!(
+            "{}",
+            format_log_with_color(LogLevel::Info, &format!("Using model: {}", model_name))
+        );
+
+        // Get and validate API key
+        let api_key = self.get_api_key_for_model(&model_name);
+        Self::validate_api_key(&model_name, &api_key)?;
+
+        // Log API key source (without exposing the key)
+        let api_source = Self::get_api_source(&model_name_lower);
         eprintln!(
             "{}",
             format_log_with_color(
@@ -406,7 +853,6 @@ impl App {
         };
 
         // Check model type and log warning if needed
-        let model_name_lower = model_name.to_lowercase();
         let unrecognized = !model_name_lower.contains("claude")
             && !model_name_lower.contains("gpt")
             && !model_name_lower.contains("local")
@@ -422,8 +868,7 @@ impl App {
             );
         }
 
-        // Now make the API call - carefully extracting runtime to avoid borrow issues
-        let runtime = self.tokio_runtime.as_ref().unwrap();
+        // Set up standard completion options
         let options = crate::apis::api_client::CompletionOptions {
             temperature: Some(0.7),
             top_p: Some(0.9),
@@ -431,403 +876,45 @@ impl App {
             ..Default::default()
         };
 
-        // Channel for sending progress updates
-        let (progress_tx, progress_rx) = std::sync::mpsc::channel();
+        // Set up progress tracking
+        let progress_tx = Self::setup_progress_tracking(task_id.clone());
+        let runtime = self.tokio_runtime.as_ref().unwrap();
 
-        // Progress tracking thread for UI notifications
-        let task_id_clone = task_id.clone();
-        std::thread::spawn(move || {
-            while let Ok(message) = progress_rx.recv() {
-                // Emit progress events for the UI to pick up
-                if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
-                    let _ = rpc_server.event_sender().send((
-                        "processing_progress".to_string(),
-                        serde_json::json!({
-                            "task_id": task_id_clone,
-                            "message": message
-                        }),
-                    ));
-                }
-            }
-        });
-
-        // Initialize agent if model supports it and use_agent is set
+        // Run with agent if supported and enabled
         if supports_agent && self.use_agent {
-            // Working directory no longer needed for the simplified implementation
-            let _working_dir = self.current_working_dir.clone().unwrap_or_else(|| {
-                std::env::current_dir()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| ".".to_string())
-            });
+            // Determine provider and agent model
+            let (provider, agent_model) =
+                Self::determine_provider(&model_name, &api_key, &model_file_name)?;
 
-            // Determine provider based on the selected model
-            let has_anthropic_key = if model_name_lower.contains("claude") {
-                !api_key.is_empty() // If using Claude, we already have the correct API key
-            } else {
-                std::env::var("ANTHROPIC_API_KEY").is_ok() // Otherwise check if we have this key
-            };
-
-            let has_openai_key = if model_name_lower.contains("gpt") {
-                !api_key.is_empty() // If using GPT, we already have the correct API key
-            } else {
-                std::env::var("OPENAI_API_KEY").is_ok() // Otherwise check if we have this key
-            };
-
-            let has_gemini_key = if model_name_lower.contains("gemini") {
-                !api_key.is_empty() // If using Gemini, we already have the correct API key
-            } else {
-                std::env::var("GEMINI_API_KEY").is_ok() // Otherwise check if we have this key
-            };
-
-            // Import agent provider enum
-            use crate::agent::core::LLMProvider;
-
-            // Determine the provider based on model name
-            let provider = match model_name_lower.as_str() {
-                name if name.contains("claude") => {
-                    if has_anthropic_key {
-                        Some(LLMProvider::Anthropic)
-                    } else {
-                        None
-                    }
-                }
-                name if name.contains("gpt") => {
-                    if has_openai_key {
-                        Some(LLMProvider::OpenAI)
-                    } else {
-                        None
-                    }
-                }
-                name if name.contains("gemini") => {
-                    if has_gemini_key {
-                        Some(LLMProvider::Gemini)
-                    } else {
-                        None
-                    }
-                }
-                name if name.contains("local") => Some(LLMProvider::Ollama),
-                _ => {
-                    if has_anthropic_key {
-                        Some(LLMProvider::Anthropic)
-                    } else if has_openai_key {
-                        Some(LLMProvider::OpenAI)
-                    } else if has_gemini_key {
-                        Some(LLMProvider::Gemini)
-                    } else {
-                        None
-                    }
-                }
-            }
-            .ok_or_else(|| anyhow::anyhow!("Could not determine provider for agent"))?;
-
-            // Determine the agent model
-            let agent_model = match model_name_lower.as_str() {
-                name if name.contains("claude") => {
-                    if has_anthropic_key {
-                        Some(ANTHROPIC_MODEL_NAME.to_string())
-                    } else {
-                        None
-                    }
-                }
-                name if name.contains("gpt") => {
-                    if has_openai_key {
-                        Some(OPENAI_MODEL_NAME.to_string())
-                    } else {
-                        None
-                    }
-                }
-                name if name.contains("gemini") => {
-                    if has_gemini_key {
-                        Some(GEMINI_MODEL_NAME.to_string())
-                    } else {
-                        None
-                    }
-                }
-                name if name.contains("local") => Some(model_file_name.clone()),
-                _ => None,
-            }
-            .ok_or_else(|| anyhow::anyhow!("Could not determine model for agent"))?;
-
-            // Create and configure the agent with builder methods
+            // Create and configure the agent
             let mut agent = crate::agent::core::Agent::new(provider);
             agent = agent.with_model(agent_model);
 
-            // Create Tokio channel for progress
+            // Pass current working directory to the agent
+            if let Some(cwd) = &self.current_working_dir {
+                agent = agent.with_working_directory(cwd.clone());
+            }
+
+            // Set up agent progress handling
             let (progress_tx_sender, mut progress_rx_receiver) =
                 tokio::sync::mpsc::channel::<String>(100);
-
-            // Add progress sender to agent
             agent = agent.with_progress_sender(progress_tx_sender);
 
-            // Set up a task for processing progress messages
+            // Clone values needed for the progress tracking thread
             let progress_tx_clone = progress_tx.clone();
-            let task_id_clone2 = task_id.clone();
+            let task_id_clone = task_id.clone();
 
             // Spawn a thread to handle agent progress messages
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async {
                     while let Some(message) = progress_rx_receiver.recv().await {
-                        // Special detection for View tool output
-                        let is_view_output = message.lines().next()
-                            .map(|first_line|
-                                first_line.contains(" | ") &&
-                                first_line.trim().chars().take(5).all(|c| c.is_ascii_digit() || c.is_whitespace() || c == '|')
-                            )
-                            .unwrap_or(false);
-
-                        if is_view_output {
-                            if let Some(rpc_server) = crate::communication::rpc::get_global_rpc_server() {
-                                // Count the number of lines in the output
-                                let line_count = message.lines().count();
-
-                                // Create a unique ID for this View tool execution
-                                let tool_id = format!("{}.view-{}", task_id, std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis());
-
-                                // Send tool status notification for View
-                                let tool_status = serde_json::json!({
-                                    "type": "updated",
-                                    "execution": {
-                                        "id": tool_id,
-                                        "task_id": task_id,
-                                        "name": "View",
-                                        "status": "success",
-                                        "startTime": std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap_or_default()
-                                            .as_millis(),
-                                        "endTime": std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap_or_default()
-                                            .as_millis() + 100, // Add 100ms to ensure endTime > startTime
-                                        "message": format!("Read {} lines", line_count),
-                                        "metadata": {
-                                            "lines": line_count,
-                                            "description": format!("Read {} lines", line_count),
-                                            "file_path": "view-result", // Add a placeholder file path
-                                        }
-                                    }
-                                });
-
-                                // Send the notification
-                                rpc_server.send_notification("tool_status", tool_status).ok();
-                            }
-                        }
-
-                        // Process standard tool execution events
-                        if message.starts_with('[') && message.contains(']') {
-                            if let Some(rpc_server) =
-                                crate::communication::rpc::get_global_rpc_server()
-                            {
-                                let parts: Vec<&str> = message.splitn(2, ']').collect();
-                                if parts.len() == 2 {
-                                    let tool_name = parts[0].trim_start_matches('[').trim();
-                                    let tool_message = parts[1].trim();
-
-                                    // Log tool detection for debugging
-                                    eprintln!("Detected tool message: [{}] {}", tool_name, tool_message);
-
-                                    // Determine tool execution status - default to running
-                                    let status = if message.contains("[error]")
-                                        || message.contains("ERROR")
-                                    {
-                                        "error"
-                                    } else if message.contains("[completed]")
-                                        || message.contains("completed")
-                                        || message.contains("success")
-                                    {
-                                        "success"
-                                    } else {
-                                        "running"
-                                    };
-
-                                    // Extract additional metadata for the tool operation
-                                    let file_path = if tool_message.contains("file_path:") {
-                                        let path_parts: Vec<&str> =
-                                            tool_message.split("file_path:").collect();
-                                        if path_parts.len() > 1 {
-                                            let path_with_quotes = path_parts[1].trim();
-                                            // Extract the path from quotes if present
-                                            if path_with_quotes.starts_with('"')
-                                                && path_with_quotes.contains('"')
-                                            {
-                                                let end_quote_pos = path_with_quotes[1..]
-                                                    .find('"')
-                                                    .map(|pos| pos + 1);
-                                                end_quote_pos
-                                                    .map(|pos| path_with_quotes[1..pos].to_string())
-                                            } else {
-                                                Some(
-                                                    path_with_quotes
-                                                        .split_whitespace()
-                                                        .next()
-                                                        .unwrap_or("")
-                                                        .to_string(),
-                                                )
-                                            }
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    };
-
-                                    // Extract line count if available - improved detection
-                                    let lines = if tool_message.contains("lines") {
-                                        let line_parts: Vec<&str> =
-                                            tool_message.split("lines").collect();
-                                        if line_parts.len() > 1 {
-                                            // Look for number right before or after "lines"
-                                            let numbers: Vec<&str> = line_parts[0]
-                                                .split_whitespace()
-                                                .chain(line_parts[1].split_whitespace())
-                                                .filter(|word| word.parse::<usize>().is_ok())
-                                                .collect();
-
-                                            numbers
-                                                .first()
-                                                .and_then(|num| num.parse::<usize>().ok())
-                                        } else {
-                                            // Fallback to original implementation
-                                            tool_message
-                                                .split_whitespace()
-                                                .find(|word| word.parse::<usize>().is_ok())
-                                                .and_then(|num| num.parse::<usize>().ok())
-                                        }
-                                    } else {
-                                        None
-                                    };
-
-                                    // Description based on tool type
-                                    let description = match tool_name {
-                                        "View" => {
-                                            if let Some(_path) = &file_path {
-                                                if let Some(line_count) = lines {
-                                                    format!(
-                                                        "Read {} lines (ctrl+r to expand)",
-                                                        line_count
-                                                    )
-                                                } else {
-                                                    "Reading file contents (ctrl+r to expand)"
-                                                        .to_string()
-                                                }
-                                            } else {
-                                                "Reading file".to_string()
-                                            }
-                                        }
-                                        "Glob" => "Finding files by pattern".to_string(),
-                                        "Grep" => "Searching code for pattern".to_string(),
-                                        "LS" => "Listing directory contents".to_string(),
-                                        "Edit" => "Modifying file".to_string(),
-                                        "Replace" => "Replacing file contents".to_string(),
-                                        "Bash" => "Executing command".to_string(),
-                                        _ => "Executing tool".to_string(),
-                                    };
-
-                                    // Generate a unique ID for this tool execution
-                                    let tool_id = format!(
-                                        "tool-{}-{}",
-                                        tool_name,
-                                        uuid::Uuid::new_v4().simple()
-                                    );
-
-                                    // Create timestamp
-                                    let now = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis()
-                                        as u64;
-
-                                    // Create a ToolExecution structure
-                                    let tool_execution = ToolExecution {
-                                        id: tool_id.clone(),
-                                        task_id: task_id_clone2.clone(),
-                                        name: tool_name.to_string(),
-                                        status: match status {
-                                            "running" => ToolExecutionStatus::Running,
-                                            "success" => ToolExecutionStatus::Success,
-                                            "error" => ToolExecutionStatus::Error,
-                                            _ => ToolExecutionStatus::Running,
-                                        },
-                                        start_time: now,
-                                        end_time: if status != "running" {
-                                            Some(now)
-                                        } else {
-                                            None
-                                        },
-                                        message: tool_message.to_string(),
-                                        metadata: {
-                                            let mut meta = std::collections::HashMap::new();
-                                            if let Some(path) = &file_path {
-                                                meta.insert(
-                                                    "file_path".to_string(),
-                                                    serde_json::Value::String(path.clone()),
-                                                );
-                                            }
-                                            if let Some(line_count) = lines {
-                                                meta.insert(
-                                                    "lines".to_string(),
-                                                    serde_json::Value::Number(
-                                                        serde_json::Number::from(line_count),
-                                                    ),
-                                                );
-                                            }
-                                            meta.insert(
-                                                "description".to_string(),
-                                                serde_json::Value::String(description.clone()),
-                                            );
-                                            meta
-                                        },
-                                    };
-
-                                    // Log the tool execution with detailed information
-                                    eprintln!(
-                                        "Created tool execution: {} ({}) - task_id={}, status={:?}, message={}",
-                                        tool_execution.id,
-                                        tool_execution.name,
-                                        tool_execution.task_id,
-                                        tool_execution.status,
-                                        tool_execution.message
-                                    );
-
-                                    // Send as a tool_status notification directly
-                                    let _ = rpc_server.send_notification(
-                                        "tool_status",
-                                        serde_json::json!({
-                                            "type": "started",
-                                            "execution": tool_execution
-                                        }),
-                                    );
-
-                                    // Also send the legacy tool_execution event for backward compatibility
-                                    let _ = rpc_server.event_sender().send((
-                                        "tool_execution".to_string(),
-                                        serde_json::json!({
-                                            "task_id": task_id_clone2,
-                                            "tool": tool_name,
-                                            "message": tool_message,
-                                            "status": status,
-                                            "description": description,
-                                            "file_path": file_path,
-                                            "lines": lines,
-                                            "timestamp": now
-                                        }),
-                                    ));
-                                }
-                            }
-                        }
-
-                        // Forward to main progress handler
-                        let _ = progress_tx_clone.send(message.to_string());
-
-                        // Log to stderr for debugging
-                        eprintln!(
-                            "{}",
-                            format_log_with_color(LogLevel::Debug, &format!("Agent: {}", message))
-                        );
+                        Self::handle_agent_progress(
+                            message,
+                            task_id_clone.clone(),
+                            progress_tx_clone.clone(),
+                        )
+                        .await;
                     }
                 });
             });
@@ -837,15 +924,10 @@ impl App {
 
             // Add conversation history from the session manager to the agent
             if let Some(session) = &self.session_manager {
-                // Get the existing history from the session manager
                 let session_messages = session.get_messages_for_api();
-
-                // Add each message to the agent's conversation history
                 for message in session_messages {
                     agent.add_message(message.clone());
                 }
-
-                // Debug log the added history
                 eprintln!(
                     "{}",
                     format_log_with_color(
@@ -861,119 +943,32 @@ impl App {
             // Execute the agent with the prompt
             let response = runtime.block_on(async { agent.execute(prompt).await })?;
 
-            // Use a fixed tool count for now
+            // Set a default tool count
             if let Some(task) = self.current_task_mut() {
-                task.tool_count = 1; // Set a default tool count
+                task.tool_count = 1;
             }
 
-            // Add the assistant response to the session
-            if let Some(session) = &mut self.session_manager {
-                session.add_assistant_message(response.clone());
-            }
-
-            // Add the response to the message history
-            self.messages.push(format!("[assistant] {}", response));
-
-            // Complete the task (with an estimate of output tokens)
-            let estimated_tokens = (response.len() as f64 / 4.0).ceil() as u32;
-            self.complete_current_task(estimated_tokens);
-
-            eprintln!(
-                "{}",
-                format_log_with_color(
-                    LogLevel::Info,
-                    &format!(
-                        "Agent run completed, received approximately {} tokens",
-                        estimated_tokens
-                    )
-                )
-            );
-
-            Ok(response)
+            // Process response and return
+            Ok(self.process_model_response(response))
         } else {
-            // Execute the appropriate API call for non-agent mode
-            let response = if model_name_lower.contains("claude") {
-                // Use Anthropic API for Claude models
-                runtime.block_on(async {
-                    let client = crate::apis::anthropic::AnthropicClient::with_api_key(
-                        api_key.clone(),
-                        Some(model_file_name.clone()),
-                    )?;
+            // Create API client based on model type
+            let client_future =
+                Self::create_api_client(&model_name_lower, api_key, model_file_name.clone());
 
-                    // Send progress update
-                    let _ = progress_tx.send(format!("Sending request to {}", model_name));
-
-                    client.complete(messages.clone(), options).await
-                })?
-            } else if model_name_lower.contains("gpt") {
-                // Use OpenAI API for GPT models
-                runtime.block_on(async {
-                    let client = crate::apis::openai::OpenAIClient::with_api_key(
-                        api_key.clone(),
-                        Some(model_file_name.clone()),
-                    )?;
-
-                    // Send progress update
-                    let _ = progress_tx.send(format!("Sending request to {}", model_name));
-
-                    client.complete(messages.clone(), options).await
-                })?
-            } else if model_name_lower.contains("gemini") {
-                // Use Gemini API for Gemini models
-                runtime.block_on(async {
-                    let client = crate::apis::gemini::GeminiClient::with_api_key(
-                        api_key.clone(),
-                        Some(model_file_name.clone()),
-                    )?;
-
-                    // Send progress update
-                    let _ = progress_tx.send(format!("Sending request to {}", model_name));
-
-                    client.complete(messages.clone(), options).await
-                })?
-            } else if model_name_lower.contains("local") {
-                // Use Ollama API for local models
-                runtime.block_on(async {
-                    let client =
-                        crate::apis::ollama::OllamaClient::new(Some(model_file_name.clone()))?;
-
-                    // Send progress update
-                    let _ = progress_tx.send(format!(
-                        "Sending request to local model {}",
-                        model_file_name
-                    ));
-
-                    client.complete(messages.clone(), options).await
-                })?
+            // Send progress update
+            let model_display = if model_name_lower.contains("local") {
+                format!("local model {}", model_file_name)
             } else {
-                // Fallback to a default message if the model is not recognized
-                format!("I couldn't send your message to a language model. The model '{}' is not currently supported.", model_name)
+                model_name.clone()
             };
+            let _ = progress_tx.send(format!("Sending request to {}", model_display));
 
-            // Add the assistant response to the session
-            if let Some(session) = &mut self.session_manager {
-                session.add_assistant_message(response.clone());
-            }
+            // Execute the API call and get response
+            let client = runtime.block_on(client_future)?;
+            let response = runtime.block_on(async { client.complete(messages, options).await })?;
 
-            // Add the response to the message history
-            self.messages.push(format!("[assistant] {}", response));
-
-            // Complete the task (with an estimate of output tokens)
-            let estimated_tokens = (response.len() as f64 / 4.0).ceil() as u32;
-            self.complete_current_task(estimated_tokens);
-
-            eprintln!(
-                "{}",
-                format_log_with_color(
-                    LogLevel::Info,
-                    &format!(
-                        "Run completed, received approximately {} tokens",
-                        estimated_tokens
-                    )
-                )
-            );
-
-            Ok(response)
+            // Process response and return
+            Ok(self.process_model_response(response))
         }
     }
 

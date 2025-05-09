@@ -77,7 +77,7 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({
   if (!isVisible) return null;
 
   return (
-    <Box flexDirection="row" marginY={1} marginX={1}>
+    <Box flexDirection="row" marginY={0} marginX={1}>
       {/* Left side: Processing indicator with elapsed time and interrupt option */}
       <Box marginLeft={1} flexDirection="row" alignItems="center">
         <AnimatedSpinner color={theme.colors.dark.yellow} />

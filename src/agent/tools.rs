@@ -20,7 +20,7 @@ pub enum ToolType {
     Grep,
     LS,
     Edit,
-    Replace,
+    Write,
     Bash,
     DocumentSymbol,
     SemanticTokens,
@@ -59,10 +59,11 @@ pub struct EditParams {
     pub file_path: String,
     pub old_string: String,
     pub new_string: String,
+    pub expected_replacements: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReplaceParams {
+pub struct WriteParams {
     pub file_path: String,
     pub content: String,
 }
@@ -71,6 +72,7 @@ pub struct ReplaceParams {
 pub struct BashParams {
     pub command: String,
     pub timeout: Option<u64>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,7 +83,7 @@ pub enum ToolCall {
     Grep(GrepParams),
     LS(LSParams),
     Edit(EditParams),
-    Replace(ReplaceParams),
+    Write(WriteParams),
     Bash(BashParams),
     DocumentSymbol(DocumentSymbolParams),
     SemanticTokens(SemanticTokensParams),
@@ -677,7 +679,12 @@ impl ToolCall {
 
                 // Edit the file
                 let path = PathBuf::from(&params.file_path);
-                match FileOps::edit_file(&path, &params.old_string, &params.new_string) {
+                match FileOps::edit_file(
+                    &path,
+                    &params.old_string,
+                    &params.new_string,
+                    params.expected_replacements,
+                ) {
                     Ok(diff) => {
                         // Send success notification
                         let metadata = serde_json::json!({
@@ -716,10 +723,10 @@ impl ToolCall {
                     }
                 }
             }
-            ToolCall::Replace(params) => {
+            ToolCall::Write(params) => {
                 // Generate a unique ID for this execution
                 let tool_id = format!(
-                    "replace-direct-{}",
+                    "write-direct-{}",
                     SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
@@ -734,12 +741,12 @@ impl ToolCall {
                 // Send start notification
                 let metadata = serde_json::json!({
                     "file_path": params.file_path,
-                    "description": format!("Replacing file: {}", params.file_path),
+                    "description": format!("Writing file: {}", params.file_path),
                 });
                 send_tool_notification(
-                    "Replace",
+                    "Write",
                     "running",
-                    &format!("Replacing file: {}", params.file_path),
+                    &format!("Writing file: {}", params.file_path),
                     metadata,
                     &tool_id,
                     start_time,
@@ -749,19 +756,19 @@ impl ToolCall {
                 // Add a brief delay to ensure the running state is visible
                 std::thread::sleep(std::time::Duration::from_millis(500));
 
-                // Replace the file
+                // Write the file
                 let path = PathBuf::from(&params.file_path);
                 match FileOps::write_file_with_diff(&path, &params.content) {
                     Ok(diff) => {
                         // Send success notification
                         let metadata = serde_json::json!({
                             "file_path": params.file_path,
-                            "description": format!("Successfully replaced file: {}", params.file_path),
+                            "description": format!("Successfully wrote file: {}", params.file_path),
                         });
                         send_tool_notification(
-                            "Replace",
+                            "Write",
                             "success",
-                            &format!("Successfully replaced file: {}", params.file_path),
+                            &format!("Successfully wrote file: {}", params.file_path),
                             metadata,
                             &tool_id,
                             start_time,
@@ -774,12 +781,12 @@ impl ToolCall {
                         // Send error notification
                         let metadata = serde_json::json!({
                             "file_path": params.file_path,
-                            "description": format!("Error replacing file: {}", e),
+                            "description": format!("Error writing file: {}", e),
                         });
                         send_tool_notification(
-                            "Replace",
+                            "Write",
                             "error",
-                            &format!("Error replacing file: {}", e),
+                            &format!("Error writing file: {}", e),
                             metadata,
                             &tool_id,
                             start_time,
@@ -807,9 +814,13 @@ impl ToolCall {
 
                 // Send start notification with command in the tool name
                 let message = "Executing...";
+                let description = params
+                    .description
+                    .clone()
+                    .unwrap_or_else(|| format!("Executing command: {}", params.command));
                 let metadata = serde_json::json!({
                     "command": params.command,
-                    "description": format!("Executing command: {}", params.command),
+                    "description": description,
                 });
                 send_tool_notification(
                     &format!("Bash ({})", params.command),
@@ -836,63 +847,74 @@ impl ToolCall {
                         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-                        let result = if output.status.success() {
-                            // Send success notification with command as the name and output in the message
-                            let metadata = serde_json::json!({
-                                "command": params.command,
-                                "exit_code": output.status.code().unwrap_or(0),
-                                "description": format!("Command executed: {}", params.command),
-                            });
-                            send_tool_notification(
-                                &format!("Bash ({})", params.command),
-                                "success",
-                                &stdout,
-                                metadata,
-                                &tool_id,
-                                start_time,
-                            )
-                            .ok();
+                        let result =
+                            if output.status.success() {
+                                // Send success notification with command as the name and output in the message
+                                let description = params.description.clone().unwrap_or_else(|| {
+                                    format!("Command executed: {}", params.command)
+                                });
+                                let metadata = serde_json::json!({
+                                    "command": params.command,
+                                    "exit_code": output.status.code().unwrap_or(0),
+                                    "description": description,
+                                });
+                                send_tool_notification(
+                                    &format!("Bash ({})", params.command),
+                                    "success",
+                                    &stdout,
+                                    metadata,
+                                    &tool_id,
+                                    start_time,
+                                )
+                                .ok();
 
-                            stdout
-                        } else {
-                            // Send error notification with command as the name and error details in the message
-                            let error_output = format!(
-                                "Failed with exit code: {}\nStdout: {}\nStderr: {}",
-                                output.status.code().unwrap_or(-1),
-                                stdout,
-                                stderr
-                            );
-                            let metadata = serde_json::json!({
-                                "command": params.command,
-                                "exit_code": output.status.code().unwrap_or(-1),
-                                "description": format!("Command failed: {}", params.command),
-                            });
-                            send_tool_notification(
-                                &format!("Bash ({})", params.command),
-                                "error",
-                                &error_output,
-                                metadata,
-                                &tool_id,
-                                start_time,
-                            )
-                            .ok();
+                                stdout
+                            } else {
+                                // Send error notification with command as the name and error details in the message
+                                let error_output = format!(
+                                    "Failed with exit code: {}\nStdout: {}\nStderr: {}",
+                                    output.status.code().unwrap_or(-1),
+                                    stdout,
+                                    stderr
+                                );
+                                let description = params.description.clone().unwrap_or_else(|| {
+                                    format!("Command failed: {}", params.command)
+                                });
+                                let metadata = serde_json::json!({
+                                    "command": params.command,
+                                    "exit_code": output.status.code().unwrap_or(-1),
+                                    "description": description,
+                                });
+                                send_tool_notification(
+                                    &format!("Bash ({})", params.command),
+                                    "error",
+                                    &error_output,
+                                    metadata,
+                                    &tool_id,
+                                    start_time,
+                                )
+                                .ok();
 
-                            format!(
-                                "Command failed with exit code: {}\nStdout: {}\nStderr: {}",
-                                output.status.code().unwrap_or(-1),
-                                stdout,
-                                stderr
-                            )
-                        };
+                                format!(
+                                    "Command failed with exit code: {}\nStdout: {}\nStderr: {}",
+                                    output.status.code().unwrap_or(-1),
+                                    stdout,
+                                    stderr
+                                )
+                            };
 
                         Ok(result)
                     }
                     Err(e) => {
                         // Send error notification with command as the name and error details in the message
                         let error_message = format!("Error: {}", e);
+                        let description = params
+                            .description
+                            .clone()
+                            .unwrap_or_else(|| format!("Command failed: {}", params.command));
                         let metadata = serde_json::json!({
                             "command": params.command,
-                            "description": format!("Command failed: {}", params.command),
+                            "description": description,
                         });
                         send_tool_notification(
                             &format!("Bash ({})", params.command),
@@ -1475,20 +1497,24 @@ pub fn get_tool_definitions() -> Vec<Value> {
                     "new_string": {
                         "type": "string",
                         "description": "The text to replace it with"
+                    },
+                    "expected_replacements": {
+                        "type": "integer",
+                        "description": "Optional. The expected number of replacements to perform. If not specified, the string must be unique in the file."
                     }
                 },
                 "required": ["file_path", "old_string", "new_string"]
             }
         }),
         serde_json::json!({
-            "name": "Replace",
-            "description": "Completely replaces a file with new content",
+            "name": "Write",
+            "description": "Write a file to the local filesystem. Overwrites the existing file if there is one.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "The absolute path to the file to write"
+                        "description": "The absolute path to the file to write (must be absolute, not relative)"
                     },
                     "content": {
                         "type": "string",
@@ -1511,6 +1537,10 @@ pub fn get_tool_definitions() -> Vec<Value> {
                     "timeout": {
                         "type": "integer",
                         "description": "Optional timeout in milliseconds (max 600000)"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "A short (5-10 word) description of what this command does"
                     }
                 },
                 "required": ["command"]
