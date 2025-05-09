@@ -72,6 +72,7 @@ impl LspServerManager {
 
         eprintln!("Processing file: {}", path.display());
 
+        // Use find_workspace_root with the Path
         let workspace_path = self.find_workspace_root(&path)?;
         let server_key = self.get_server(server_type, &workspace_path)?;
 
@@ -293,6 +294,7 @@ impl LspServerManager {
             return Err(anyhow!("File does not exist: {}", path.display()));
         }
 
+        // Use find_workspace_root with the Path
         let workspace_path = self.find_workspace_root(&path)?;
         let server_key = self.get_server(server_type, &workspace_path)?;
 
@@ -337,6 +339,7 @@ impl LspServerManager {
             return Err(anyhow!("File does not exist: {}", path.display()));
         }
 
+        // Use find_workspace_root with the Path
         let workspace_path = self.find_workspace_root(&path)?;
         let server_key = self.get_server(server_type, &workspace_path)?;
 
@@ -386,6 +389,7 @@ impl LspServerManager {
             return Err(anyhow!("File does not exist: {}", path.display()));
         }
 
+        // Use find_workspace_root with the Path
         let workspace_path = self.find_workspace_root(&path)?;
         let server_key = self.get_server(server_type, &workspace_path)?;
 
@@ -418,10 +422,11 @@ impl LspServerManager {
 
     /// Find the root directory of a workspace
     fn find_workspace_root(&self, file_path: &Path) -> Result<PathBuf> {
-        let mut current_dir = file_path
+        let parent_dir = file_path
             .parent()
-            .ok_or_else(|| anyhow!("Cannot determine parent directory"))?
-            .to_path_buf();
+            .ok_or_else(|| anyhow!("Cannot determine parent directory"))?;
+
+        let mut current_dir = parent_dir.to_path_buf();
 
         // For Python standalone files, check the file extension
         if let Some(ext) = file_path.extension() {
