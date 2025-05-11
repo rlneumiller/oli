@@ -509,15 +509,13 @@ impl ApiClient for GeminiClient {
         let max_tokens = options.max_tokens.unwrap_or(2048);
 
         // Create generation config
+        // Note: Don't set response_mime_type to JSON when using tools,
+        // as Gemini doesn't support function calling with JSON mime type
         let generation_config = GeminiGenerationConfig {
             temperature: options.temperature,
             top_p: options.top_p,
             max_output_tokens: Some(max_tokens),
-            response_mime_type: if options.json_schema.is_some() {
-                Some("application/json".to_string())
-            } else {
-                None
-            },
+            response_mime_type: None,
         };
 
         let request = GeminiRequest {
@@ -592,15 +590,13 @@ impl ApiClient for GeminiClient {
         let max_tokens = options.max_tokens.unwrap_or(2048);
 
         // Create generation config
+        // Note: Don't set response_mime_type to JSON when using tools,
+        // as Gemini doesn't support function calling with JSON mime type
         let generation_config = GeminiGenerationConfig {
             temperature: options.temperature,
             top_p: options.top_p,
             max_output_tokens: Some(max_tokens),
-            response_mime_type: if options.json_schema.is_some() {
-                Some("application/json".to_string())
-            } else {
-                None
-            },
+            response_mime_type: None,
         };
 
         // Create the request
