@@ -111,6 +111,9 @@ impl AgentExecutor {
     pub async fn execute(&mut self) -> Result<String> {
         // Log working directory if available
         self.log_working_directory().await;
+        if let Some(cwd) = &self.working_directory {
+            self.add_system_message(format!("## WORKING DIRECTORY\n{}", cwd));
+        }
 
         // Create standard completion options
         let options = self.create_completion_options();
