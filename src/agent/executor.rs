@@ -109,197 +109,278 @@ impl AgentExecutor {
     }
 
     pub async fn execute(&mut self) -> Result<String> {
-        // Debug log working directory if available
+        // Log working directory if available
+        self.log_working_directory().await;
         if let Some(cwd) = &self.working_directory {
-            if let Some(sender) = &self.progress_sender {
-                let _ = sender
-                    .send(format!("[debug] Working directory: {}", cwd))
-                    .await;
-            }
+            self.add_system_message(format!("## WORKING DIRECTORY\n{}", cwd));
         }
 
-        // Create options with tools enabled and optimized parameters
-        let options = CompletionOptions {
+        // Create standard completion options
+        let options = self.create_completion_options();
+
+        // Get initial completion
+        let (content, tool_calls) = self.get_initial_completion(&options).await?;
+
+        // If no tool calls, just return the response
+        if tool_calls.is_none() {
+            self.add_assistant_response(&content, &None);
+            return Ok(content);
+        }
+
+        // Process tool calls iteratively
+        let result = self
+            .process_tool_calls(content, tool_calls, options)
+            .await?;
+
+        Ok(result)
+    }
+
+    // Helper method to log working directory
+    async fn log_working_directory(&self) {
+        if let (Some(cwd), Some(sender)) = (&self.working_directory, &self.progress_sender) {
+            let _ = sender
+                .send(format!("[debug] Working directory: {}", cwd))
+                .await;
+        }
+    }
+
+    // Helper method to create standard completion options
+    fn create_completion_options(&self) -> CompletionOptions {
+        CompletionOptions {
             temperature: Some(0.25),
             top_p: Some(0.95),
             max_tokens: Some(4096),
             tools: Some(self.tool_definitions.clone()),
             require_tool_use: false,
             json_schema: None,
-        };
-
-        // Execute the first completion with tools
-        let (content, tool_calls) = self
-            .api_client
-            .complete_with_tools(self.conversation.clone(), options.clone(), None)
-            .await?;
-
-        // If there are no tool calls, add the content to conversation and return
-        if tool_calls.is_none() {
-            self.conversation.push(Message::assistant(content.clone()));
-            return Ok(content);
         }
+    }
 
+    // Helper method to get initial completion
+    async fn get_initial_completion(
+        &self,
+        options: &CompletionOptions,
+    ) -> Result<(String, Option<Vec<ApiToolCall>>)> {
+        self.api_client
+            .complete_with_tools(self.conversation.clone(), options.clone(), None)
+            .await
+    }
+
+    // Helper method to add an assistant's response to the conversation
+    fn add_assistant_response(&mut self, content: &str, tool_calls: &Option<Vec<ApiToolCall>>) {
+        add_assistant_message_to_conversation(&mut self.conversation, content, tool_calls);
+    }
+
+    // Process tool calls in a loop until task is complete
+    async fn process_tool_calls(
+        &mut self,
+        initial_content: String,
+        initial_tool_calls: Option<Vec<ApiToolCall>>,
+        options: CompletionOptions,
+    ) -> Result<String> {
         // Add the assistant's message with tool calls to the conversation
-        add_assistant_message_to_conversation(&mut self.conversation, &content, &tool_calls);
+        self.add_assistant_response(&initial_content, &initial_tool_calls);
 
         // Process tool calls in a loop until task is complete
-        let mut current_content = content;
-        let mut current_tool_calls = tool_calls;
+        let mut current_content = initial_content;
+        let mut current_tool_calls = initial_tool_calls;
         let mut loop_count = 0;
         const MAX_LOOPS: usize = 100; // Limit for tool call loops
         let mut task_completed = false;
 
         while let Some(ref calls) = current_tool_calls {
-            // Safety check to prevent truly infinite loops
-            loop_count += 1;
-            if loop_count > MAX_LOOPS {
-                if let Some(sender) = &self.progress_sender {
-                    let _ = sender
-                        .send(
-                            "Reached maximum number of tool call loops (100). Forcing completion."
-                                .to_string(),
-                        )
-                        .await;
-                }
-                // Force task completion on max loops
-                task_completed = true;
+            // Check for loop limits and log progress
+            if self
+                .check_loop_limits(&mut loop_count, &mut task_completed, MAX_LOOPS)
+                .await
+            {
                 break;
-            }
-
-            // Log current iteration for debugging
-            if let Some(sender) = &self.progress_sender {
-                let _ = sender
-                    .send(format!("Tool iteration {}/{}", loop_count, MAX_LOOPS))
-                    .await;
             }
 
             // Execute all tool calls
             let tool_results = self.execute_tool_calls(calls, loop_count).await;
 
-            // Determine whether to request task completion on next iteration
-            // More likely to ask for completion as loop count increases
-            let completion_threshold = determine_completion_threshold(loop_count);
-
-            // Determine completion options based on context
-            let next_options = if should_request_completion(
-                loop_count,
-                MAX_LOOPS,
-                completion_threshold,
-            ) {
-                // Ask LLM to provide a final summary and determine if task is complete
-                CompletionOptions {
-                    require_tool_use: false,
-                    json_schema: Some(
-                        r#"{
-                            "type": "object",
-                            "properties": {
-                                "taskComplete": {
-                                    "type": "boolean",
-                                    "description": "Whether the task is fully complete and no more tool calls are needed"
-                                },
-                                "finalSummary": {
-                                    "type": "string",
-                                    "description": "Final comprehensive summary of findings and results"
-                                },
-                                "reasoning": {
-                                    "type": "string",
-                                    "description": "Explanation of why the task is or is not complete"
-                                }
-                            },
-                            "required": ["taskComplete", "finalSummary"]
-                        }"#
-                        .to_string(),
-                    ),
-                    ..options.clone()
-                }
-            } else {
-                // Standard options for continuing with tools
-                options.clone()
-            };
-
-            // Request another completion with the tool results
-            let (next_content, next_tool_calls) = self
-                .api_client
-                .complete_with_tools(self.conversation.clone(), next_options, Some(tool_results))
+            // Get next completion with appropriate options
+            let (next_content, next_tool_calls, is_complete) = self
+                .get_next_completion(tool_results, loop_count, MAX_LOOPS, &options)
                 .await?;
 
-            // Check if LLM indicated task completion in structured response
-            let (processed_content, is_complete) = process_response(&next_content);
-            current_content = processed_content;
+            // Update state for next iteration
+            current_content = next_content;
+            current_tool_calls = next_tool_calls;
 
             // Update task completion status
             if is_complete {
                 task_completed = true;
             }
 
-            // Update tool calls for next iteration
-            current_tool_calls = next_tool_calls;
-
             // Break if task is complete or if no more tool calls
             if task_completed || current_tool_calls.is_none() {
                 break;
             }
 
-            // If approaching max loops, force a check for completion next iteration
-            if loop_count >= MAX_LOOPS - 10 && loop_count % 5 == 0 {
-                if let Some(sender) = &self.progress_sender {
-                    let _ = sender
-                        .send(
-                            "Approaching maximum iterations, requesting task completion check."
-                                .to_string(),
-                        )
-                        .await;
-                }
-            }
+            // Log warning if approaching max loops
+            self.log_approaching_max_loops(loop_count, MAX_LOOPS).await;
         }
 
-        // If we reached the end of the loop without explicit completion
-        // but no more tool calls, try to get a proper summary
+        // Request final summary if needed
         if !task_completed && current_tool_calls.is_none() && loop_count < MAX_LOOPS - 1 {
-            // One final call to get a proper summary
-            if let Some(sender) = &self.progress_sender {
-                let _ = sender
-                    .send("Task appears complete, requesting final summary.".to_string())
-                    .await;
-            }
-
-            let final_options = CompletionOptions {
-                require_tool_use: false,
-                json_schema: Some(
-                    r#"{
-                        "type": "object",
-                        "properties": {
-                            "finalSummary": {
-                                "type": "string",
-                                "description": "Final comprehensive summary of findings and results"
-                            }
-                        },
-                        "required": ["finalSummary"]
-                    }"#
-                    .to_string(),
-                ),
-                ..options.clone()
-            };
-
-            // Request final summary
-            let (final_content, _) = self
-                .api_client
-                .complete_with_tools(self.conversation.clone(), final_options, None)
-                .await?;
-
-            let (processed_content, _) = process_response(&final_content);
-            current_content = processed_content;
+            current_content = self.request_final_summary(&options).await?;
         }
 
         // Add final response to conversation
-        add_assistant_message_to_conversation(
-            &mut self.conversation,
-            &current_content,
-            &current_tool_calls,
-        );
+        self.add_assistant_response(&current_content, &current_tool_calls);
 
         Ok(current_content)
+    }
+
+    // Check loop limits and log progress
+    async fn check_loop_limits(
+        &self,
+        loop_count: &mut usize,
+        task_completed: &mut bool,
+        max_loops: usize,
+    ) -> bool {
+        // Increment loop counter
+        *loop_count += 1;
+
+        // Safety check to prevent truly infinite loops
+        if *loop_count > max_loops {
+            if let Some(sender) = &self.progress_sender {
+                let _ = sender
+                    .send(format!(
+                        "Reached maximum number of tool call loops ({}). Forcing completion.",
+                        max_loops
+                    ))
+                    .await;
+            }
+            // Force task completion on max loops
+            *task_completed = true;
+            return true;
+        }
+
+        // Log current iteration for debugging
+        if let Some(sender) = &self.progress_sender {
+            let _ = sender
+                .send(format!("Tool iteration {}/{}", loop_count, max_loops))
+                .await;
+        }
+
+        false
+    }
+
+    // Get next completion with appropriate options
+    async fn get_next_completion(
+        &self,
+        tool_results: Vec<ToolResult>,
+        loop_count: usize,
+        max_loops: usize,
+        base_options: &CompletionOptions,
+    ) -> Result<(String, Option<Vec<ApiToolCall>>, bool)> {
+        // Determine whether to request task completion
+        let completion_threshold = determine_completion_threshold(loop_count);
+        let should_check_completion =
+            should_request_completion(loop_count, max_loops, completion_threshold);
+
+        // Create appropriate options
+        let next_options = if should_check_completion {
+            self.create_completion_check_options(base_options)
+        } else {
+            base_options.clone()
+        };
+
+        // Request completion with tool results
+        let (next_content, next_tool_calls) = self
+            .api_client
+            .complete_with_tools(self.conversation.clone(), next_options, Some(tool_results))
+            .await?;
+
+        // Process response to check for completion status
+        let (processed_content, is_complete) = process_response(&next_content);
+
+        Ok((processed_content, next_tool_calls, is_complete))
+    }
+
+    // Create options for checking task completion
+    fn create_completion_check_options(
+        &self,
+        base_options: &CompletionOptions,
+    ) -> CompletionOptions {
+        CompletionOptions {
+            require_tool_use: false,
+            json_schema: Some(
+                r#"{
+                    "type": "object",
+                    "properties": {
+                        "taskComplete": {
+                            "type": "boolean",
+                            "description": "Whether the task is fully complete and no more tool calls are needed"
+                        },
+                        "finalSummary": {
+                            "type": "string",
+                            "description": "Final comprehensive summary of findings and results"
+                        },
+                        "reasoning": {
+                            "type": "string",
+                            "description": "Explanation of why the task is or is not complete"
+                        }
+                    },
+                    "required": ["taskComplete", "finalSummary"]
+                }"#
+                .to_string(),
+            ),
+            ..(base_options.clone())
+        }
+    }
+
+    // Log warning if approaching max loops
+    async fn log_approaching_max_loops(&self, loop_count: usize, max_loops: usize) {
+        if loop_count >= max_loops - 10 && loop_count % 5 == 0 {
+            if let Some(sender) = &self.progress_sender {
+                let _ = sender
+                    .send(
+                        "Approaching maximum iterations, requesting task completion check."
+                            .to_string(),
+                    )
+                    .await;
+            }
+        }
+    }
+
+    // Request a final summary when no more tool calls but not explicitly completed
+    async fn request_final_summary(&self, base_options: &CompletionOptions) -> Result<String> {
+        if let Some(sender) = &self.progress_sender {
+            let _ = sender
+                .send("Task appears complete, requesting final summary.".to_string())
+                .await;
+        }
+
+        let final_options = CompletionOptions {
+            require_tool_use: false,
+            json_schema: Some(
+                r#"{
+                    "type": "object",
+                    "properties": {
+                        "finalSummary": {
+                            "type": "string",
+                            "description": "Final comprehensive summary of findings and results"
+                        }
+                    },
+                    "required": ["finalSummary"]
+                }"#
+                .to_string(),
+            ),
+            ..(base_options.clone())
+        };
+
+        // Request final summary
+        let (final_content, _) = self
+            .api_client
+            .complete_with_tools(self.conversation.clone(), final_options, None)
+            .await?;
+
+        let (processed_content, _) = process_response(&final_content);
+        Ok(processed_content)
     }
 
     async fn execute_tool_calls(
