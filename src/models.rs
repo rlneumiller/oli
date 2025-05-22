@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 // Model name constants to avoid duplication
-pub const ANTHROPIC_MODEL_NAME: &str = "claude-3-7-sonnet-20250219";
+pub const ANTHROPIC_MODEL_NAME: &str = "claude-sonnet-4-20250514";
 pub const OPENAI_MODEL_NAME: &str = "gpt-4o";
 pub const GEMINI_MODEL_NAME: &str = "gemini-2.5-pro-exp-03-25";
 
@@ -26,9 +26,9 @@ use anyhow::Result;
 pub fn get_available_models() -> Vec<ModelConfig> {
     // Start with just the API models
     let mut models = vec![
-        // Claude 3.7 Sonnet - Anthropic model supporting tool use
+        // Claude 4 Sonnet - Anthropic model supporting tool use
         ModelConfig {
-            name: "Claude 3.7 Sonnet".into(),
+            name: "Claude 4 Sonnet".into(),
             file_name: ANTHROPIC_MODEL_NAME.into(),
             description: "Latest Anthropic Claude with advanced code capabilities".into(),
             recommended_for: "Professional code tasks, requires ANTHROPIC_API_KEY".into(),
