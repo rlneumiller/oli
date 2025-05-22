@@ -304,7 +304,7 @@ impl AnthropicClient {
         let client = ReqwestClient::builder().default_headers(headers).build()?;
 
         // Default to Claude 3.7 Sonnet as the latest model with tooling capabilities
-        let model = model.unwrap_or_else(|| "claude-3-7-sonnet-20250219".to_string());
+        let model = model.unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
 
         Ok(Self {
             client,
@@ -748,8 +748,8 @@ mod tests {
         // Verify the model name is the expected default
         assert_eq!(
             client.get_model_name(),
-            "claude-3-7-sonnet-20250219",
-            "Default model name should be claude-3-7-sonnet-20250219"
+            "claude-sonnet-4-20250514",
+            "Default model name should be claude-sonnet-4-20250514"
         );
     }
 
@@ -757,7 +757,7 @@ mod tests {
     fn test_anthropic_with_custom_model() {
         // Test that the custom model name is used correctly
         let api_key = "test_api_key".to_string();
-        let model_name = "claude-3-opus-20240229".to_string();
+        let model_name = "claude-sonnet-4-20250514".to_string();
         let client = AnthropicClient::with_api_key(api_key, Some(model_name.clone())).unwrap();
 
         // Verify the custom model name is used
