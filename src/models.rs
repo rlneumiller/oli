@@ -24,7 +24,7 @@ use crate::apis::ollama::OllamaClient;
 use anyhow::Result;
 
 pub fn get_available_models() -> Vec<ModelConfig> {
-    // Start with just the API models
+        // Start with just the API models
     let mut models = vec![
         // Claude 4 Sonnet - Anthropic model supporting tool use
         ModelConfig {
@@ -34,7 +34,7 @@ pub fn get_available_models() -> Vec<ModelConfig> {
             recommended_for: "Professional code tasks, requires ANTHROPIC_API_KEY".into(),
             supports_agent: true,
         },
-        // GPT-4o - OpenAI model supporting tool use
+        // GPT-4o - OpenAI model supporting tool use        
         ModelConfig {
             name: "GPT-4o".into(),
             file_name: OPENAI_MODEL_NAME.into(),
@@ -42,7 +42,7 @@ pub fn get_available_models() -> Vec<ModelConfig> {
             recommended_for: "Professional code tasks, requires OPENAI_API_KEY".into(),
             supports_agent: true,
         },
-        // Gemini 2.5 Pro - Google model supporting tool use
+        // Gemini 2.5 Pro - Google model supporting tool use        
         ModelConfig {
             name: "Gemini 2.5 Pro".into(),
             file_name: GEMINI_MODEL_NAME.into(),
@@ -54,27 +54,31 @@ pub fn get_available_models() -> Vec<ModelConfig> {
 
     // Try to fetch available models from Ollama
     if let Ok(ollama_models) = get_available_ollama_models() {
-        // Add each available Ollama model to the list
-        for model_info in ollama_models {
-            // Create a description based on the model details
-            let description = if let Some(details) = &model_info.details {
-                if let Some(desc) = &details.description {
-                    format!("{} - Running locally via Ollama", desc)
+        if ollama_models.is_empty() {
+            eprintln!("No local Ollama models found. Use `ollama pull <model_name>' to load a model. e.g.: ollama pull llama3" );
+        } else {
+            // Add each available Ollama model to the list
+            for model_info in ollama_models {
+                // Create a description based on the model details
+                let description = if let Some(details) = &model_info.details {
+                    if let Some(desc) = &details.description {
+                        format!("{} - Running locally via Ollama", desc)
+                    } else {
+                        format!("{} - Running locally via Ollama", model_info.name)
+                    }
                 } else {
                     format!("{} - Running locally via Ollama", model_info.name)
-                }
-            } else {
-                format!("{} - Running locally via Ollama", model_info.name)
-            };
+                };
 
-            // Add the model to the list with "(local)" suffix
-            models.push(ModelConfig {
-                name: format!("{} (local)", model_info.name),
-                file_name: model_info.name.clone(),
-                description,
-                recommended_for: "Local code tasks, requires Ollama to be running".into(),
-                supports_agent: true,
-            });
+                // Add the model to the list with "(local)" suffix
+                models.push(ModelConfig {
+                    name: format!("{} (local)", model_info.name),
+                    file_name: model_info.name.clone(),
+                    description,
+                    recommended_for: "Local code tasks, requires Ollama to be running".into(),
+                    supports_agent: true,
+                });
+            }
         }
     }
 
