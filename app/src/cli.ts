@@ -86,6 +86,9 @@ for (let i = 0; i < args.length; i++) {
 console.log(`Current directory: ${process.cwd()}`);
 console.log(`Script directory: ${__dirname}`);
 
+// Determine the backend binary name based on the OS
+const backendBinaryName = process.platform === 'win32' ? 'oli-server.exe' : 'oli-server';
+
 // Check for environment variable first
 const envBackendPath = process.env.BACKEND_BIN_PATH;
 if (envBackendPath) {
@@ -103,19 +106,19 @@ if (envBackendPath) {
 
 // When running from dist/oli directory, check the local directory first
 // This is the most likely location in the packaged version
-potentialPaths.push(path.resolve(process.cwd(), "oli-server"));
+potentialPaths.push(path.resolve(process.cwd(), backendBinaryName));
 
 // Check current script directory - especially useful in distribution
 const scriptDir = path.dirname(process.argv[1]);
-potentialPaths.push(path.resolve(scriptDir, "oli-server"));
+potentialPaths.push(path.resolve(scriptDir, backendBinaryName));
 
 // For development: Check relative to app/dist location
-potentialPaths.push(path.resolve(__dirname, "../../oli-server"));
+potentialPaths.push(path.resolve(__dirname, "../../", backendBinaryName));
 
 // Last resort - try standard development build locations
 potentialPaths.push(
-  path.resolve(process.cwd(), "../target/release/oli-server"),
-  path.resolve(__dirname, "../../../target/release/oli-server")
+  path.resolve(process.cwd(), "../target/release/", backendBinaryName),
+  path.resolve(__dirname, "../../../target/release/", backendBinaryName)
 );
 
 let backendPath = potentialPaths[0];
