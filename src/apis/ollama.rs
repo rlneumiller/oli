@@ -11,6 +11,7 @@ use reqwest::Client as ReqwestClient;
 use serde::{Deserialize, Serialize};
 use serde_json::{self, json, Value};
 use std::time::Duration;
+use futures::future::join_all;
 
 // Ollama API Types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +112,14 @@ struct OllamaFunction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct OllamaShowResponse {
+    #[serde(default)]
+    template: String,
+    #[serde(default)]
+    modelfile: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct OllamaRequest {
     model: String,
     messages: Vec<OllamaMessage>,
@@ -158,6 +167,8 @@ pub struct OllamaModelInfo {
     pub digest: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<OllamaModelDetails>,
+    #[serde(default)]
+    pub supports_tools: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -236,6 +247,82 @@ impl OllamaClient {
         })
     }
 
+    pub async fn get_available_models(&self) -> Result<Vec<OllamaModelInfo>> {
+        let url = format!("{}/api/tags", self.api_base);
+        let response = self.client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            return Ok(Vec::new());
+        }
+
+        let response_text = response.text().await?;
+        let mut tags_response: OllamaListModelsResponse = serde_json::from_str(&response_text)?;
+
+        // Check tool support for all models concurrently
+        let tool_checks: Vec<_> = tags_response
+            .models
+            .iter()
+            .map(|model| self.check_model_tool_support(&model.name))
+            .collect();
+
+        let tool_results = join_all(tool_checks).await;
+
+        // Update models with tool support information
+        tags_response
+            .models
+            .iter_mut()
+            .zip(tool_results)
+            .for_each(|(model, supports_tools)| {
+                model.supports_tools = supports_tools.unwrap_or_else(|e| {
+                    eprintln!("Error checking tool support for model '{}': {}", model.name, e);
+                    false
+                });
+            });
+
+        Ok(tags_response.models)
+    }
+
+    // Helper method to make the intent clearer
+    async fn check_model_tool_support(&self, model_name: &str) -> Result<bool> {
+        self.check_tool_support(model_name).await
+    }
+
+    pub async fn check_tool_support(&self, model_name: &str) -> Result<bool> {
+        const TOOL_PATTERNS: &[&str] = &["{{ if .Tools }}", "{{- if .Tools }}"];
+        
+        let url = format!("{}/api/show", self.api_base);
+        let request_payload = json!({ "name": model_name });
+
+        let response = self.client
+            .post(&url)
+            .json(&request_payload)
+            .send()
+            .await?;
+
+        let response_text = match response.status().is_success() {
+            true => response.text().await?,
+            false => {
+                let status = response.status();
+                let error_text = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Failed to get error details".to_string());
+                
+                return Err(AppError::NetworkError(
+                    format!("Failed to check model details ({}): {}", status, error_text)
+                ).into());
+            }
+        };
+
+        let show_info: OllamaShowResponse = serde_json::from_str(&response_text)?;
+        
+        let supports_tools = TOOL_PATTERNS.iter().any(|&pattern| {
+            show_info.template.contains(pattern) || show_info.modelfile.contains(pattern)
+        });
+
+        Ok(supports_tools)
+    }
+
     fn convert_messages(&self, messages: Vec<Message>) -> Vec<OllamaMessage> {
         messages
             .into_iter()
@@ -303,7 +390,7 @@ impl OllamaClient {
                     format!("Failed to connect to Ollama server at {}. Make sure 'ollama serve' is running. Error: {}",
                             self.api_base, e)
                 } else if e.is_timeout() {
-                    format!("Request to Ollama timed out: {}", e)
+                    format!("Request to Olloma timed out: {}", e)
                 } else if e.is_request() {
                     format!("Failed to build request to Ollama: {}", e)
                 } else {
@@ -338,29 +425,40 @@ impl OllamaClient {
             }
         };
 
-        eprintln!(
-            "{}",
-            format_log_with_color(
-                LogLevel::Debug,
-                &format!(
-                    "Ollama API response received: {} bytes",
-                    response_text.len()
-                )
-            )
-        );
+        eprintln!("{}", format_log_with_color(LogLevel::Debug, &format!("Ollama API response received: {} bytes", response_text.len())));
 
         // Try to parse the response
-        match serde_json::from_str::<OllamaListModelsResponse>(&response_text) {
-            Ok(models_response) => Ok(models_response.models),
-            Err(e) => {
-                let error_msg = format!(
-                    "Failed to parse Ollama response: {}. Response text: {}",
-                    e, response_text
-                );
-                eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
-                Err(AppError::LLMError(error_msg).into())
+        let mut list_response =
+            match serde_json::from_str::<OllamaListModelsResponse>(&response_text) {
+                Ok(list) => list,
+                Err(e) => {
+                    let error_msg = format!("Failed to parse Ollama models list: {}", e);
+                    eprintln!("{}", format_log_with_color(LogLevel::Error, &error_msg));
+                    return Err(AppError::ParserError(error_msg).into());
+                }
+            };
+
+        // Concurrently check for tool support for each model
+        let checks = list_response
+            .models
+            .iter()
+            .map(|model| self.check_tool_support(&model.name));
+
+        let results = join_all(checks).await;
+
+        for (model_info, support_result) in list_response.models.iter_mut().zip(results) {
+            match support_result {
+                Ok(supports_tools) => {
+                    model_info.supports_tools = supports_tools;
+                }
+                Err(e) => {
+                    //println!("❌ Failed to check tool support for model '{}': {}", model_info.name, e);
+                    eprintln!("{}", format_log_with_color(LogLevel::Warning, &format!("Failed to for check tool support for model '{}': {}", model_info.name, e)));
+                }
             }
         }
+
+        Ok(list_response.models)
     }
 }
 

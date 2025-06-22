@@ -55,31 +55,31 @@ pub fn get_available_models() -> Vec<ModelConfig> {
     // Try to fetch available models from Ollama
     if let Ok(ollama_models) = get_available_ollama_models() {
         if ollama_models.is_empty() {
-            eprintln!("No local Ollama models found. Use `ollama pull <model_name>' to load a model. e.g.: ollama pull llama3" );
+            eprintln!("No local Ollama models found that support tool use. Use `ollama pull <model_name>' to load a model. e.g.: ollama pull qwen2.5-coder:7b" );
         } else {
             // Add each available Ollama model to the list
             for model_info in ollama_models {
-                // Create a description based on the model details
-                let description = if let Some(details) = &model_info.details {
-                    if let Some(desc) = &details.description {
-                        format!("{} - Running locally via Ollama", desc)
+                    // Create a description based on the model details
+                    let description = if let Some(details) = &model_info.details {
+                        if let Some(desc) = &details.description {
+                            format!("{} - Running locally via Ollama", desc)
+                        } else {
+                            format!("{} - Running locally via Ollama", model_info.name)
+                        }
                     } else {
                         format!("{} - Running locally via Ollama", model_info.name)
-                    }
-                } else {
-                    format!("{} - Running locally via Ollama", model_info.name)
-                };
+                    };
 
-                // Add the model to the list with "(local)" suffix
-                models.push(ModelConfig {
-                    name: format!("{} (local)", model_info.name),
-                    file_name: model_info.name.clone(),
-                    description,
-                    recommended_for: "Local code tasks, requires Ollama to be running".into(),
-                    supports_agent: true,
-                });
+                    // Add the model to the list with "(local)" suffix
+                    models.push(ModelConfig {
+                        name: format!("{} (local)", model_info.name),
+                        file_name: model_info.name.clone(),
+                        description,
+                        recommended_for: "Local code tasks, requires Ollama to be running".into(),
+                        supports_agent: true,
+                    });
+                }
             }
-        }
     }
 
     models
@@ -109,7 +109,18 @@ fn get_available_ollama_models() -> Result<Vec<crate::apis::ollama::OllamaModelI
                     Ok(models_result) => match models_result {
                         Ok(models) => {
                             eprintln!("Found {} Ollama models", models.len());
-                            Ok(models)
+
+                            // Filter models to only include those that support tools
+                            let tool_supported_models: Vec<_> = models
+                                .into_iter()
+                                .filter(|model| {
+                                    let supports_tools = model.supports_tools;
+                                    println!("✅: Does model '{}' support tools use: {}", model.name, supports_tools);
+                                    supports_tools
+                                })
+                                .collect();
+                            eprintln!("{} loaded ollama models support tools", tool_supported_models.len());
+                            Ok(tool_supported_models)
                         }
                         Err(e) => {
                             eprintln!("Error listing Ollama models: {}", e);
