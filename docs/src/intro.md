@@ -103,6 +103,8 @@ oli supports local models through Ollama:
 
 Note: For best results with tool use and agent capabilities, use models like Qwen 2.5 Coder which support function calling.
 
+Note: You can also use a remote Ollama instance by setting the OLLAMA_API_BASE environment variable.
+
 ## Usage
 
 1. Start the application:
